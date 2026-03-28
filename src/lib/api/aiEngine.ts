@@ -136,27 +136,78 @@ export class OllamaEngine implements IAIEngine {
       { role: 'user', content: lastMessage },
     ];
 
-    let response: Response;
-    try {
-      response = await fetch('http://localhost:11434/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: this.model, messages, stream: false }),
-      });
-    } catch {
-      throw new Error(
-        'Ollamaが起動していません。http://localhost:11434 に接続できませんでした。\n' +
-          '`ollama serve` を実行しているか確認してください。'
-      );
-    }
+    const response = await fetch('/api/chat', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    systemPrompt,
+    lastMessage,
+    speakerName,
+    listenerName,
+    topic,
+    engine: 'ollama',
+    model: this.model
+  })
+});
 
-    if (!response.ok) {
-      const msg = await response.text().catch(() => `HTTP ${response.status}`);
-      throw new Error(`[OllamaEngine] error: ${msg}`);
-    }
+const data = await response.json();
+return data.text;
+  }
+}
 
-    const data = await response.json();
-    return (data.message?.content ?? '').trim();
+export class LMStudioEngine implements IAIEngine {
+  constructor(private model: string = '') {}
+
+  async generate(
+    history: ChatMessage[],
+    systemPrompt: string,
+    speakerName: string,
+    listenerName: string,
+    topic: string
+  ): Promise<string> {
+
+    const lastOpponentMsg = [...history]
+      .reverse()
+      .find((m) => m.role === 'assistant');
+
+    const lastMessage = lastOpponentMsg
+      ? lastOpponentMsg.content.replace(/^[^:]+:\s*/, '')
+      : 'こんにちは！';
+
+    const messages = [
+  {
+    role: 'system',
+    content: `${systemPrompt}
+
+    必ず会話形式で返答してください。
+    必ず日本語で会話してください。
+    説明は禁止です。
+    短くテンポよく話してください。
+    雑談してください。
+    `
+      },
+      {
+        role: 'user',
+        content: lastMessage
+      }
+    ];
+
+    const response = await fetch('/api/chat', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    systemPrompt,
+    lastMessage,
+    speakerName,
+    listenerName,
+    topic,
+    engine: 'lmstudio',
+    model: this.model
+  })
+});
+
+const data = await response.json();
+return data.text;
   }
 }
 
@@ -169,6 +220,8 @@ export function createAIEngine(engine: AIEngine, ollamaModel?: string): IAIEngin
       return new OpenAIEngine();
     case 'ollama':
       return new OllamaEngine(ollamaModel ?? 'qwen:0.5b');
+    case 'lmstudio':  
+      return new LMStudioEngine(ollamaModel ?? '');
     case 'gemini':
       console.warn('[AIEngine] Gemini not yet implemented → using Dummy');
       return new DummyAIEngine();

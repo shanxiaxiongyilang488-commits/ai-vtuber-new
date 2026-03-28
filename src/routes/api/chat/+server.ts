@@ -3,22 +3,23 @@ import type { RequestHandler } from './$types';
 import { OPENAI_API_KEY } from '$env/static/private';
 import OpenAI from 'openai';
 
+
+export interface ChatRequest {
+  systemPrompt: string;
+  lastMessage: string;
+  speakerName: string;
+  listenerName: string;
+  topic: string;
+
+  engine?: string;
+  model?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Request / Response shapes
 // ---------------------------------------------------------------------------
 
-export interface ChatRequest {
-  /** キャラクターの性格・口調プロンプト */
-  systemPrompt: string;
-  /** 直前の発言（相手キャラクターの言葉）。最初の発言なら空文字 */
-  lastMessage: string;
-  /** 今から発言するキャラクター名 */
-  speakerName: string;
-  /** 相手のキャラクター名 */
-  listenerName: string;
-  /** 会話トピック */
-  topic: string;
-}
+
 
 export interface ChatResponse {
   text: string;
@@ -40,6 +41,9 @@ function getClient(): OpenAI {
   return openai;
 }
 
+
+
+
 // ---------------------------------------------------------------------------
 // POST /api/chat
 // ---------------------------------------------------------------------------
@@ -51,8 +55,12 @@ export const POST: RequestHandler = async ({ request }) => {
   } catch {
     throw error(400, 'Invalid JSON body');
   }
+  
 
-  const { systemPrompt, lastMessage, speakerName, listenerName, topic } = body;
+
+
+
+  const { systemPrompt, lastMessage, speakerName, listenerName, topic, engine, model } = body;
 
   if (!speakerName || !listenerName || !topic) {
     throw error(400, 'speakerName / listenerName / topic は必須です');
@@ -90,21 +98,46 @@ export const POST: RequestHandler = async ({ request }) => {
     });
   }
 
-  // ----- OpenAI API 呼び出し -----
-  const client = getClient();
 
-  const completion = await client.chat.completions.create({
-    model: 'gpt-4o-mini',
-    messages: [
-      { role: 'system', content: system },
-      ...messages,
-    ],
-    temperature: 0.85,
-    max_tokens: 200,
+  // ===== LM Studio分岐 =====
+if (engine === 'lmstudio') {
+  const res = await fetch('http://127.0.0.1:1234/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: model,
+      messages: [
+        { role: 'system', content: system },
+        ...messages
+      ]
+    })
   });
 
-  const text = completion.choices[0]?.message?.content?.trim() ?? '';
+  const data = await res.json();
 
+  const text = data.choices?.[0]?.message?.content?.trim() ?? '';
+
+  return json({ text });
+}
+
+// ===== OpenAI =====
+const client = getClient();
+
+const completion = await client.chat.completions.create({
+  model: 'gpt-4o-mini',
+  messages: [
+    { role: 'system', content: system },
+    ...messages
+  ],
+  temperature: 0.85,
+  max_tokens: 200,
+});
+
+const text = completion.choices[0]?.message?.content?.trim() ?? '';
+
+return json({ text });
   if (!text) {
     throw error(500, 'OpenAI から空のレスポンスが返りました');
   }

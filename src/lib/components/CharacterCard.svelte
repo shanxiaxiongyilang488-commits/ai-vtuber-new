@@ -90,24 +90,38 @@
   </div>
 
   {#if character.aiEngine === 'ollama'}
-    <div class="field">
-      <label class="field-label">Ollamaモデル</label>
-      <input
-        class="text-input"
-        type="text"
-        list="ollama-presets-{character.id}"
-        value={character.ollamaModel}
-        oninput={(e) => onUpdate({ ollamaModel: (e.target as HTMLInputElement).value })}
-        placeholder="例: qwen:0.5b"
-        {disabled}
-      />
-      <datalist id="ollama-presets-{character.id}">
-        {#each OLLAMA_MODEL_PRESETS as preset}
-          <option value={preset.value}>{preset.label}</option>
-        {/each}
-      </datalist>
-    </div>
-  {/if}
+  <div class="field">
+    <label class="field-label">Ollamaモデル</label>
+    <input
+      class="text-input"
+      type="text"
+      list={"ollama-presets-" + character.id}
+      value={character.ollamaModel}
+      oninput={(e) => onUpdate({ ollamaModel: (e.target as HTMLInputElement).value })}
+      placeholder="例: qwen:0.5b"
+      {disabled}
+    />
+
+    <datalist id={"ollama-presets-" + character.id}>
+      {#each OLLAMA_MODEL_PRESETS as preset}
+        <option value={preset.value}>{preset.label}</option>
+      {/each}
+    </datalist>
+  </div>
+
+{:else if character.aiEngine === 'lmstudio'}
+  <div class="field">
+    <label class="field-label">LM Studioモデル</label>
+    <input
+      class="text-input"
+      type="text"
+      value={character.ollamaModel}
+      oninput={(e) => onUpdate({ ollamaModel: (e.target as HTMLInputElement).value })}
+      placeholder="例: qwen2.5-0.5b-instruct"
+      {disabled}
+    />
+  </div>
+{/if}
 </div>
 
 <style>

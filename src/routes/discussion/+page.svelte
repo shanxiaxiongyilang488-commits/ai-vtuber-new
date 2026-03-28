@@ -6,6 +6,7 @@
   import ConversationLog from '$lib/components/ConversationLog.svelte';
   import ConversationControls from '$lib/components/ConversationControls.svelte';
   import type { Message } from '$lib/types/conversation';
+  
 
   // Maximum number of turns before the conversation is force-stopped
   const MAX_TURNS = 6;
@@ -46,9 +47,18 @@
 
       let text: string;
       try {
+
+        const safePrompt = [
+          character.prompt,
+          `あなたの名前は「${character.name}」です。他の名前を名乗らないでください。`,
+          `相手は「${other.name}」です。`,
+          `自己紹介は最初の1回だけにしてください。`,
+          `短く自然に会話してください（1〜2文）。`
+        ].join('\n');
+
         text = await engine.generate(
           [...history],
-          character.prompt,
+          safePrompt,
           character.name,
           other.name,
           appStore.topic
@@ -73,6 +83,7 @@
       };
 
       appStore.addMessage(msg);
+      saveConversationLog(msg);
       turnCount += 1;
 
       // Force-stop when MAX_TURNS is reached
@@ -108,6 +119,23 @@
   }
 
   const isRunning = $derived(appStore.status === 'running');
+
+function saveConversationLog(message: any) {
+  try {
+    const logs = JSON.parse(localStorage.getItem('ai_logs') || '[]');
+
+    logs.push({
+      time: new Date().toISOString(),
+      character: message.characterName ?? 'unknown',
+      text: message.text ?? ''
+    });
+
+    localStorage.setItem('ai_logs', JSON.stringify(logs));
+  } catch (e) {
+    console.error('ログ保存エラー', e);
+  }
+}
+
 </script>
 
 <svelte:head>

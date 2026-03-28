@@ -1,4 +1,4 @@
-export type AIEngine = 'dummy' | 'openai' | 'gemini' | 'ollama';
+export type AIEngine = 'dummy' | 'openai' | 'gemini' | 'ollama' | 'lmstudio';
 export type VoiceEngine = 'none' | 'piper' | 'elevenlabs' | 'voicevox';
 
 export interface Character {
@@ -24,7 +24,9 @@ export const AI_ENGINE_OPTIONS: { value: AIEngine; label: string }[] = [
   { value: 'openai', label: 'OpenAI (GPT-4)' },
   { value: 'gemini', label: 'Google Gemini' },
   { value: 'ollama', label: 'Ollama (ローカル)' },
+  { value: 'lmstudio', label: 'LM Studio（ローカル）' },
 ];
+
 
 export const VOICE_ENGINE_OPTIONS: { value: VoiceEngine; label: string }[] = [
   { value: 'none', label: 'なし' },
