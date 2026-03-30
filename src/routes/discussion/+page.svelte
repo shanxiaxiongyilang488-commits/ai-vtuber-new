@@ -104,7 +104,11 @@
         const data = await res.json();
         const text = (data.message ?? data.text ?? '').trim();
 
-        console.log('📩 受信', data);
+        console.log('📥 受信', data);
+
+
+        // 👇ここ重要
+        await new Promise(resolve => setTimeout(resolve, 1200))
 
         if (!text) {
           console.warn('⚠ 空レスポンス');
@@ -114,6 +118,8 @@
 
         appStore.setTyping(false);
 
+        
+        // メッセージ生成
         const msg: Message = {
           id: crypto.randomUUID(),
           characterId: character.id as 'char1' | 'char2',
@@ -122,8 +128,12 @@
           timestamp: new Date()
         };
 
-        appStore.addMessage(msg);
-        saveConversationLog(msg);
+        // 👇 ①先に表示（ログ含む）
+        appStore.addMessage(msg)
+        saveConversationLog(msg)
+
+        // 👇 ②そのあと音声
+        await speak(text, character.voiceId)
 
         history.push({
           role: 'assistant',
@@ -163,6 +173,36 @@
     appStore.setTyping(false);
     appStore.setStatus('stopped');
   }
+  async function speak(text: string, voiceId: string) {
+  try {
+    const res = await fetch('/api/speak', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, voiceId })
+    });
+
+    if (!res.ok) {
+      console.error('TTSエラー', await res.text());
+      return;
+    }
+
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+
+    const audio = new Audio(url);
+
+    // 🔥ここが超重要（再生完了まで待つ）
+    await new Promise<void>((resolve) => {
+      audio.onended = () => resolve();
+      audio.onerror = () => resolve();
+      audio.play();
+    });
+
+  } catch (err) {
+    console.error('音声再生エラー', err);
+  }
+}
+
 
   const isRunning = $derived(appStore.status === 'running');
 

@@ -1,11 +1,10 @@
 import { json } from '@sveltejs/kit'
+import { ELEVENLABS_API_KEY } from '$env/static/private'
 
 export async function POST({ request }) {
   const { text, voiceId } = await request.json()
 
-  const apiKey = process.env.ELEVENLABS_API_KEY
-
-  if (!apiKey) {
+  if (!ELEVENLABS_API_KEY) {
     return json({ error: 'No API key' }, { status: 500 })
   }
 
@@ -14,7 +13,7 @@ export async function POST({ request }) {
     {
       method: 'POST',
       headers: {
-        'xi-api-key': apiKey,
+        'xi-api-key': ELEVENLABS_API_KEY,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
@@ -29,6 +28,8 @@ export async function POST({ request }) {
   )
 
   if (!response.ok) {
+    const err = await response.text()
+    console.error('TTS失敗:', err)
     return json({ error: 'TTS failed' }, { status: 500 })
   }
 
