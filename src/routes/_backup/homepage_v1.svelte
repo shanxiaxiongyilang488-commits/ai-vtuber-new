@@ -1,10 +1,9 @@
 <script lang="ts">
     import { goto } from '$app/navigation';
 
-  function goToDuo() {
-    goto('/discussion');
-  }
-
+    function navigateTo(path: string) {
+      goto(path);
+    }
   </script>
 
   <div class="terminal-root">
@@ -91,10 +90,10 @@
         <div class="buttons">
 
           <button
-              class="mode-btn duo"
-              on:click={() => goto('/discussion')}
-              aria-label="DUO CHAT モードへ"
-            >
+            class="mode-btn duo"
+            onclick={() => navigateTo('/duo')}
+            aria-label="DUO CHAT モードへ"
+          >
             <div class="btn-bg" aria-hidden="true"></div>
             <div class="btn-border-anim" aria-hidden="true"></div>
             <div class="btn-content">
@@ -106,10 +105,10 @@
           </button>
 
           <button
-              class="mode-btn trio"
-              on:click={() => goto('/trio')}
-              aria-label="TRIO DISCUSSION モードへ"
->
+            class="mode-btn trio"
+            onclick={() => navigateTo('/trio')}
+            aria-label="TRIO DISCUSSION モードへ"
+          >
             <div class="btn-bg" aria-hidden="true"></div>
             <div class="btn-border-anim" aria-hidden="true"></div>
             <div class="btn-content">

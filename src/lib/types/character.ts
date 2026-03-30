@@ -1,17 +1,48 @@
-export type AIEngine = 'dummy' | 'openai' | 'gemini' | 'ollama' | 'lmstudio';
-export type VoiceEngine = 'none' | 'piper' | 'elevenlabs' | 'voicevox';
+// =========================
+// AIエンジン
+// =========================
+export type AIEngine =
+  | 'dummy'
+  | 'openai'
+  | 'gemini'
+  | 'ollama'
+  | 'lmstudio';
 
+// =========================
+// 音声エンジン
+// =========================
+export type VoiceEngine =
+  | 'none'
+  | 'piper'
+  | 'elevenlabs'
+  | 'voicevox';
+
+// =========================
+// キャラクター型
+// =========================
 export interface Character {
   id: 'char1' | 'char2';
   name: string;
   prompt: string;
+
   aiEngine: AIEngine;
   voiceEngine: VoiceEngine;
+
   color: string;
   avatarEmoji: string;
-  ollamaModel: string; // Ollama使用時のモデル名（例: qwen:0.5b）
+
+  // モデル系
+  ollamaModel: string;
+  lmstudioModel?: string;
+
+  // 音声系
+  voiceId: string;
+  speakerId: number;
 }
 
+// =========================
+// Ollamaモデル一覧
+// =========================
 export const OLLAMA_MODEL_PRESETS: { value: string; label: string }[] = [
   { value: 'qwen:0.5b', label: 'Qwen 0.5B（最軽量）' },
   { value: 'gemma:2b', label: 'Gemma 2B' },
@@ -19,18 +50,22 @@ export const OLLAMA_MODEL_PRESETS: { value: string; label: string }[] = [
   { value: 'phi3:mini', label: 'Phi-3 Mini' },
 ];
 
+// =========================
+// AIエンジン選択
+// =========================
 export const AI_ENGINE_OPTIONS: { value: AIEngine; label: string }[] = [
   { value: 'dummy', label: 'ダミー（テスト用）' },
   { value: 'openai', label: 'OpenAI (GPT-4)' },
   { value: 'gemini', label: 'Google Gemini' },
-  { value: 'ollama', label: 'Ollama (ローカル)' },
+  { value: 'ollama', label: 'Ollama（ローカル）' },
   { value: 'lmstudio', label: 'LM Studio（ローカル）' },
 ];
 
-
+// =========================
+// 音声エンジン選択
+// =========================
 export const VOICE_ENGINE_OPTIONS: { value: VoiceEngine; label: string }[] = [
   { value: 'none', label: 'なし' },
   { value: 'voicevox', label: 'VoiceVox' },
-  { value: 'piper', label: 'Piper' },
   { value: 'elevenlabs', label: 'ElevenLabs' },
 ];

@@ -1,115 +1,161 @@
 <script lang="ts">
   import { appStore } from '$lib/stores/appStore.svelte';
-  import { createAIEngine, type ChatMessage } from '$lib/api/aiEngine';
-  import { createVoiceEngine } from '$lib/api/voiceEngine';
   import CharacterCard from '$lib/components/CharacterCard.svelte';
   import ConversationLog from '$lib/components/ConversationLog.svelte';
   import ConversationControls from '$lib/components/ConversationControls.svelte';
   import type { Message } from '$lib/types/conversation';
   
 
-  // Maximum number of turns before the conversation is force-stopped
   const MAX_TURNS = 6;
 
-  // Flag to signal the running loop to stop
   let stopSignal = false;
   let errorMessage = $state<string | null>(null);
 
   async function startConversation() {
-    appStore.clearMessages();
-    appStore.setStatus('running');
-    appStore.setCurrentTurn('char1');
+    console.log('🚀 会話開始');
+
     stopSignal = false;
     errorMessage = null;
 
-    // Instantiate engines per character based on current settings
-    const engines = {
-      char1: createAIEngine(appStore.char1.aiEngine, appStore.char1.ollamaModel),
-      char2: createAIEngine(appStore.char2.aiEngine, appStore.char2.ollamaModel),
-    };
-    const voiceEngines = {
-      char1: createVoiceEngine(appStore.char1.voiceEngine),
-      char2: createVoiceEngine(appStore.char2.voiceEngine),
-    };
+    appStore.clearMessages();
+    appStore.setStatus('running');
+    appStore.setTyping(false);
 
-    const history: ChatMessage[] = [];
-    let turn: 'char1' | 'char2' = 'char1';
+    let turnIndex = 0;
     let turnCount = 0;
 
+    let model = '';
+
+
+
+
+
+    // このページは2人会話専用
+    const activeChars = [appStore.char1, appStore.char2];
+
+    if (activeChars.length < 2) {
+      console.error('キャラが足りない');
+      errorMessage = 'キャラ設定が不足しています。';
+      appStore.setStatus('stopped');
+      return;
+    }
+
+    const history: Array<{ role: 'assistant' | 'user'; content: string }> = [];
+
     while (!stopSignal) {
-      const character = turn === 'char1' ? appStore.char1 : appStore.char2;
-      const other     = turn === 'char1' ? appStore.char2 : appStore.char1;
-      const engine    = engines[turn];
-      const voice     = voiceEngines[turn];
+      const character = activeChars[turnIndex];
+      const other = activeChars[(turnIndex + 1) % activeChars.length];
 
-      appStore.setCurrentTurn(turn);
-      appStore.setTyping(true);
-
-      let text: string;
-      try {
-
-        const safePrompt = [
-          character.prompt,
-          `あなたの名前は「${character.name}」です。他の名前を名乗らないでください。`,
-          `相手は「${other.name}」です。`,
-          `自己紹介は最初の1回だけにしてください。`,
-          `短く自然に会話してください（1〜2文）。`
-        ].join('\n');
-
-        text = await engine.generate(
-          [...history],
-          safePrompt,
-          character.name,
-          other.name,
-          appStore.topic
-        );
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.error('[Conversation] engine error:', msg);
-        errorMessage = msg;
-        break;
+      if (character.aiEngine === 'openai') {
+        model = 'gpt-4o-mini';
+      } else if (character.aiEngine === 'lmstudio') {
+        model = character.lmstudioModel || '';
+      } else if (character.aiEngine === 'ollama') {
+        model = character.ollamaModel || '';
       }
 
-      if (stopSignal) break;
+      console.log('🎭 現在キャラ', character.name);
+      console.log('👂 相手キャラ', other.name);
 
-      appStore.setTyping(false);
+      appStore.setTyping(true);
 
-      const msg: Message = {
-        id: crypto.randomUUID(),
-        characterId: turn,
-        characterName: character.name,
-        text,
-        timestamp: new Date(),
-      };
+      const safePrompt = [
+        character.prompt,
+        '自己紹介は最初の1回だけにしてください。',
+        '短く自然に会話してください（1〜2文）。',
+        '質問で返しすぎないでください。'
+      ].join('\n');
 
-      appStore.addMessage(msg);
-      saveConversationLog(msg);
-      turnCount += 1;
+      try {
+        console.log('📤 送信', {
+          speaker: character.name,
+          listener: other.name,
+          topic: appStore.topic,
+          engine: character.aiEngine,
+          model: character.aiEngine === 'lmstudio'
+            ? (character.lmstudioModel || '')
+            : (character.ollamaModel || '')
+        });
 
-      // Force-stop when MAX_TURNS is reached
-      if (turnCount >= MAX_TURNS) break;
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            systemPrompt: safePrompt,
+            lastMessage: history.at(-1)?.content ?? '',
+            speakerName: character.name,
+            listenerName: other.name,
+            topic: appStore.topic,
+            engine: character.aiEngine,
+            model:
+              character.aiEngine === 'lmstudio'
+                ? (character.lmstudioModel || '')
+                : (character.ollamaModel || '')
+          })
+        });
 
-      history.push({
-        role: 'assistant',
-        content: `${character.name}: ${text}`,
-      });
+        if (!res.ok) {
+          const errText = await res.text();
+          console.error('💥 /api/chat エラー', res.status, errText);
+          errorMessage = `/api/chat エラー: ${res.status}`;
+          break;
+        }
 
-      // Keep history bounded to last 20 entries to avoid bloat
-      if (history.length > 20) history.splice(0, history.length - 20);
+        const data = await res.json();
+        const text = (data.message ?? data.text ?? '').trim();
 
-      // Speak (no-op until voice engines are implemented)
-      voice.speak(text, turn).catch(() => {});
+        console.log('📩 受信', data);
 
-      // Pause briefly between turns
-      await new Promise((r) => setTimeout(r, 400));
+        if (!text) {
+          console.warn('⚠ 空レスポンス');
+          errorMessage = 'AIから空のレスポンスが返りました。';
+          break;
+        }
 
-      turn = turn === 'char1' ? 'char2' : 'char1';
+        appStore.setTyping(false);
+
+        const msg: Message = {
+          id: crypto.randomUUID(),
+          characterId: character.id as 'char1' | 'char2',
+          characterName: character.name,
+          text,
+          timestamp: new Date()
+        };
+
+        appStore.addMessage(msg);
+        saveConversationLog(msg);
+
+        history.push({
+          role: 'assistant',
+          content: `${character.name}: ${text}`
+        });
+
+        if (history.length > 20) {
+          history.splice(0, history.length - 20);
+        }
+
+        turnCount++;
+        turnIndex = (turnIndex + 1) % activeChars.length;
+
+        console.log('🔁 次ターン', turnIndex);
+
+        if (turnCount >= MAX_TURNS) {
+          console.log('🛑 MAX到達');
+          break;
+        }
+
+        await new Promise((r) => setTimeout(r, 500));
+      } catch (err) {
+        console.error('💥 会話エラー', err);
+        errorMessage = err instanceof Error ? err.message : String(err);
+        break;
+      } finally {
+        appStore.setTyping(false);
+      }
     }
 
-    appStore.setTyping(false);
-    if (appStore.status === 'running') {
-      appStore.setStatus('stopped');
-    }
+    appStore.setStatus('stopped');
+    console.log('🏁 会話終了');
   }
 
   function stopConversation() {
@@ -120,23 +166,23 @@
 
   const isRunning = $derived(appStore.status === 'running');
 
-function saveConversationLog(message: any) {
-  try {
-    const logs = JSON.parse(localStorage.getItem('ai_logs') || '[]');
+  function saveConversationLog(message: Message) {
+    try {
+      const logs = JSON.parse(localStorage.getItem('ai_logs') || '[]');
 
-    logs.push({
-      time: new Date().toISOString(),
-      character: message.characterName ?? 'unknown',
-      text: message.text ?? ''
-    });
+      logs.push({
+        time: new Date().toISOString(),
+        character: message.characterName ?? 'unknown',
+        text: message.text ?? ''
+      });
 
-    localStorage.setItem('ai_logs', JSON.stringify(logs));
-  } catch (e) {
-    console.error('ログ保存エラー', e);
+      localStorage.setItem('ai_logs', JSON.stringify(logs));
+    } catch (e) {
+      console.error('ログ保存エラー', e);
+    }
   }
-}
-
 </script>
+
 
 <svelte:head>
   <title>Discussion — AI Vtuber</title>
@@ -148,7 +194,7 @@ function saveConversationLog(message: any) {
     <p class="page-subtitle">2人のキャラクターが交互に会話します</p>
   </header>
 
-  <!-- Character Settings -->
+  
   <section class="characters-section">
     <CharacterCard
       character={appStore.char1}
@@ -163,7 +209,7 @@ function saveConversationLog(message: any) {
     />
   </section>
 
-  <!-- Error banner -->
+  
   {#if errorMessage}
     <div class="error-banner">
       <span class="error-icon">⚠️</span>
@@ -172,7 +218,7 @@ function saveConversationLog(message: any) {
     </div>
   {/if}
 
-  <!-- Conversation area -->
+  
   <section class="conversation-section">
     <ConversationControls onStart={startConversation} onStop={stopConversation} />
     <ConversationLog />
@@ -273,4 +319,4 @@ function saveConversationLog(message: any) {
     overflow: hidden;
     min-height: 0;
   }
-</style>
+</style> 
