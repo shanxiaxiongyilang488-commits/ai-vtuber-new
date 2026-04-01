@@ -30,6 +30,7 @@ export interface Character {
 
   color: string;
   avatarEmoji: string;
+  avatar?: string;        // base64 or object URL from file upload
 
   // モデル系
   ollamaModel: string;

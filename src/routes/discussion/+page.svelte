@@ -1,322 +1,188 @@
 <script lang="ts">
-  import { appStore } from '$lib/stores/appStore.svelte';
-  import CharacterCard from '$lib/components/CharacterCard.svelte';
-  import ConversationLog from '$lib/components/ConversationLog.svelte';
-  import ConversationControls from '$lib/components/ConversationControls.svelte';
-  import type { Message } from '$lib/types/conversation';
-  
+import { onMount } from 'svelte';
 
-  const MAX_TURNS = 6;
+type Character = {
+  id: string;
+  name: string;
+  role: string;
+  color: string;
+  emoji: string;
+  engine: string;
+  voice: string;
+  personality?: string;
+  avatar?: string;
+};
 
-  let stopSignal = false;
-  let errorMessage = $state<string | null>(null);
+let characters = $state<Character[]>([
+  {
+    id: 'char1',
+    name: 'アリア',
+    role: 'AIキャラクター A',
+    color: '#00d4ff',
+    emoji: '🤖',
+    engine: 'openai',
+    voice: 'VoiceVox'
+  },
+  {
+    id: 'char2',
+    name: 'ノヴァ',
+    role: 'AIキャラクター B',
+    color: '#bf00ff',
+    emoji: '✨',
+    engine: 'ollama',
+    voice: 'ElevenLabs'
+  }
+]);
 
-  async function startConversation() {
-    console.log('🚀 会話開始');
+let selectedCharacter: Character | null = null;
+let showModal = $state(false);
+let status = $state('idle');
+let topic = $state('');
+let messages = $state<any[]>([]);
 
-    stopSignal = false;
-    errorMessage = null;
+// =========================
+// モーダル操作
+// =========================
+function openSettings(char: Character) {
+  selectedCharacter = char;
+  showModal = true;
+}
 
-    appStore.clearMessages();
-    appStore.setStatus('running');
-    appStore.setTyping(false);
+function saveCharacter(updated: Character) {
+  characters = characters.map(c =>
+    c.id === updated.id ? updated : c
+  );
 
-    let turnIndex = 0;
-    let turnCount = 0;
+  localStorage.setItem('ai-characters', JSON.stringify(characters));
+  showModal = false;
+}
 
-    let model = '';
+// =========================
+// 状態操作
+// =========================
+function handleStop() {
+  status = 'stopped';
+}
 
+function handleReset() {
+  status = 'idle';
+  topic = '';
+  messages = [];
+}
 
+// =========================
+// モック会話
+// =========================
+const mockLines = [
+  'なるほど、それは興味深い視点ですね。',
+  'もう少し詳しく聞かせてもらえますか？',
+  '確かに、その点は重要だと思います。',
+  'では、別の角度から考えてみましょう。'
+];
 
+// =========================
+// 会話開始
+// =========================
+async function startDiscussion() {
+  if (!topic.trim()) return;
 
+  status = 'running';
 
-    // このページは2人会話専用
-    const activeChars = [appStore.char1, appStore.char2];
+  messages = [
+    ...messages,
+    { speaker: 'アリア', text: `${topic}について話しましょう！` },
+    { speaker: 'ノヴァ', text: `${topic}、面白いテーマですね。` }
+  ];
 
-    if (activeChars.length < 2) {
-      console.error('キャラが足りない');
-      errorMessage = 'キャラ設定が不足しています。';
-      appStore.setStatus('stopped');
-      return;
-    }
+  const speakers = ['アリア', 'ノヴァ'];
 
-    const history: Array<{ role: 'assistant' | 'user'; content: string }> = [];
-
-    while (!stopSignal) {
-      const character = activeChars[turnIndex];
-      const other = activeChars[(turnIndex + 1) % activeChars.length];
-
-      if (character.aiEngine === 'openai') {
-        model = 'gpt-4o-mini';
-      } else if (character.aiEngine === 'lmstudio') {
-        model = character.lmstudioModel || '';
-      } else if (character.aiEngine === 'ollama') {
-        model = character.ollamaModel || '';
-      }
-
-      console.log('🎭 現在キャラ', character.name);
-      console.log('👂 相手キャラ', other.name);
-
-      appStore.setTyping(true);
-
-      const safePrompt = [
-        character.prompt,
-        '自己紹介は最初の1回だけにしてください。',
-        '短く自然に会話してください（1〜2文）。',
-        '質問で返しすぎないでください。'
-      ].join('\n');
-
-      try {
-        console.log('📤 送信', {
-          speaker: character.name,
-          listener: other.name,
-          topic: appStore.topic,
-          engine: character.aiEngine,
-          model: character.aiEngine === 'lmstudio'
-            ? (character.lmstudioModel || '')
-            : (character.ollamaModel || '')
-        });
-
-        const res = await fetch('/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            systemPrompt: safePrompt,
-            lastMessage: history.at(-1)?.content ?? '',
-            speakerName: character.name,
-            listenerName: other.name,
-            topic: appStore.topic,
-            engine: character.aiEngine,
-            model:
-              character.aiEngine === 'lmstudio'
-                ? (character.lmstudioModel || '')
-                : (character.ollamaModel || '')
-          })
-        });
-
-        if (!res.ok) {
-          const errText = await res.text();
-          console.error('💥 /api/chat エラー', res.status, errText);
-          errorMessage = `/api/chat エラー: ${res.status}`;
-          break;
-        }
-
-        const data = await res.json();
-        const text = (data.message ?? data.text ?? '').trim();
-
-        console.log('📩 受信', data);
-
-        if (!text) {
-          console.warn('⚠ 空レスポンス');
-          errorMessage = 'AIから空のレスポンスが返りました。';
-          break;
-        }
-
-        appStore.setTyping(false);
-
-        const msg: Message = {
-          id: crypto.randomUUID(),
-          characterId: character.id as 'char1' | 'char2',
-          characterName: character.name,
-          text,
-          timestamp: new Date()
-        };
-
-        appStore.addMessage(msg);
-        saveConversationLog(msg);
-
-        history.push({
-          role: 'assistant',
-          content: `${character.name}: ${text}`
-        });
-
-        if (history.length > 20) {
-          history.splice(0, history.length - 20);
-        }
-
-        turnCount++;
-        turnIndex = (turnIndex + 1) % activeChars.length;
-
-        console.log('🔁 次ターン', turnIndex);
-
-        if (turnCount >= MAX_TURNS) {
-          console.log('🛑 MAX到達');
-          break;
-        }
-
-        await new Promise((r) => setTimeout(r, 500));
-      } catch (err) {
-        console.error('💥 会話エラー', err);
-        errorMessage = err instanceof Error ? err.message : String(err);
-        break;
-      } finally {
-        appStore.setTyping(false);
-      }
-    }
-
-    appStore.setStatus('stopped');
-    console.log('🏁 会話終了');
+  for (let i = 0; i < 4; i++) {
+    setTimeout(() => {
+      messages = [
+        ...messages,
+        { speaker: speakers[(i + 2) % 2], text: mockLines[i] }
+      ];
+    }, 800 * (i + 1));
   }
 
-  function stopConversation() {
-    stopSignal = true;
-    appStore.setTyping(false);
-    appStore.setStatus('stopped');
+  const res = await fetch('/api/discussion', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ topic, messages })
+  });
+
+  const data = await res.json();
+
+  messages = [
+    ...messages,
+    { speaker: 'アリア', text: data.text }
+  ];
+}
+
+// =========================
+// 初期ロード
+// =========================
+onMount(() => {
+  const saved = localStorage.getItem('ai-characters');
+  if (saved) {
+    characters = JSON.parse(saved);
   }
-
-  const isRunning = $derived(appStore.status === 'running');
-
-  function saveConversationLog(message: Message) {
-    try {
-      const logs = JSON.parse(localStorage.getItem('ai_logs') || '[]');
-
-      logs.push({
-        time: new Date().toISOString(),
-        character: message.characterName ?? 'unknown',
-        text: message.text ?? ''
-      });
-
-      localStorage.setItem('ai_logs', JSON.stringify(logs));
-    } catch (e) {
-      console.error('ログ保存エラー', e);
-    }
-  }
+});
 </script>
 
-
-<svelte:head>
-  <title>Discussion — AI Vtuber</title>
-</svelte:head>
-
 <div class="page">
-  <header class="page-header">
-    <h1 class="page-title">🎭 AI Discussion</h1>
-    <p class="page-subtitle">2人のキャラクターが交互に会話します</p>
-  </header>
 
-  
-  <section class="characters-section">
-    <CharacterCard
-      character={appStore.char1}
-      onUpdate={(u) => appStore.updateCharacter(0, u)}
-      disabled={isRunning}
-    />
-    <div class="vs-badge">VS</div>
-    <CharacterCard
-      character={appStore.char2}
-      onUpdate={(u) => appStore.updateCharacter(1, u)}
-      disabled={isRunning}
-    />
-  </section>
+  <!-- 左：キャラ -->
+  <div class="sidebar">
+    {#each characters as char}
+      <div class="char-card" onclick={() => openSettings(char)}>
+        <div>{char.emoji}</div>
+        <div>{char.name}</div>
+      </div>
+    {/each}
+  </div>
 
-  
-  {#if errorMessage}
-    <div class="error-banner">
-      <span class="error-icon">⚠️</span>
-      <span class="error-text">{errorMessage}</span>
-      <button class="error-close" onclick={() => (errorMessage = null)}>✕</button>
+  <!-- 右：会話 -->
+  <div class="main">
+    <div class="messages">
+      {#each messages as msg}
+        <div>
+          <b>{msg.speaker}：</b> {msg.text}
+        </div>
+      {/each}
     </div>
-  {/if}
 
-  
-  <section class="conversation-section">
-    <ConversationControls onStart={startConversation} onStop={stopConversation} />
-    <ConversationLog />
-  </section>
+    <input
+      placeholder="話題を入力"
+      bind:value={topic}
+    />
+
+    <button onclick={startDiscussion}>
+      会話開始
+    </button>
+  </div>
+
 </div>
 
-<style>
-  .page {
-    display: flex;
-    flex-direction: column;
-    height: 100vh;
-    overflow: hidden;
-  }
+<!-- モーダル -->
+{#if showModal && selectedCharacter}
+  <div class="modal-backdrop" onclick={() => showModal = false}>
+    <div class="modal" onclick={(e) => e.stopPropagation()}>
+      
+      <h2>キャラクター設定</h2>
 
-  .page-header {
-    padding: 14px 20px 10px;
-    border-bottom: 1px solid var(--border);
-    flex-shrink: 0;
-  }
+      <input bind:value={selectedCharacter.name} />
 
-  .page-title {
-    margin: 0;
-    font-size: 1.4rem;
-    font-weight: 700;
-  }
+      <select bind:value={selectedCharacter.engine}>
+        <option value="openai">OpenAI</option>
+        <option value="gemini">Gemini</option>
+        <option value="ollama">Ollama</option>
+      </select>
 
-  .page-subtitle {
-    margin: 2px 0 0;
-    font-size: 0.8rem;
-    color: var(--text-muted);
-  }
+      <button onclick={() => saveCharacter(selectedCharacter)}>
+        保存
+      </button>
 
-  /* Characters side-by-side */
-  .characters-section {
-    display: flex;
-    align-items: center;
-    gap: 0;
-    padding: 14px 16px;
-    border-bottom: 1px solid var(--border);
-    flex-shrink: 0;
-    overflow-x: auto;
-  }
-
-  .characters-section :global(.card) {
-    flex: 1;
-    min-width: 260px;
-  }
-
-  .vs-badge {
-    font-size: 1rem;
-    font-weight: 900;
-    color: var(--text-muted);
-    padding: 0 12px;
-    flex-shrink: 0;
-  }
-
-  .error-banner {
-    display: flex;
-    align-items: flex-start;
-    gap: 8px;
-    padding: 10px 16px;
-    background: #3a1a1a;
-    border-bottom: 1px solid #c0392b;
-    color: #ff6b6b;
-    font-size: 0.85rem;
-    flex-shrink: 0;
-    white-space: pre-wrap;
-  }
-
-  .error-icon {
-    flex-shrink: 0;
-  }
-
-  .error-text {
-    flex: 1;
-    line-height: 1.5;
-  }
-
-  .error-close {
-    background: none;
-    border: none;
-    color: #ff6b6b;
-    cursor: pointer;
-    font-size: 0.9rem;
-    padding: 0;
-    flex-shrink: 0;
-    opacity: 0.7;
-  }
-  .error-close:hover {
-    opacity: 1;
-  }
-
-  /* Conversation section fills remaining space */
-  .conversation-section {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    min-height: 0;
-  }
-</style> 
+    </div>
+  </div>
+{/if}
