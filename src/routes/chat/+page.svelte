@@ -7,6 +7,7 @@
   let topic = $state('');
   let modalOpen = $state(false);
   let selectedCharacter = $state<Character | null>(null);
+  let messages = $state<{ speaker: string; text: string }[]>([]);
 
   const defaultChar1: Character = {
     id: 'char1',
@@ -64,6 +65,26 @@
     modalOpen = false;
     selectedCharacter = null;
   }
+
+  async function handleStartDiscussion() {
+  console.log("🔥 親で受け取った", topic);
+
+  const res = await fetch('/api/discussion', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ topic })
+  });
+
+  const data = await res.json();
+
+  console.log("🎯 APIレスポンス:", data);
+
+  messages = [...messages, { speaker: 'system', text: data.message }];
+}
+
+
 </script>
 
 <svelte:head>
@@ -123,33 +144,48 @@
 
     <!-- Chat area -->
     <main class="chat-area">
-      <!-- Empty state -->
-      <div class="empty-state">
-        <!-- Corner decorators -->
-        <div class="corner corner-tl" aria-hidden="true"></div>
-        <div class="corner corner-tr" aria-hidden="true"></div>
-        <div class="corner corner-bl" aria-hidden="true"></div>
-        <div class="corner corner-br" aria-hidden="true"></div>
+      {#if messages.length === 0}
+        <!-- Empty state -->
+        <div class="empty-state">
+          <!-- Corner decorators -->
+          <div class="corner corner-tl" aria-hidden="true"></div>
+          <div class="corner corner-tr" aria-hidden="true"></div>
+          <div class="corner corner-bl" aria-hidden="true"></div>
+          <div class="corner corner-br" aria-hidden="true"></div>
 
-        <!-- Diamond icon -->
-        <div class="diamond-wrap" aria-hidden="true">
-          <div class="diamond-outer"></div>
-          <div class="diamond-inner"></div>
-          <div class="diamond-core"></div>
+          <!-- Diamond icon -->
+          <div class="diamond-wrap" aria-hidden="true">
+            <div class="diamond-outer"></div>
+            <div class="diamond-inner"></div>
+            <div class="diamond-core"></div>
+          </div>
+
+          <p class="empty-text">
+            トピックを入力して会話を開始してください
+          </p>
+
+          <p class="empty-sub">
+            AWAITING INPUT — NEURAL LINK STANDBY
+          </p>
         </div>
-
-        <p class="empty-text">
-          トピックを入力して会話を開始してください
-        </p>
-
-        <p class="empty-sub">
-          AWAITING INPUT — NEURAL LINK STANDBY
-        </p>
-      </div>
+      {:else}
+        <!-- Message list -->
+        <div class="message-list">
+          {#each messages as msg}
+            <div class="message-box">
+              <span class="message-speaker">{msg.speaker}</span>
+              <p class="message-text">{msg.text}</p>
+            </div>
+          {/each}
+        </div>
+      {/if}
     </main>
 
     <!-- Control Panel -->
-    <ControlPanel bind:topic />
+    <ControlPanel
+  bind:topic
+  onStart={handleStartDiscussion}
+/>
   </div>
 </div>
 
@@ -402,5 +438,43 @@
     letter-spacing: 0.2em;
     color: rgba(34, 211, 238, 0.25);
     text-transform: uppercase;
+  }
+
+  /* ── Message list ── */
+  .message-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: 100%;
+    max-width: 720px;
+    align-self: flex-start;
+  }
+
+  .message-box {
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(34, 211, 238, 0.2);
+    border-radius: 8px;
+    padding: 12px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .message-speaker {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.15em;
+    color: #22d3ee;
+    text-transform: uppercase;
+  }
+
+  .message-text {
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 15px;
+    font-weight: 400;
+    color: #e2e8f0;
+    line-height: 1.6;
+    margin: 0;
   }
 </style>

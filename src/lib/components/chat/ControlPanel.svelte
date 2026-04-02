@@ -16,6 +16,13 @@
     onReset,
     disabled = false,
   }: Props = $props();
+
+  function onStartDiscussion() {
+    console.log('[DEBUG] Start Discussion clicked');
+    console.log('[DEBUG] onStart prop:', onStart);
+    console.log('[DEBUG] disabled:', disabled);
+    onStart?.();
+  }
 </script>
 
 <div class="panel">
@@ -45,7 +52,7 @@
       <div class="btn-group">
         <button
           class="btn btn--start"
-          onclick={onStart}
+          onclick={onStartDiscussion}
           {disabled}
         >
           <span class="btn-icon">▶</span>

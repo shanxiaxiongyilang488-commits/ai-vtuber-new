@@ -84,6 +84,8 @@ const mockLines = [
 // 会話開始
 // =========================
 async function startDiscussion() {
+  console.log('[DEBUG] START button clicked');
+
   if (!topic.trim()) return;
 
   status = 'running';
@@ -93,6 +95,7 @@ async function startDiscussion() {
     { speaker: 'アリア', text: `${topic}について話しましょう！` },
     { speaker: 'ノヴァ', text: `${topic}、面白いテーマですね。` }
   ];
+  console.log('[DEBUG] UI updated: initial messages added', messages);
 
   const speakers = ['アリア', 'ノヴァ'];
 
@@ -102,21 +105,41 @@ async function startDiscussion() {
         ...messages,
         { speaker: speakers[(i + 2) % 2], text: mockLines[i] }
       ];
+      console.log(`[DEBUG] UI updated: mock message ${i + 1} added`, messages);
     }, 800 * (i + 1));
   }
 
-  const res = await fetch('/api/discussion', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ topic, messages })
-  });
+  const requestBody = { topic, messages };
+  console.log('[DEBUG] Sending request', requestBody);
 
-  const data = await res.json();
+  let res: Response;
+  let data: any;
+
+  try {
+    res = await fetch('/api/discussion', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody)
+    });
+    console.log('[DEBUG] Received response', { status: res.status, ok: res.ok });
+  } catch (err) {
+    console.error('[DEBUG] Fetch error', err);
+    return;
+  }
+
+  try {
+    data = await res.json();
+    console.log('[DEBUG] Received response data', data);
+  } catch (err) {
+    console.error('[DEBUG] JSON parse error', err);
+    return;
+  }
 
   messages = [
     ...messages,
     { speaker: 'アリア', text: data.text }
   ];
+  console.log('[DEBUG] UI updated: API response message added', messages);
 }
 
 // =========================

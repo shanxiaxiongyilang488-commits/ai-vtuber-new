@@ -31,11 +31,11 @@
   function handleAvatarFile(e: Event) {
     const file = (e.target as HTMLInputElement).files?.[0];
     if (!file) return;
-    // revoke previous object URL to avoid memory leak
-    if (avatarPreview && avatarPreview.startsWith('blob:')) {
-      URL.revokeObjectURL(avatarPreview);
-    }
-    avatarPreview = URL.createObjectURL(file);
+    const reader = new FileReader();
+    reader.onload = () => {
+      avatarPreview = reader.result as string;
+    };
+    reader.readAsDataURL(file);
   }
 
   function handleSave() {
