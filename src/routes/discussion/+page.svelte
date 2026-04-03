@@ -34,11 +34,17 @@ let characters = $state<Character[]>([
   }
 ]);
 
+type Message = {
+  speaker: string;
+  text: string;
+  avatar: string;
+};
+
 let selectedCharacter: Character | null = null;
 let showModal = $state(false);
 let status = $state('idle');
 let topic = $state('');
-let messages = $state<any[]>([]);
+let messages = $state<Message[]>([]);
 
 // =========================
 // モーダル操作
@@ -81,7 +87,7 @@ const mockLines = [
 ];
 
 // =========================
-// 会話開始
+// 会話開始（API連携）
 // =========================
 async function startDiscussion() {
   console.log('[DEBUG] START button clicked');
@@ -90,20 +96,22 @@ async function startDiscussion() {
 
   status = 'running';
 
+  const c0 = characters[0];
+  const c1 = characters[1];
+
   messages = [
     ...messages,
-    { speaker: 'アリア', text: `${topic}について話しましょう！` },
-    { speaker: 'ノヴァ', text: `${topic}、面白いテーマですね。` }
+    { speaker: c0.name, text: `${topic}について話しましょう！`, avatar: c0.avatar ?? '' },
+    { speaker: c1.name, text: `${topic}、面白いテーマですね。`, avatar: c1.avatar ?? '' }
   ];
   console.log('[DEBUG] UI updated: initial messages added', messages);
 
-  const speakers = ['アリア', 'ノヴァ'];
-
   for (let i = 0; i < 4; i++) {
     setTimeout(() => {
+      const char = [c0, c1][(i + 2) % 2];
       messages = [
         ...messages,
-        { speaker: speakers[(i + 2) % 2], text: mockLines[i] }
+        { speaker: char.name, text: mockLines[i], avatar: char.avatar ?? '/avatars/default.png'}
       ];
       console.log(`[DEBUG] UI updated: mock message ${i + 1} added`, messages);
     }, 800 * (i + 1));
@@ -135,11 +143,33 @@ async function startDiscussion() {
     return;
   }
 
-  messages = [
-    ...messages,
-    { speaker: 'アリア', text: data.text }
-  ];
+  messages = [...messages, { speaker: c0.name, text: data.text, avatar: c0.avatar ?? '/avatars/default.png' }];
   console.log('[DEBUG] UI updated: API response message added', messages);
+}
+
+// =========================
+// ダミー会話
+// =========================
+async function startDummyDiscussion() {
+  messages = [];
+  status = 'running';
+
+  const c0 = characters[0];
+  const c1 = characters[1];
+
+  const script = [
+    { speaker: c0.name, text: '春っていい季節ね…', avatar: c0.avatar ?? '/avatars/default.png' },
+    { speaker: c1.name, text: 'うん、暖かくて過ごしやすい…', avatar: c1.avatar ?? '/avatars/default.png' },
+    { speaker: c0.name, text: '桜も綺麗だし、気分も上がるわ', avatar: c0.avatar ?? '/avatars/default.png' },
+    { speaker: c1.name, text: 'ちょっと眠くなるけどね…', avatar: c1.avatar ?? '/avatars/default.png' }
+  ];
+
+  for (const line of script) {
+    await new Promise(resolve => setTimeout(resolve, 600));
+    messages = [...messages, line];
+  }
+
+  status = 'idle';
 }
 
 // =========================
@@ -167,10 +197,24 @@ onMount(() => {
 
   <!-- 右：会話 -->
   <div class="main">
+  <p>件数: {messages.length}</p>
     <div class="messages">
       {#each messages as msg}
-        <div>
-          <b>{msg.speaker}：</b> {msg.text}
+        {@const isLeft = msg.speaker === characters[0].name}
+        <div class="message-row" class:left={isLeft} class:right={!isLeft}>
+          {#if isLeft}
+            <img class="avatar" src={msg.avatar || '/avatars/default.png'} alt={msg.speaker} />
+            <div class="bubble-wrap">
+              <span class="speaker-name">{msg.speaker}</span>
+              <div class="bubble">{msg.text}</div>
+            </div>
+          {:else}
+            <div class="bubble-wrap right-wrap">
+              <span class="speaker-name">{msg.speaker}</span>
+              <div class="bubble">{msg.text}</div>
+            </div>
+            <img class="avatar" src={msg.avatar || '/avatars/default.png'} alt={msg.speaker} />
+          {/if}
         </div>
       {/each}
     </div>
@@ -181,7 +225,10 @@ onMount(() => {
     />
 
     <button onclick={startDiscussion}>
-      会話開始
+      会話開始（API）
+    </button>
+    <button onclick={startDummyDiscussion}>
+      ダミー会話
     </button>
   </div>
 
@@ -209,3 +256,136 @@ onMount(() => {
     </div>
   </div>
 {/if}
+
+<style>
+  /* ========================= Messages container ========================= */
+  .messages {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 12px;
+  }
+
+  /* ========================= Message row ========================= */
+  .message-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    animation: fadeInUp 0.3s ease both;
+  }
+
+  .message-row.left {
+    flex-direction: row;
+    justify-content: flex-start;
+  }
+
+  .message-row.right {
+    flex-direction: row-reverse;
+    justify-content: flex-start;
+  }
+
+  /* ========================= Avatar ========================= */
+  .avatar {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+    border: 1.5px solid rgba(34, 211, 238, 0.5);
+    box-shadow: 0 0 8px rgba(34, 211, 238, 0.35);
+  }
+
+  .message-row.right .avatar {
+    border-color: rgba(168, 85, 247, 0.5);
+    box-shadow: 0 0 8px rgba(168, 85, 247, 0.35);
+  }
+
+  /* ========================= Bubble wrapper ========================= */
+  .bubble-wrap {
+    display: flex;
+    flex-direction: column;
+    max-width: 60%;
+  }
+
+  .bubble-wrap.right-wrap {
+    align-items: flex-end;
+  }
+
+  /* ========================= Speaker name ========================= */
+  .speaker-name {
+    font-size: 10px;
+    color: #22d3ee;
+    margin-bottom: 3px;
+    letter-spacing: 0.08em;
+  }
+
+  .message-row.right .speaker-name {
+    color: #c084fc;
+  }
+
+  /* ========================= Chat bubble ========================= */
+  .bubble {
+    padding: 10px 14px;
+    border-radius: 12px;
+    background: rgba(10, 20, 35, 0.75);
+    border: 1px solid rgba(34, 211, 238, 0.3);
+    color: #e2e8f0;
+    font-size: 14px;
+    line-height: 1.6;
+    word-break: break-word;
+    box-shadow:
+      0 0 8px rgba(34, 211, 238, 0.15),
+      inset 0 0 6px rgba(34, 211, 238, 0.08);
+  }
+
+  .message-row.right .bubble {
+    border-color: rgba(168, 85, 247, 0.35);
+    box-shadow:
+      0 0 8px rgba(168, 85, 247, 0.2),
+      inset 0 0 6px rgba(168, 85, 247, 0.1);
+  }
+
+  /* ========================= Fade-in animation ========================= */
+  @keyframes fadeInUp {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .bubble {
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 1.5;
+  backdrop-filter: blur(6px);
+
+  /* 🔥 強化ポイント */
+  background: linear-gradient(
+    135deg,
+    rgba(10, 20, 30, 0.85),
+    rgba(20, 40, 60, 0.6)
+  );
+
+  border: 1px solid rgba(34, 211, 238, 0.4);
+
+  box-shadow:
+    0 0 10px rgba(34, 211, 238, 0.4),
+    0 0 20px rgba(34, 211, 238, 0.2),
+    inset 0 0 10px rgba(34, 211, 238, 0.15);
+}
+
+/* 右側（紫） */
+.message-row.right .bubble {
+  border-color: rgba(168, 85, 247, 0.5);
+
+  box-shadow:
+    0 0 10px rgba(168, 85, 247, 0.5),
+    0 0 20px rgba(168, 85, 247, 0.3),
+    inset 0 0 10px rgba(168, 85, 247, 0.2);
+}
+</style>

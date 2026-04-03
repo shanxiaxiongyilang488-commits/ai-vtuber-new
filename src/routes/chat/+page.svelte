@@ -1,90 +1,107 @@
 <script lang="ts">
-  import Sidebar from '$lib/components/chat/Sidebar.svelte';
-  import ControlPanel from '$lib/components/chat/ControlPanel.svelte';
-  import CharacterSettingsModal from '$lib/components/CharacterSettingsModal.svelte';
-  import type { Character } from '$lib/types/character';
+import Sidebar from '$lib/components/chat/Sidebar.svelte';
+import ControlPanel from '$lib/components/chat/ControlPanel.svelte';
+import CharacterSettingsModal from '$lib/components/CharacterSettingsModal.svelte';
+import type { Character } from '$lib/types/character';
 
-  let topic = $state('');
-  let modalOpen = $state(false);
-  let selectedCharacter = $state<Character | null>(null);
-  let messages = $state<{ speaker: string; text: string }[]>([]);
+type Message = {
+  speaker: string;
+  text: string;
+};
 
-  const defaultChar1: Character = {
-    id: 'char1',
-    name: 'アリア',
-    avatarEmoji: '🌸',
-    color: '#22d3ee',
-    aiEngine: 'openai',
-    voiceEngine: 'voicevox',
-    prompt: 'あなたは好奇心旺盛で明るいAIアシスタントのアリアです。',
-    ollamaModel: 'qwen:0.5b',
-    voiceId: '',
-    speakerId: 0,
-  };
+let topic = $state("");
+let modalOpen = $state(false);
+let selectedCharacter = $state<Character | null>(null);
+let messages = $state<Message[]>([]);
 
-  const defaultChar2: Character = {
-    id: 'char2',
-    name: 'ノヴァ',
-    avatarEmoji: '🔥',
-    color: '#a855f7',
-    aiEngine: 'ollama',
-    voiceEngine: 'elevenlabs',
-    prompt: 'あなたはクールで論理的なAIアシスタントのノヴァです。',
-    ollamaModel: 'llama3.2:1b',
-    voiceId: '',
-    speakerId: 0,
-  };
+// ✅ systemPromptに修正
+const defaultChar1: Character = {
+  id: 'char1',
+  name: 'アリア',
+  avatarEmoji: '🌸',
+  color: '#22d3ee',
+  aiEngine: 'openai',
+  voiceEngine: 'voicevox',
+  systemPrompt: "あなたはクールなギャルAI。語尾は〜っしょ！",
+  ollamaModel: 'qwen:0.5b',
+  voiceId: '',
+  speakerId: 0
+};
 
-  function loadChar(id: string, fallback: Character): Character {
-    if (typeof localStorage === 'undefined') return fallback;
-    const stored = localStorage.getItem(id);
-    return stored ? (JSON.parse(stored) as Character) : fallback;
+const defaultChar2: Character = {
+  id: 'char2',
+  name: 'ノヴァ',
+  avatarEmoji: '🔥',
+  color: '#a855f7',
+  aiEngine: 'openai',
+  voiceEngine: 'elevenlabs',
+  systemPrompt: 'あなたはクールで論理的なAIアシスタントのノヴァです。',
+  ollamaModel: 'llama3.2:1b',
+  voiceId: '',
+  speakerId: 0
+};
+
+function loadChar(id: string, fallback: Character): Character {
+  if (typeof localStorage === 'undefined') return fallback;
+  const stored = localStorage.getItem(id);
+  return stored ? JSON.parse(stored) : fallback;
+}
+
+let char1 = $state<Character>(loadChar('char1', defaultChar1));
+let char2 = $state<Character>(loadChar('char2', defaultChar2));
+
+const characters = $derived([char1, char2]);
+
+function handleCharacterClick(char: Character) {
+  selectedCharacter = char;
+  modalOpen = true;
+}
+
+function handleModalClose() {
+  modalOpen = false;
+  selectedCharacter = null;
+}
+
+function handleModalSave(updated: Character) {
+  if (updated.id === 'char1') {
+    char1 = updated;
+    localStorage.setItem('char1', JSON.stringify(char1));
+  } else {
+    char2 = updated;
+    localStorage.setItem('char2', JSON.stringify(char2));
   }
+}
 
-  let char1 = $state<Character>(loadChar('char1', defaultChar1));
-  let char2 = $state<Character>(loadChar('char2', defaultChar2));
+// 🔥 会話開始（完成版）
+async function handleStartDiscussion() {
+  console.log("🔥 親で受け取った:", topic);
 
-  function handleCharacterClick(char: Character) {
-    selectedCharacter = char;
-    modalOpen = true;
-  }
-
-  function handleModalClose() {
-    modalOpen = false;
-    selectedCharacter = null;
-  }
-
-  function handleModalSave(updated: Character) {
-    if (updated.id === 'char1') {
-      char1 = updated;
-      localStorage.setItem('char1', JSON.stringify(char1));
-    } else if (updated.id === 'char2') {
-      char2 = updated;
-      localStorage.setItem('char2', JSON.stringify(char2));
-    }
-    modalOpen = false;
-    selectedCharacter = null;
-  }
-
-  async function handleStartDiscussion() {
-  console.log("🔥 親で受け取った", topic);
+  messages = [];
 
   const res = await fetch('/api/discussion', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({ topic })
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      message: topic,
+      characters: [char1, char2]
+    })
   });
 
   const data = await res.json();
 
-  console.log("🎯 APIレスポンス:", data);
+  console.log("🔥 API結果:", data);
 
-  messages = [...messages, { speaker: 'system', text: data.message }];
+  const incoming: Message[] = (data.messages ?? []).map((m: any) => ({
+    speaker: m.speaker,
+    text: (m.text ?? "").replace(/\n/g, " ")
+  }));
+
+  // 👇 1人ずつ表示
+  for (const msg of incoming) {
+    messages = [...messages, msg];
+    await new Promise(r => setTimeout(r, 800));
+  }
 }
-
-
 </script>
 
 <svelte:head>
@@ -97,17 +114,17 @@
 </svelte:head>
 
 <!-- Background layers -->
-<div class="grid-bg"     aria-hidden="true"></div>
-<div class="scanlines"   aria-hidden="true"></div>
-<div class="orb orb-cyan"   aria-hidden="true"></div>
+<div class="grid-bg" aria-hidden="true"></div>
+<div class="scanlines" aria-hidden="true"></div>
+<div class="orb orb-cyan" aria-hidden="true"></div>
 <div class="orb orb-purple" aria-hidden="true"></div>
 
 <!-- Root shell -->
 <div class="shell">
-  <!-- ── Left Sidebar ── -->
+  <!-- Left Sidebar -->
   <Sidebar {char1} {char2} oncharacterclick={handleCharacterClick} />
 
-  <!-- ── Character Settings Modal ── -->
+  <!-- Character Settings Modal -->
   <CharacterSettingsModal
     open={modalOpen}
     character={selectedCharacter}
@@ -115,7 +132,7 @@
     onsave={handleModalSave}
   />
 
-  <!-- ── Main Column ── -->
+  <!-- Main column -->
   <div class="main-col">
 
     <!-- Header -->
@@ -127,54 +144,57 @@
             SYSTEM ONLINE
           </span>
         </div>
-
         <h1 class="page-title">
           AI ディスカッション
           <span class="title-accent">ターミナル</span>
         </h1>
-
         <div class="header-right">
           <span class="ver-tag">v2.0.0</span>
         </div>
       </div>
-
-      <!-- Header underline -->
       <div class="header-line" aria-hidden="true"></div>
     </header>
 
     <!-- Chat area -->
     <main class="chat-area">
       {#if messages.length === 0}
-        <!-- Empty state -->
         <div class="empty-state">
-          <!-- Corner decorators -->
           <div class="corner corner-tl" aria-hidden="true"></div>
           <div class="corner corner-tr" aria-hidden="true"></div>
           <div class="corner corner-bl" aria-hidden="true"></div>
           <div class="corner corner-br" aria-hidden="true"></div>
 
-          <!-- Diamond icon -->
           <div class="diamond-wrap" aria-hidden="true">
             <div class="diamond-outer"></div>
             <div class="diamond-inner"></div>
             <div class="diamond-core"></div>
           </div>
 
-          <p class="empty-text">
-            トピックを入力して会話を開始してください
-          </p>
-
-          <p class="empty-sub">
-            AWAITING INPUT — NEURAL LINK STANDBY
-          </p>
+          <p class="empty-text">トピックを入力して会話を開始してください</p>
+          <p class="empty-sub">AWAITING INPUT — NEURAL LINK STANDBY</p>
         </div>
       {:else}
-        <!-- Message list -->
-        <div class="message-list">
+        <div class="messages">
           {#each messages as msg}
-            <div class="message-box">
-              <span class="message-speaker">{msg.speaker}</span>
-              <p class="message-text">{msg.text}</p>
+            {@const isLeft = msg.speaker === characters[0].name}
+            <div class="message-row" class:left={isLeft} class:right={!isLeft}>
+              {#if isLeft}
+                <img
+                  class="avatar"
+                  src={characters.find(c => c.name === msg.speaker)?.avatar}
+                  alt={msg.speaker}
+                  />
+                <div class="bubble-wrap">
+                  <span class="speaker-name">{msg.speaker}</span>
+                  <div class="bubble">{msg.text}</div>
+                </div>
+              {:else}
+                <div class="bubble-wrap right-wrap">
+                  <span class="speaker-name">{msg.speaker}</span>
+                  <div class="bubble">{msg.text}</div>
+                </div>
+                <img class="avatar" src={characters.find(c => c.name === msg.speaker)?.avatar} alt={msg.speaker} />
+              {/if}
             </div>
           {/each}
         </div>
@@ -182,15 +202,13 @@
     </main>
 
     <!-- Control Panel -->
-    <ControlPanel
-  bind:topic
-  onStart={handleStartDiscussion}
-/>
+    <ControlPanel bind:topic onStart={handleStartDiscussion} />
+
   </div>
 </div>
 
 <style>
-  /* ── Globals (page-scoped reset) ── */
+  /* ── Globals ── */
   :global(body) {
     margin: 0;
     background: #030712;
@@ -305,6 +323,7 @@
     letter-spacing: 0.08em;
     color: #e2e8f0;
     text-align: center;
+    margin: 0;
   }
 
   .title-accent {
@@ -338,6 +357,7 @@
   .chat-area {
     flex: 1;
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
     overflow-y: auto;
@@ -359,7 +379,6 @@
     width: 100%;
   }
 
-  /* Corner decorators */
   .corner {
     position: absolute;
     width: 16px; height: 16px;
@@ -372,11 +391,9 @@
   .corner-bl { bottom: -1px; left: -1px; border-width: 0 0 2px 2px; border-radius: 0 0 0 4px; }
   .corner-br { bottom: -1px; right: -1px; border-width: 0 2px 2px 0; border-radius: 0 0 4px 0; }
 
-  /* Diamond icon */
   .diamond-wrap {
     position: relative;
-    width: 56px;
-    height: 56px;
+    width: 56px; height: 56px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -420,7 +437,6 @@
     50%       { box-shadow: 0 0 22px rgba(34, 211, 238, 0.9), inset 0 0 10px rgba(34, 211, 238, 0.5); }
   }
 
-  /* Empty text */
   .empty-text {
     font-family: 'Rajdhani', sans-serif;
     font-size: 16px;
@@ -429,6 +445,7 @@
     text-align: center;
     letter-spacing: 0.03em;
     line-height: 1.5;
+    margin: 0;
   }
 
   .empty-sub {
@@ -438,43 +455,77 @@
     letter-spacing: 0.2em;
     color: rgba(34, 211, 238, 0.25);
     text-transform: uppercase;
+    margin: 0;
   }
 
-  /* ── Message list ── */
-  .message-list {
+  /* ── Messages ── */
+  .messages {
     display: flex;
     flex-direction: column;
     gap: 12px;
     width: 100%;
     max-width: 720px;
-    align-self: flex-start;
   }
 
-  .message-box {
-    background: rgba(0, 0, 0, 0.35);
-    border: 1px solid rgba(34, 211, 238, 0.2);
-    border-radius: 8px;
-    padding: 12px 16px;
+  .message-row {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+    animation: fadeInUp 0.3s ease;
+  }
+
+  .message-row.left {
+    justify-content: flex-start;
+  }
+
+  .message-row.right {
+    justify-content: flex-end;
+  }
+
+  .avatar {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .bubble-wrap {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    max-width: 60%;
   }
 
-  .message-speaker {
-    font-family: 'Orbitron', sans-serif;
-    font-size: 9px;
-    font-weight: 600;
-    letter-spacing: 0.15em;
-    color: #22d3ee;
-    text-transform: uppercase;
+  .right-wrap {
+    align-items: flex-end;
+    text-align: right;
   }
 
-  .message-text {
-    font-family: 'Rajdhani', sans-serif;
-    font-size: 15px;
-    font-weight: 400;
-    color: #e2e8f0;
-    line-height: 1.6;
-    margin: 0;
+  .speaker-name {
+    font-size: 10px;
+    margin-bottom: 4px;
+    opacity: 0.7;
+  }
+
+  .bubble {
+    padding: 10px 14px;
+    border-radius: 12px;
+    background: rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(6px);
+    line-height: 1.5;
+  }
+
+  .message-row.left .bubble {
+    border: 1px solid #22d3ee;
+    box-shadow: 0 0 10px rgba(34, 211, 238, 0.4);
+  }
+
+  .message-row.right .bubble {
+    border: 1px solid #a855f7;
+    box-shadow: 0 0 10px rgba(168, 85, 247, 0.4);
+  }
+
+  @keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
   }
 </style>
