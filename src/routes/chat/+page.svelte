@@ -13,6 +13,7 @@ let topic = $state("");
 let modalOpen = $state(false);
 let selectedCharacter = $state<Character | null>(null);
 let messages = $state<Message[]>([]);
+let selectedEngine: "openai" | "gemini" | "claude" = "openai";
 
 // ✅ systemPromptに修正
 const defaultChar1: Character = {
@@ -102,6 +103,8 @@ async function handleStartDiscussion() {
     await new Promise(r => setTimeout(r, 800));
   }
 }
+  const leftSpeaker = characters[0]?.name;
+
 </script>
 
 <svelte:head>
@@ -175,29 +178,51 @@ async function handleStartDiscussion() {
         </div>
       {:else}
         <div class="messages">
-          {#each messages as msg}
-            {@const isLeft = msg.speaker === characters[0].name}
-            <div class="message-row" class:left={isLeft} class:right={!isLeft}>
-              {#if isLeft}
-                <img
-                  class="avatar"
-                  src={characters.find(c => c.name === msg.speaker)?.avatar}
-                  alt={msg.speaker}
-                  />
-                <div class="bubble-wrap">
-                  <span class="speaker-name">{msg.speaker}</span>
-                  <div class="bubble">{msg.text}</div>
-                </div>
-              {:else}
-                <div class="bubble-wrap right-wrap">
-                  <span class="speaker-name">{msg.speaker}</span>
-                  <div class="bubble">{msg.text}</div>
-                </div>
-                <img class="avatar" src={characters.find(c => c.name === msg.speaker)?.avatar} alt={msg.speaker} />
-              {/if}
-            </div>
-          {/each}
+  {#each messages as msg, index}
+    {@const char = characters.find(c => c.name === msg.speaker)}
+    {@const isLeft = msg.speaker === leftSpeaker}
+
+    <div
+        class={`message-row ${isLeft ? 'left' : 'right'}`}
+        style={`animation-delay: ${index * 0.08}s`}
+      >
+      {#if isLeft}
+        <div
+          class="avatar"
+          style="border-color: {char?.color ?? '#22d3ee'}; background: {char?.color ?? '#22d3ee'}22;"
+        >
+          {#if char?.avatar}
+            <img src={char.avatar} alt={msg.speaker} />
+          {/if}
         </div>
+      {/if}
+
+      <div class={`bubble-wrap ${!isLeft ? 'right-wrap' : ''}`}>
+        <span class="name" style="color: {char?.color ?? '#22d3ee'}">
+          {msg.speaker}
+        </span>
+
+        <div
+          class="bubble"
+          style="border-color: {char?.color ?? '#22d3ee'};"
+        >
+          {msg.text}
+        </div>
+      </div>
+
+      {#if !isLeft}
+        <div
+          class="avatar"
+          style="border-color: {char?.color ?? '#22d3ee'}; background: {char?.color ?? '#22d3ee'}22;"
+        >
+          {#if char?.avatar}
+            <img src={char.avatar} alt={msg.speaker} />
+          {/if}
+        </div>
+      {/if}
+    </div>
+  {/each}
+</div>
       {/if}
     </main>
 
@@ -206,6 +231,15 @@ async function handleStartDiscussion() {
 
   </div>
 </div>
+<div style="margin-bottom: 12px;">
+  <label>AI：</label>
+  <select bind:value={selectedEngine}>
+    <option value="openai">OpenAI</option>
+    <option value="gemini">Gemini</option>
+    <option value="claude">Claude</option>
+  </select>
+</div>
+
 
 <style>
   /* ── Globals ── */
@@ -482,6 +516,11 @@ async function handleStartDiscussion() {
     justify-content: flex-end;
   }
 
+  .message-row {
+  animation: popIn 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+  animation-fill-mode: both;
+}
+
   .avatar {
     width: 36px;
     height: 36px;
@@ -489,11 +528,7 @@ async function handleStartDiscussion() {
     flex-shrink: 0;
   }
 
-  .bubble-wrap {
-    display: flex;
-    flex-direction: column;
-    max-width: 60%;
-  }
+  
 
   .right-wrap {
     align-items: flex-end;
@@ -506,13 +541,7 @@ async function handleStartDiscussion() {
     opacity: 0.7;
   }
 
-  .bubble {
-    padding: 10px 14px;
-    border-radius: 12px;
-    background: rgba(0, 0, 0, 0.4);
-    backdrop-filter: blur(6px);
-    line-height: 1.5;
-  }
+  
 
   .message-row.left .bubble {
     border: 1px solid #22d3ee;
@@ -528,4 +557,180 @@ async function handleStartDiscussion() {
     from { opacity: 0; transform: translateY(8px); }
     to   { opacity: 1; transform: translateY(0); }
   }
+
+  .word-wrap-fix {
+  word-break: break-word;
+  overflow-wrap: break-word;
+  white-space: pre-wrap;
+}
+
+.message {
+  max-width: 60%;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  white-space: pre-wrap;
+}
+
+.chat-bubble {
+  max-width: 420px;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.chat-bubble {
+  max-width: 600px !important;
+  width: fit-content;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.avatar {
+  box-shadow: 0 0 8px rgba(34, 211, 238, 0.5);
+  border: 1.5px solid rgba(34, 211, 238, 0.6);
+}
+
+
+
+.right-wrap {
+  justify-content: flex-end;
+}
+
+/* ==================== Messages ==================== */
+.messages {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 20px 40px 28px;
+}
+
+/* ==================== Message Row ==================== */
+.message-row {
+  display: flex;
+  width: 100%;
+  align-items: flex-end;
+  gap: 12px;
+  animation: popIn 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* 左 */
+.message-row.left {
+  justify-content: flex-start;
+}
+
+/* 右 */
+.message-row.right {
+  justify-content: flex-end;
+}
+
+/* ==================== Avatar ==================== */
+.avatar {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+/* ==================== Bubble Wrap ==================== */
+.bubble-wrap {
+  display: flex;
+  flex-direction: column;
+  max-width: 60%;
+  width: fit-content;
+}
+
+/* 右側調整 */
+.bubble-wrap.right-wrap {
+  align-items: flex-end;
+}
+
+/* ==================== Name ==================== */
+.speaker-name {
+  font-size: 11px;
+  margin-bottom: 4px;
+  opacity: 0.8;
+}
+
+/* ==================== Bubble ==================== */
+.bubble {
+  padding: 12px 16px;
+  border-radius: 14px;
+  font-size: 14px;
+  line-height: 1.6;
+  word-break: break-word;
+  backdrop-filter: blur(6px);
+}
+
+/* 左（シアン） */
+.message-row.left .bubble {
+  background: rgba(10, 30, 40, 0.75);
+  border: 1px solid rgba(34, 211, 238, 0.5);
+  box-shadow:
+    0 0 12px rgba(34, 211, 238, 0.4),
+    inset 0 0 6px rgba(34, 211, 238, 0.2);
+}
+
+/* 右（紫） */
+.message-row.right .bubble {
+  background: rgba(30, 10, 40, 0.75);
+  border: 1px solid rgba(168, 85, 247, 0.5);
+  box-shadow:
+    0 0 12px rgba(168, 85, 247, 0.4),
+    inset 0 0 6px rgba(168, 85, 247, 0.2);
+}
+
+.bubble::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: -1;
+  filter: blur(8px);
+  opacity: 0.45;
+}
+
+.message-row.left .bubble::after {
+  background: rgba(34, 211, 238, 0.25);
+}
+
+.message-row.right .bubble::after {
+  background: rgba(168, 85, 247, 0.25);
+}
+
+@keyframes popIn {
+  0% {
+    opacity: 0;
+    transform: translateY(20px) scale(0.95);
+    filter: blur(6px);
+  }
+  60% {
+    opacity: 1;
+    transform: translateY(-4px) scale(1.02);
+    filter: blur(0px);
+  }
+  100% {
+    transform: translateY(0) scale(1);
+  }
+}
+
+.bubble {
+  transition: all 0.3s ease;
+}
 </style>

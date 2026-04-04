@@ -11,27 +11,30 @@ type Character = {
   voice: string;
   personality?: string;
   avatar?: string;
+  systemPrompt: string;
 };
 
 let characters = $state<Character[]>([
   {
-    id: 'char1',
-    name: 'アリア',
-    role: 'AIキャラクター A',
-    color: '#00d4ff',
-    emoji: '🤖',
-    engine: 'openai',
-    voice: 'VoiceVox'
-  },
-  {
-    id: 'char2',
-    name: 'ノヴァ',
-    role: 'AIキャラクター B',
-    color: '#bf00ff',
-    emoji: '✨',
-    engine: 'ollama',
-    voice: 'ElevenLabs'
-  }
+id: 'char1',
+name: 'アリア',
+role: 'AIキャラクター A',
+color: '#00d4ff',
+emoji: '🤖',
+engine: 'openai',
+voice: 'VoiceVox',
+systemPrompt: 'あなたは明るく知的で落ち着いた女性AIです。短く自然に会話してください。'
+},
+{
+id: 'char2',
+name: 'ノヴァ',
+role: 'AIキャラクター B',
+color: '#bf00ff',
+emoji: '✨',
+engine: 'ollama',
+voice: 'ElevenLabs',
+systemPrompt: 'あなたはクールで論理的なAIです。簡潔に返答してください。'
+}
 ]);
 
 type Message = {
@@ -125,10 +128,22 @@ async function startDiscussion() {
 
   try {
     res = await fetch('/api/discussion', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody)
-    });
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    message: topic,
+    characters: [
+      {
+        ...char1,
+        engine: char1.engine ?? "gemini"
+      },
+      {
+        ...char2,
+        engine: char2.engine ?? "openai"
+      }
+    ]
+  })
+});
     console.log('[DEBUG] Received response', { status: res.status, ok: res.ok });
   } catch (err) {
     console.error('[DEBUG] Fetch error', err);
@@ -199,24 +214,52 @@ onMount(() => {
   <div class="main">
   <p>件数: {messages.length}</p>
     <div class="messages">
-      {#each messages as msg}
-        {@const isLeft = msg.speaker === characters[0].name}
-        <div class="message-row" class:left={isLeft} class:right={!isLeft}>
-          {#if isLeft}
-            <img class="avatar" src={msg.avatar || '/avatars/default.png'} alt={msg.speaker} />
-            <div class="bubble-wrap">
-              <span class="speaker-name">{msg.speaker}</span>
-              <div class="bubble">{msg.text}</div>
-            </div>
-          {:else}
-            <div class="bubble-wrap right-wrap">
-              <span class="speaker-name">{msg.speaker}</span>
-              <div class="bubble">{msg.text}</div>
-            </div>
-            <img class="avatar" src={msg.avatar || '/avatars/default.png'} alt={msg.speaker} />
-          {/if}
+     {#each messages as msg}
+
+  {@const isLeft = characters[0] && msg.speaker === characters[0].name}
+  {@const char = characters.find(c => c.name === msg.speaker)}
+
+  <div class={`message-row ${isLeft ? 'left' : 'right'}`}>
+
+    {#if isLeft}
+
+      {#if char && char.avatar}
+        <div class="avatar">
+          <img src={char.avatar} alt={msg.speaker} />
         </div>
-      {/each}
+      {:else}
+        <div class="avatar">
+          {char?.emoji ?? '🤖'}
+        </div>
+      {/if}
+
+      <div class="bubble-wrap">
+        <span class="speaker-name">{msg.speaker}</span>
+        <div class="bubble">{msg.text}</div>
+      </div>
+
+    {:else}
+
+      <div class="bubble-wrap right-wrap">
+        <span class="speaker-name">{msg.speaker}</span>
+        <div class="bubble">{msg.text}</div>
+      </div>
+
+      {#if char && char.avatar}
+        <div class="avatar">
+          <img src={char.avatar} alt={msg.speaker} />
+        </div>
+      {:else}
+        <div class="avatar">
+          {char?.emoji ?? '🤖'}
+        </div>
+      {/if}
+
+    {/if}
+
+  </div>
+
+{/each}
     </div>
 
     <input
@@ -258,113 +301,100 @@ onMount(() => {
 {/if}
 
 <style>
-  /* ========================= Messages container ========================= */
-  .messages {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    padding: 12px;
-  }
+  /* ===================== Messages ===================== */
+.messages {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+}
 
-  /* ========================= Message row ========================= */
-  .message-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    animation: fadeInUp 0.3s ease both;
-  }
+/* ===================== Message row ===================== */
+.message-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  animation: fadeInUp 0.3s ease both;
+}
 
-  .message-row.left {
-    flex-direction: row;
-    justify-content: flex-start;
-  }
+/* 左 */
+.message-row.left {
+  flex-direction: row;
+  justify-content: flex-start;
+}
 
-  .message-row.right {
-    flex-direction: row-reverse;
-    justify-content: flex-start;
-  }
+/* 🔥 右（ここが修正ポイント） */
+.message-row.right {
+  flex-direction: row-reverse;
+  justify-content: flex-end; /* ← ここ重要 */
+}
 
-  /* ========================= Avatar ========================= */
-  .avatar {
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    object-fit: cover;
-    flex-shrink: 0;
-    border: 1.5px solid rgba(34, 211, 238, 0.5);
-    box-shadow: 0 0 8px rgba(34, 211, 238, 0.35);
-  }
+/* ===================== Avatar ===================== */
+.avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  overflow: hidden;
 
-  .message-row.right .avatar {
-    border-color: rgba(168, 85, 247, 0.5);
-    box-shadow: 0 0 8px rgba(168, 85, 247, 0.35);
-  }
+  display: flex;
+  align-items: center;
+  justify-content: center;
 
-  /* ========================= Bubble wrapper ========================= */
-  .bubble-wrap {
-    display: flex;
-    flex-direction: column;
-    max-width: 60%;
-  }
+  border: 1.5px solid rgba(34, 211, 238, 0.5);
+  box-shadow: 0 0 8px rgba(34, 211, 238, 0.35);
+}
 
-  .bubble-wrap.right-wrap {
-    align-items: flex-end;
-  }
+/* 🔥 これ超重要 */
+.avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
 
-  /* ========================= Speaker name ========================= */
-  .speaker-name {
-    font-size: 10px;
-    color: #22d3ee;
-    margin-bottom: 3px;
-    letter-spacing: 0.08em;
-  }
+/* 右側カラー */
+.message-row.right .avatar {
+  border-color: rgba(168, 85, 247, 0.5);
+  box-shadow: 0 0 8px rgba(168, 85, 247, 0.35);
+}
 
-  .message-row.right .speaker-name {
-    color: #c084fc;
-  }
+/* ===================== Bubble wrapper ===================== */
+.bubble-wrap {
+  display: flex;
+  flex-direction: column;
+  max-width: 60%;
+}
 
-  /* ========================= Chat bubble ========================= */
-  .bubble {
-    padding: 10px 14px;
-    border-radius: 12px;
-    background: rgba(10, 20, 35, 0.75);
-    border: 1px solid rgba(34, 211, 238, 0.3);
-    color: #e2e8f0;
-    font-size: 14px;
-    line-height: 1.6;
-    word-break: break-word;
-    box-shadow:
-      0 0 8px rgba(34, 211, 238, 0.15),
-      inset 0 0 6px rgba(34, 211, 238, 0.08);
-  }
+.bubble-wrap.right-wrap {
+  align-items: flex-end;
+}
 
-  .message-row.right .bubble {
-    border-color: rgba(168, 85, 247, 0.35);
-    box-shadow:
-      0 0 8px rgba(168, 85, 247, 0.2),
-      inset 0 0 6px rgba(168, 85, 247, 0.1);
-  }
+.bubble-wrap {
+  max-width: 40%;
+}
 
-  /* ========================= Fade-in animation ========================= */
-  @keyframes fadeInUp {
-    from {
-      opacity: 0;
-      transform: translateY(8px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
-  }
+/* ===================== Speaker ===================== */
+.speaker-name {
+  font-size: 10px;
+  color: #22d3ee;
+  margin-bottom: 3px;
+  letter-spacing: 0.08em;
+}
 
-  .bubble {
+.message-row.right .speaker-name {
+  color: #a855f7;
+}
+
+/* ===================== Bubble ===================== */
+.bubble {
   padding: 10px 14px;
   border-radius: 12px;
   font-size: 14px;
-  line-height: 1.5;
+  line-height: 1.6;
+  word-break: break-word;
+
   backdrop-filter: blur(6px);
 
-  /* 🔥 強化ポイント */
   background: linear-gradient(
     135deg,
     rgba(10, 20, 30, 0.85),
@@ -379,7 +409,7 @@ onMount(() => {
     inset 0 0 10px rgba(34, 211, 238, 0.15);
 }
 
-/* 右側（紫） */
+/* 右側 */
 .message-row.right .bubble {
   border-color: rgba(168, 85, 247, 0.5);
 
@@ -387,5 +417,27 @@ onMount(() => {
     0 0 10px rgba(168, 85, 247, 0.5),
     0 0 20px rgba(168, 85, 247, 0.3),
     inset 0 0 10px rgba(168, 85, 247, 0.2);
+}
+
+.message-row.left {
+  justify-content: flex-start;
+  padding-left: 20px;  /* ← 追加 */
+}
+
+.message-row.right {
+  justify-content: flex-end;
+  padding-right: 20px; /* ← 追加 */
+}
+
+/* ===================== Animation ===================== */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 </style>
