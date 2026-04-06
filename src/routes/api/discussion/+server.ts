@@ -24,7 +24,7 @@ export async function POST({ request }) {
     console.log("CHAR2:", char2.engine);
 
     let history = "";
-    const messages = [];
+    let messages: { speaker: string; text: string }[] = [];
 
     for (let i = 0; i < turns; i++) {
 
@@ -41,8 +41,12 @@ ${current.systemPrompt || ""}
 ・説明しすぎない
 ・前の発言にリアクションしてから話す
 ・同じことを繰り返さない
-・たまに相手に質問する
+・キャラの口調を最優先する
 
+【スタイル】
+・論文調は禁止
+・自然な会話をする
+・軽くてもいいので人間っぽく話す
 
 【テーマ】
 ${message}
@@ -57,22 +61,25 @@ ${history}
 これに対して返答してください。`
         : basePrompt;
 
-      console.log("🧠 使用AI:", current.engine);
+      console.log("🧠 使用AI:", current.aiEngine);
 
       const text = await generateReply({
-        engine: current.engine,
-        prompt,
-        character: current
-      });
+      engine: current.aiEngine,
+      prompt,
+      character: current
+    });
 
       // 🔥 履歴更新（テンプレ安全版）
       history += "\n" + current.name + ": " + text;
 
       // 🔥 UI用
-      messages.push({
-        speaker: current.name,
-        text: text
-      });
+      messages = [
+        ...messages,
+        {
+          speaker: current.name,
+          text: text
+        }
+      ];
     }
 
     return json({ messages });

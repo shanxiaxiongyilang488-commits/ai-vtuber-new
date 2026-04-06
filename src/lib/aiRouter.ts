@@ -1,7 +1,7 @@
 import OpenAI from "openai";
 import type { Character } from "$lib/types/character";
 
-type Engine = "openai" | "gemini" | "claude" | "local";
+type Engine = "openai" | "gemini" | "claude" | "ollama" | "lmstudio";
 
 type HandlerParams = {
   prompt: string;
@@ -24,6 +24,19 @@ async function openaiHandler({ prompt, character }: HandlerParams): Promise<stri
 一人称は「${character.firstPerson || "私"}」を使う。
 二人称は「${character.secondPerson || "あなた"}」を使う。
 口調は「${character.catchPhrase || ""}」のように話す。
+
+絶対ルール:
+- キャラクターの口調を崩さない
+- ミュリィはギャル口調で話す
+- シエルは論理的で冷静に話す
+- 同じ内容を繰り返さない
+- 1発言は2〜3文以内
+
+発言は最大3文まで
+- 短くテンポよく返す
+直前の相手の発言だけを見て返答する
+
+
 
 ${character.systemPrompt || ""}
 
@@ -102,22 +115,57 @@ async function claudeHandler({ prompt }: HandlerParams): Promise<string> {
 // 🟢 Local (Ollama)
 // ==============================
 //
-async function localHandler({ prompt }: HandlerParams): Promise<string> {
-  console.log("🔥 Local AI 呼び出し");
+async function ollamaHandler({ prompt }: HandlerParams): Promise<string> {
+  console.log("🟢 Ollama 呼び出し");
 
   const res = await fetch("http://localhost:11434/api/generate", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json"
+    },
     body: JSON.stringify({
-      model: "qwen2.5:0.5b",
-      prompt,
+      model: "qwen2.5:3b",
+      prompt: prompt,
       stream: false
+    })
+  });
+
+  const text = await res.text();
+
+  try {
+    const data = JSON.parse(text);
+    return data.response || "(Ollama空応答)";
+  } catch (e) {
+    console.error("❌ JSON parse失敗:", e);
+    return "(Ollamaパース失敗)";
+  }
+}
+
+//
+// ==============================
+//  🟡 LMstudio
+// ==============================
+//
+
+async function lmstudioHandler({ prompt }: HandlerParams): Promise<string> {
+  console.log("🟡 LM Studio 呼び出し");
+
+  const res = await fetch("http://localhost:1234/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: "local-model",
+      messages: [
+        { role: "user", content: prompt }
+      ]
     })
   });
 
   const data = await res.json();
 
-  return data.response ?? "（Local応答失敗）";
+  return data.choices?.[0]?.message?.content ?? "LM Studio応答失敗";
 }
 
 //
@@ -129,7 +177,8 @@ const handlers: Record<Engine, (p: HandlerParams) => Promise<string>> = {
   openai: openaiHandler,
   gemini: geminiHandler,
   claude: claudeHandler,
-  local: localHandler
+  ollama: ollamaHandler,
+  lmstudio: lmstudioHandler,
 };
 
 //
@@ -147,7 +196,7 @@ export async function generateReply({
   character: Character;
 }): Promise<string> {
 
-  console.log("🧠 使用AI:", engine);
+  console.log("🤖 使用AI:", engine);
 
   const handler = handlers[engine];
 
