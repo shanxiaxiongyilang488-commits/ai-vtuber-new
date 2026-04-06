@@ -1,84 +1,81 @@
 import { json } from '@sveltejs/kit';
-import OpenAI from 'openai';
-import { generateReply } from "$lib/aiRouter";
+import { generateReply } from '$lib/aiRouter';
 
 export async function POST({ request }) {
   try {
-    const openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY
-    });
+    const { message, characters, turns = 6 } = await request.json();
 
-    const { message, characters } = await request.json();
+    // 🔥 キャラ定義
+    const char1 = {
+      ...characters[0],
+      engine: characters[0]?.engine ?? "openai"
+    };
 
-    console.log("📡 UIから来たengine:", characters?.[0]?.engine, characters?.[1]?.engine);
-
-    const char1 = characters?.[0];
-    const char2 = characters?.[1];
+    const char2 = {
+      ...characters[1],
+      engine: characters[1]?.engine ?? "openai"
+    };
 
     if (!char1 || !char2) {
       return json({ message: "Character missing" }, { status: 400 });
     }
 
-    // 🔥 安全にプロンプト取得（ここが今回の核心）
-    const char1Prompt = char1.systemPrompt || char1.prompt || "普通に会話してください";
-    const char2Prompt = char2.systemPrompt || char2.prompt || "普通に会話してください";
+    console.log("CHAR1:", char1.engine);
+    console.log("CHAR2:", char2.engine);
 
-    // =========================
-    // 🧠 1人目プロンプト
-    // =========================
-    const prompt1 = `
-【キャラクター設定】
-${char1Prompt}
+    let history = "";
+    const messages = [];
 
-【ルール】
-・自分のキャラを絶対に崩さない
-・話題よりキャラを優先する
-・口調や感情を必ず出す
-・2〜3文で簡潔に話す
+    for (let i = 0; i < turns; i++) {
 
-テーマ：
+      const isChar1 = i % 2 === 0;
+      const current = isChar1 ? char1 : char2;
+
+      // 🔥 プロンプト構築（安全版）
+      const basePrompt = `
+${current.systemPrompt || ""}
+
+【会話ルール】
+・1回の発言は2文まで
+・1つの主張だけ話す
+・説明しすぎない
+・前の発言にリアクションしてから話す
+・同じことを繰り返さない
+・たまに相手に質問する
+
+
+【テーマ】
 ${message}
-
-このテーマについてあなたのキャラで話してください。
 `;
 
-    console.log("🧠 char1 最終プロンプト ↓↓↓");
-    console.log(prompt1);
+      const prompt = history
+        ? `${basePrompt}
 
-    // 🧠 1人目
-const text1 = await generateReply({
-  engine: char1.engine ?? "openai",
-  prompt: prompt1
-});
+【直前の会話】
+${history}
 
-// 🧠 2人目（←ここが重要）
-const prompt2 = `
-[キャラクター設定]
-${char2Prompt}
+これに対して返答してください。`
+        : basePrompt;
 
-[ルール]
-・自分のキャラを絶対に崩さない
-・話題よりキャラを優先する
-・口調や感情を必ず出す
-・2〜3文で簡潔に話す
+      console.log("🧠 使用AI:", current.engine);
 
-相手の発言:
-${text1}
+      const text = await generateReply({
+        engine: current.engine,
+        prompt,
+        character: current
+      });
 
-これに対してあなたのキャラで返答してください。
-`;
+      // 🔥 履歴更新（テンプレ安全版）
+      history += "\n" + current.name + ": " + text;
 
-const text2 = await generateReply({
-  engine: char2.engine ?? "openai",
-  prompt: prompt2
-});
+      // 🔥 UI用
+      messages.push({
+        speaker: current.name,
+        text: text
+      });
+    }
 
-    return json({
-      messages: [
-        { speaker: char1.name, text: text1 },
-        { speaker: char2.name, text: text2 }
-      ]
-    });
+    return json({ messages });
 
   } catch (err) {
     console.error("❌ APIエラー:", err);

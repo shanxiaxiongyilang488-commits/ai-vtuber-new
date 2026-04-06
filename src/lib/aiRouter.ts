@@ -1,47 +1,59 @@
 import OpenAI from "openai";
+import type { Character } from "$lib/types/character";
 
 type Engine = "openai" | "gemini" | "claude" | "local";
 
-type Params = {
+type HandlerParams = {
   prompt: string;
+  character: Character;
 };
 
+//
 // ==============================
 // 🔵 OpenAI
 // ==============================
-async function openaiHandler({ prompt }: Params) {
+//
+async function openaiHandler({ prompt, character }: HandlerParams): Promise<string> {
   console.log("🔥 OpenAI 呼び出し開始");
-  
+
   const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY
   });
 
+  const systemPrompt = `
+一人称は「${character.firstPerson || "私"}」を使う。
+二人称は「${character.secondPerson || "あなた"}」を使う。
+口調は「${character.catchPhrase || ""}」のように話す。
+
+${character.systemPrompt || ""}
+
+${prompt}
+`;
+
   const res = await openai.chat.completions.create({
     model: "gpt-4o-mini",
-    messages: [{ role: "system", content: prompt }],
+    messages: [
+      { role: "system", content: systemPrompt }
+    ],
     temperature: 0.9
   });
 
-  const text = res.choices[0]?.message?.content ?? "";
-
-  console.log("✅ OpenAI 出力:", text);
-
-  return text;
+  return res.choices[0]?.message?.content ?? "";
 }
 
+//
 // ==============================
 // 🟣 Gemini
 // ==============================
-async function geminiHandler({ prompt }: Params) {
+//
+async function geminiHandler({ prompt }: HandlerParams): Promise<string> {
   console.log("🔥 Gemini 呼び出し開始");
 
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${process.env.GEMINI_API_KEY}`,
     {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }]
       })
@@ -50,18 +62,15 @@ async function geminiHandler({ prompt }: Params) {
 
   const data = await res.json();
 
-  const text =
-    data?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-
-  console.log("✅ Gemini 出力:", text);
-
-  return text;
+  return data?.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join("") ?? "（Gemini応答失敗）";
 }
 
+//
 // ==============================
 // 🟡 Claude
 // ==============================
-async function claudeHandler({ prompt }: Params) {
+//
+async function claudeHandler({ prompt }: HandlerParams): Promise<string> {
   console.log("🔥 Claude 呼び出し開始");
 
   const res = await fetch("https://api.anthropic.com/v1/messages", {
@@ -85,22 +94,20 @@ async function claudeHandler({ prompt }: Params) {
 
   const data = await res.json();
 
-  const text = data?.content?.[0]?.text ?? "";
-
-  console.log("✅ Claude 出力:", text);
-
-  return text;
+  return data?.content?.[0]?.text ?? "（Claude応答失敗）";
 }
 
-
-async function localHandler({ prompt }: Params) {
+//
+// ==============================
+// 🟢 Local (Ollama)
+// ==============================
+//
+async function localHandler({ prompt }: HandlerParams): Promise<string> {
   console.log("🔥 Local AI 呼び出し");
 
   const res = await fetch("http://localhost:11434/api/generate", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       model: "qwen2.5:0.5b",
       prompt,
@@ -110,45 +117,43 @@ async function localHandler({ prompt }: Params) {
 
   const data = await res.json();
 
-  return data.response ?? "";
+  return data.response ?? "（Local応答失敗）";
 }
 
+//
 // ==============================
-// 🧠 ルーター
+// 🔥 ハンドラー一覧
 // ==============================
-const handlers = {
+//
+const handlers: Record<Engine, (p: HandlerParams) => Promise<string>> = {
   openai: openaiHandler,
   gemini: geminiHandler,
   claude: claudeHandler,
   local: localHandler
 };
 
+//
 // ==============================
-// 🚀 メイン関数
+// 🚀 メイン
 // ==============================
+//
 export async function generateReply({
   engine,
-  prompt
+  prompt,
+  character
 }: {
   engine: Engine;
   prompt: string;
-}) {
-  console.log("=================================");
-  console.log("🧠 generateReply 開始");
-  console.log("👉 engine:", engine);
-  console.log("👉 prompt:", prompt);
+  character: Character;
+}): Promise<string> {
+
   console.log("🧠 使用AI:", engine);
-  
+
   const handler = handlers[engine];
 
   if (!handler) {
-    throw new Error(`❌ 未対応エンジン: ${engine}`);
+    throw new Error(`未対応エンジン: ${engine}`);
   }
 
-  const result = await handler({ prompt });
-
-  console.log("🎯 最終出力:", result);
-  console.log("=================================");
-
-  return result;
+  return await handler({ prompt, character });
 }

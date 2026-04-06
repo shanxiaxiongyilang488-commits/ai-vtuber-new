@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Character } from '$lib/types/character';
+  import type { Character, AIEngine, VoiceEngine } from '$lib/types/character';
 
   interface Props {
     open: boolean;
@@ -10,20 +10,20 @@
 
   let { open, character, onclose, onsave }: Props = $props();
 
-  let name        = $state('');
-  let aiEngine    = $state<Character['aiEngine']>('openai');
-  let voiceEngine = $state<Character['voiceEngine']>('voicevox');
-  let prompt      = $state('');
-  let voiceId     = $state('');
+  let name = $state('');
+  let aiEngine = $state<AIEngine>('openai');
+  let voiceEngine = $state<VoiceEngine>('voicevox');
+  let voiceId = $state('');
+  let systemPrompt = $state('');
   let avatarPreview = $state<string | null>(null);
 
   $effect(() => {
     if (open && character) {
-      name          = character.name;
-      aiEngine      = character.aiEngine;
-      voiceEngine   = character.voiceEngine;
-      prompt        = character.prompt;
-      voiceId       = character.voiceId;
+      name = character.name;
+      aiEngine = character.aiEngine;
+      voiceEngine = character.voiceEngine;
+      voiceId = character.voiceId;
+      systemPrompt = character.systemPrompt;
       avatarPreview = character.avatar ?? null;
     }
   });
@@ -31,6 +31,7 @@
   function handleAvatarFile(e: Event) {
     const file = (e.target as HTMLInputElement).files?.[0];
     if (!file) return;
+
     const reader = new FileReader();
     reader.onload = () => {
       avatarPreview = reader.result as string;
@@ -40,7 +41,17 @@
 
   function handleSave() {
     if (!character) return;
-    onsave({ ...character, name, aiEngine, voiceEngine, prompt, voiceId, avatar: avatarPreview ?? undefined });
+
+    onsave({
+      ...character,
+      name,
+      aiEngine,
+      voiceEngine,
+      voiceId,
+      systemPrompt,
+      avatar: avatarPreview ?? character.avatar
+    });
+
     onclose();
   }
 
@@ -48,7 +59,7 @@
     if (e.target === e.currentTarget) onclose();
   }
 
-  const accentColor = $derived(character?.color ?? '#22d3ee');
+  const accentColor = $derived('#22d3ee');
 </script>
 
 {#if open}
@@ -61,7 +72,7 @@
       <div class="header-left">
         <span class="header-tag">// CHARACTER CONFIG</span>
         <h2 class="modal-title">
-          <span class="title-emoji">{character?.avatarEmoji ?? '?'}</span>
+          
           {character?.name ?? '---'}
           <span class="title-accent"> 設定</span>
         </h2>
@@ -129,27 +140,72 @@
         <label class="field-label">
           <span class="label-tag">AI</span>エンジン選択
         </label>
-        <select class="cyber-select" bind:value={aiEngine}>
-          <option value="openai">OpenAI</option>
-          <option value="gemini">Gemini</option>
-          <option value="ollama">Ollama</option>
-        </select>
+        <select bind:value={aiEngine}>
+        <option value="openai">OpenAI</option>
+        <option value="gemini">Gemini</option>
+        <option value="ollama">Ollama</option>
+        <option value="lmstudio">LM Studio</option>
+      </select>
       </div>
 
       <!-- Personality Prompt -->
       <div class="section-label">
         <span class="section-tag">03</span> 性格プロンプト
       </div>
-
+      
       <div class="field-group">
         <label class="field-label">
           <span class="label-tag">SYS</span>システムプロンプト
         </label>
-        <textarea
-          class="cyber-textarea"
-          bind:value={prompt}
-          placeholder="例: あなたは好奇心旺盛で明るいAIアシスタントです..."
-        ></textarea>
+        <div class="form-group">
+          <label>一人称</label>
+          <input
+            type="text"
+                        value={character?.firstPerson || ""}
+            oninput={(e) => {
+                if (!character) return;
+
+                character = {
+                  ...character,
+                  firstPerson: (e.target as HTMLInputElement).value
+                }
+              }}
+          />
+        </div>
+
+          <div class="form-group">
+            <label>二人称</label>
+            <input
+              type="text"
+              value={character?.secondPerson || ""}
+                  oninput={(e) => {
+                if (!character) return;
+
+                character = {
+                  ...character,
+                  secondPerson: (e.target as HTMLInputElement).value
+                }
+              }}
+            />
+          </div>
+
+            <div class="form-group">
+              <label>口癖</label>
+              <input
+                type="text"
+                value={character?.catchPhrase || ""}
+                oninput={(e) => {
+                    if (!character) return;
+
+                    character = {
+                      ...character,
+                      catchPhrase: (e.target as HTMLInputElement).value
+                    }
+                  }}
+              />
+            </div>
+        
+        <textarea bind:value={systemPrompt}></textarea>
       </div>
 
       <!-- Voice Settings -->
@@ -158,28 +214,31 @@
       </div>
 
       <div class="voice-row">
-        <div class="field-group" style="flex:1">
-          <label class="field-label">
-            <span class="label-tag">VOX</span>音声エンジン
-          </label>
-          <select class="cyber-select" bind:value={voiceEngine}>
-            <option value="voicevox">VoiceVox</option>
-            <option value="elevenlabs">ElevenLabs</option>
-          </select>
-        </div>
+  <div class="field-group" style="flex:1">
+    <label class="field-label">
+      <span class="label-tag">VOX</span> 音声エンジン
+    </label>
 
-        <div class="field-group" style="flex:1">
-          <label class="field-label">
-            <span class="label-tag">ID</span>ボイス ID
-          </label>
-          <input
-            class="cyber-input"
-            type="text"
-            bind:value={voiceId}
-            placeholder="例: alloy / ja-JP-..."
-          />
-        </div>
-      </div>
+    <select class="cyber-select" bind:value={voiceEngine}>
+      <option value="voicevox">VoiceVox</option>
+      <option value="elevenlabs">ElevenLabs</option>
+      <option value="piper">Piper</option>
+      <option value="none">None</option>
+    </select>
+  </div>
+
+  <div class="field-group" style="flex:1">
+    <label class="field-label">
+      <span class="label-tag">ID</span> ボイスID
+    </label>
+
+    <input
+      class="cyber-input"
+      bind:value={voiceId}
+      placeholder="例: alloy / ja-JP..."
+    />
+  </div>
+</div>
 
     </div><!-- /modal-body -->
 

@@ -93,73 +93,84 @@ const mockLines = [
 // 会話開始（API連携）
 // =========================
 async function startDiscussion() {
+  console.log("送信characters:", characters);
+
   console.log('[DEBUG] START button clicked');
 
   if (!topic.trim()) return;
 
   status = 'running';
 
+  // 元キャラ取得
   const c0 = characters[0];
   const c1 = characters[1];
 
+  // 🔥 engineをここで確定させる（重要）
+  const char0 = {
+  ...c0,
+    engine: c0.engine
+  };
+
+  const char1 = {
+    ...c1,
+    engine: c1.engine
+  };
+
+  // 初期表示（UIだけ先に出す）
   messages = [
-    ...messages,
-    { speaker: c0.name, text: `${topic}について話しましょう！`, avatar: c0.avatar ?? '' },
-    { speaker: c1.name, text: `${topic}、面白いテーマですね。`, avatar: c1.avatar ?? '' }
+    {
+      speaker: char0.name,
+      text: `${topic}について話そうよ！`,
+      avatar: char0.avatar ?? '/avatars/default.png'
+    },
+    {
+      speaker: char1.name,
+      text: `${topic}、興味深いテーマですね。`,
+      avatar: char1.avatar ?? '/avatars/default.png'
+    }
   ];
-  console.log('[DEBUG] UI updated: initial messages added', messages);
 
-  for (let i = 0; i < 4; i++) {
-    setTimeout(() => {
-      const char = [c0, c1][(i + 2) % 2];
-      messages = [
-        ...messages,
-        { speaker: char.name, text: mockLines[i], avatar: char.avatar ?? '/avatars/default.png'}
-      ];
-      console.log(`[DEBUG] UI updated: mock message ${i + 1} added`, messages);
-    }, 800 * (i + 1));
-  }
-
-  const requestBody = { topic, messages };
-  console.log('[DEBUG] Sending request', requestBody);
-
-  let res: Response;
-  let data: any;
+  console.log('[DEBUG] UI initial messages', messages);
 
   try {
-    res = await fetch('/api/discussion', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    message: topic,
-    characters: [
-      {
-        ...char1,
-        engine: char1.engine ?? "gemini"
-      },
-      {
-        ...char2,
-        engine: char2.engine ?? "openai"
-      }
-    ]
-  })
-});
-    console.log('[DEBUG] Received response', { status: res.status, ok: res.ok });
-  } catch (err) {
-    console.error('[DEBUG] Fetch error', err);
-    return;
-  }
+    const res = await fetch('/api/discussion', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: topic,
+        turns: 3,
+        characters: [char0, char1] // ←これが最重要
+      })
+    });
 
-  try {
-    data = await res.json();
-    console.log('[DEBUG] Received response data', data);
-  } catch (err) {
-    console.error('[DEBUG] JSON parse error', err);
-    return;
-  }
+    console.log('[DEBUG] API status:', res.status);
 
-  messages = [...messages, { speaker: c0.name, text: data.text, avatar: c0.avatar ?? '/avatars/default.png' }];
-  console.log('[DEBUG] UI updated: API response message added', messages);
+    const data = await res.json();
+    console.log('[DEBUG] API result:', data);
+
+    // 会話を順番に表示（演出）
+    let delay = 0;
+
+    for (const msg of data.messages) {
+      setTimeout(() => {
+        const char = [char0, char1].find(c => c.name === msg.speaker);
+
+        messages = [
+          ...messages,
+          {
+            speaker: msg.speaker,
+            text: msg.text,
+            avatar: char?.avatar ?? '/avatars/default.png'
+          }
+        ];
+      }, delay);
+
+      delay += 800;
+    }
+
+  } catch (err) {
+    console.error('[ERROR] Discussion failed:', err);
+  }
 }
 
 // =========================
@@ -286,11 +297,12 @@ onMount(() => {
 
       <input bind:value={selectedCharacter.name} />
 
-      <select bind:value={selectedCharacter.engine}>
-        <option value="openai">OpenAI</option>
-        <option value="gemini">Gemini</option>
-        <option value="ollama">Ollama</option>
-      </select>
+      <select bind:value={aiEngine}>
+      <option value="openai">OpenAI</option>
+      <option value="gemini">Gemini</option>
+      <option value="ollama">Ollama</option>
+      <option value="lmstudio">LM Studio</option>
+    </select>
 
       <button onclick={() => saveCharacter(selectedCharacter)}>
         保存
