@@ -3,6 +3,7 @@ import Sidebar from '$lib/components/chat/Sidebar.svelte';
 import ControlPanel from '$lib/components/chat/ControlPanel.svelte';
 import CharacterSettingsModal from '$lib/components/CharacterSettingsModal.svelte';
 import type { Character } from '$lib/types/character';
+import { tick } from 'svelte';
 
 type Message = {
   speaker: string;
@@ -13,35 +14,40 @@ let topic = $state("");
 let modalOpen = $state(false);
 let selectedCharacter = $state<Character | null>(null);
 let messages = $state<Message[]>([]);
-let selectedEngine: "openai" | "gemini" | "claude" = "openai";
+let selectedEngine = $state<"openai" | "gemini" | "claude">("openai");
 
-// ✅ systemPromptに修正
+// ----------------------------
+// キャラ初期設定
+// ----------------------------
 const defaultChar1: Character = {
   id: 'char1',
-  name: 'アリア',
+  name: 'ミュリィ',
   avatarEmoji: '🌸',
   color: '#22d3ee',
   aiEngine: 'openai',
-  voiceEngine: 'voicevox',
-  systemPrompt: "あなたはクールなギャルAI。語尾は〜っしょ！",
+  voiceEngine: 'elevenlabs',
+  systemPrompt: '明るく感情的でギャルっぽく話すAI。',
   ollamaModel: 'qwen:0.5b',
-  voiceId: '',
+  voiceId: '21m00Tcm4TlvDq8ikWAM',
   speakerId: 0
 };
 
 const defaultChar2: Character = {
   id: 'char2',
-  name: 'ノヴァ',
-  avatarEmoji: '🔥',
+  name: 'シエル',
+  avatarEmoji: '🧊',
   color: '#a855f7',
   aiEngine: 'openai',
   voiceEngine: 'elevenlabs',
-  systemPrompt: 'あなたはクールで論理的なAIアシスタントのノヴァです。',
+  systemPrompt: '冷静で論理的に話すAI。',
   ollamaModel: 'llama3.2:1b',
-  voiceId: '',
+  voiceId: 'EXAVITQu4vr4xnSDxMaL',
   speakerId: 0
 };
 
+// ----------------------------
+// localStorage読み込み
+// ----------------------------
 function loadChar(id: string, fallback: Character): Character {
   if (typeof localStorage === 'undefined') return fallback;
   const stored = localStorage.getItem(id);
@@ -51,8 +57,12 @@ function loadChar(id: string, fallback: Character): Character {
 let char1 = $state<Character>(loadChar('char1', defaultChar1));
 let char2 = $state<Character>(loadChar('char2', defaultChar2));
 
-const characters = $derived([char1, char2]);
+const characters = [char1, char2];
+let leftSpeaker = char1.name;
 
+// ----------------------------
+// UI操作
+// ----------------------------
 function handleCharacterClick(char: Character) {
   selectedCharacter = char;
   modalOpen = true;
@@ -73,9 +83,48 @@ function handleModalSave(updated: Character) {
   }
 }
 
-// 🔥 会話開始（完成版）
+// ----------------------------
+// 音声再生（完全版）
+// ----------------------------
+async function speak(text: string, speaker?: string) {
+  console.log('🔊 speak:', speaker, text);
+
+  const character =
+    speaker === char1.name ? char1 :
+    speaker === char2.name ? char2 :
+    null;
+
+  const voiceId = character?.voiceId || '21m00Tcm4TlvDq8ikWAM';
+
+  const res = await fetch('/api/speak', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, voiceId })
+  });
+
+  if (!res.ok) {
+    console.error('音声生成失敗');
+    return;
+  }
+
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+
+  const audio = new Audio(url);
+
+  // ★ここが最重要（順番制御）
+  await new Promise<void>((resolve) => {
+    audio.onended = () => resolve();
+    audio.onerror = () => resolve();
+    audio.play();
+  });
+}
+
+// ----------------------------
+// 会話開始
+// ----------------------------
 async function handleStartDiscussion() {
-  console.log("🔥 親で受け取った:", topic);
+  console.log("🔥 会話開始:", topic);
 
   messages = [];
 
@@ -90,21 +139,50 @@ async function handleStartDiscussion() {
 
   const data = await res.json();
 
+  
   console.log("🔥 API結果:", data);
+  console.log("🔥 data.messages:", data.messages);
 
-  const incoming: Message[] = (data.messages ?? []).map((m: any) => ({
+  
+  const raw =
+  data.messages ??
+  (data.message
+    ? [data.message]
+    : data.response
+    ? [data.response]
+    : []);
+
+  const incoming: Message[] = raw.map((m: any) => {
+  if (typeof m === "string") {
+    const [speaker, ...rest] = m.split("：");
+    return {
+      speaker: speaker || "AI",
+      text: rest.join("：") || m
+    };
+  }
+
+  return {
     speaker: m.speaker,
-    text: (m.text ?? "").replace(/\n/g, " ")
-  }));
+    text: (m.text ?? "").replace(/\n/g, "")
+  };
+});
 
-  // 👇 1人ずつ表示
+  console.log("🔥 incoming:", incoming);
+
+  // 👇 交互に順番再生（完成版）
   for (const msg of incoming) {
+    console.log('💬', msg.speaker, msg.text);
+
     messages = [...messages, msg];
-    await new Promise(r => setTimeout(r, 800));
+    console.log("🔥 messages:", messages);
+
+    await speak(msg.text, msg.speaker);
+
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 800);
+    });
   }
 }
-  const leftSpeaker = characters[0]?.name;
-
 </script>
 
 <svelte:head>
@@ -179,49 +257,39 @@ async function handleStartDiscussion() {
       {:else}
         <div class="messages">
   {#each messages as msg, index}
-    {@const char = characters.find(c => c.name === msg.speaker)}
-    {@const isLeft = msg.speaker === leftSpeaker}
 
-    <div
-        class={`message-row ${isLeft ? 'left' : 'right'}`}
-        style={`animation-delay: ${index * 0.08}s`}
-      >
-      {#if isLeft}
-        <div
-          class="avatar"
-          style="border-color: {char?.color ?? '#22d3ee'}; background: {char?.color ?? '#22d3ee'}22;"
-        >
-          {#if char?.avatar}
-            <img src={char.avatar} alt={msg.speaker} />
-          {/if}
-        </div>
-      {/if}
+  {@const char = characters.find(c => c.name === msg.speaker) || null}
+  {@const isLeft = msg.speaker === char1.name}
 
-      <div class={`bubble-wrap ${!isLeft ? 'right-wrap' : ''}`}>
-        <span class="name" style="color: {char?.color ?? '#22d3ee'}">
-          {msg.speaker}
-        </span>
+  <div class="message-row {isLeft ? 'left' : 'right'}">
 
-        <div
-          class="bubble"
-          style="border-color: {char?.color ?? '#22d3ee'};"
-        >
-          {msg.text}
-        </div>
+    {#if isLeft}
+      <div class="avatar">
+        {#if char?.avatar}
+          <img src={char.avatar} alt={msg.speaker} />
+        {/if}
       </div>
+    {/if}
 
-      {#if !isLeft}
-        <div
-          class="avatar"
-          style="border-color: {char?.color ?? '#22d3ee'}; background: {char?.color ?? '#22d3ee'}22;"
-        >
-          {#if char?.avatar}
-            <img src={char.avatar} alt={msg.speaker} />
-          {/if}
-        </div>
-      {/if}
+    <div class="bubble-wrap">
+      <span class="name">{msg.speaker}</span>
+
+      <div class="bubble">
+        {msg.text}
+      </div>
     </div>
-  {/each}
+
+    {#if !isLeft}
+      <div class="avatar">
+        {#if char?.avatar}
+          <img src={char.avatar} alt={msg.speaker} />
+        {/if}
+      </div>
+    {/if}
+
+  </div>
+
+{/each}
 </div>
       {/if}
     </main>
