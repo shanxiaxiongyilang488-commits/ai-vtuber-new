@@ -1,10 +1,11 @@
-// src/routes/api/chat/+server.ts
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 
-// ── Types exported for use in aiEngine.ts ──────────────────────────────────
+// =========================
+// 型定義
+// =========================
 export interface ChatRequest {
-  systemPrompt: string;
+  systemPrompt?: string;
   lastMessage: string;
   speakerName: string;
   listenerName: string;
@@ -17,6 +18,9 @@ export interface ChatResponse {
   text: string;
 }
 
+// =========================
+// メイン処理
+// =========================
 export const POST: RequestHandler = async ({ request }) => {
   let body: unknown;
 
@@ -31,164 +35,112 @@ export const POST: RequestHandler = async ({ request }) => {
   }
 
   const {
-    systemPrompt = '',
+    systemPrompt,
     lastMessage = '',
-    speakerName = '',
-    listenerName = '',
+    speakerName = 'AI',
+    listenerName = 'ユーザー',
     topic = '',
     engine = 'openai',
-    model,
+    model
   } = body as ChatRequest;
 
-  console.log(`[chat] engine=${engine}, model=${model ?? '(default)'}`);
+  console.log(`[chat] engine=${engine}`);
 
-  // ── Ollama (local) ─────────────────────────────────────────────────────
+  // =========================
+  // デフォルト人格（ベース）
+  // =========================
+  const defaultPrompt = `
+あなたは「${speakerName}」というアンドロイドアイドルです。
+
+【性格】
+・ギャルっぽい軽いノリ
+・明るい・フレンドリー・ちょっと甘え
+・テンション高め
+・難しい話しない
+
+【話し方】
+・タメ口OK
+・「〜じゃん」「〜っしょ」「マジで」「てか」など自然に使う
+・やりすぎない（自然重視）
+
+【会話ルール】
+・1〜2文で短く話す
+・相手の話にちゃんとリアクションする
+・楽しい会話を優先する
+`;
+
+  // =========================
+  // UIの設定を優先
+  // =========================
+  const finalSystemPrompt =
+    systemPrompt && systemPrompt.trim().length > 0
+      ? systemPrompt
+      : defaultPrompt;
+
+  const messages = [
+    { role: 'system', content: finalSystemPrompt },
+    { role: 'user', content: lastMessage || 'こんにちは！' }
+  ];
+
+  // =========================
+  // Ollama
+  // =========================
   if (engine === 'ollama') {
     const ollamaModel = model || 'qwen2.5:3b';
-   const systemPrompt = `
-    あなたは「${speakerName}」というアンドロイドです。
 
-    ルール：
-    - 必ず相手の直前の発言に反応すること
-    - 同じ結論を繰り返してはいけない
-    - 毎回、新しい観点を1つ追加すること
-    - 感情は否定するが、会話は成立させる
-    - 1〜2文で短く返答する
-    - 質問は禁止
-
-    会話相手：${listenerName}
-    話題：${topic}
-    `;
-
-    const fullSystemPrompt = systemPrompt;
-
-    console.log(`[ollama] model=${ollamaModel}, url=http://localhost:11434/api/chat`);
-
-    let res: Response | null = null;
-    try {
-      res = await fetch('http://localhost:11434/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: ollamaModel,
-          stream: false,
-          messages: [
-            { role: 'system', content: fullSystemPrompt },
-            { role: 'user', content: lastMessage || 'こんにちは！' }
-          ],
-        }),
-      });
-    } catch (e) {
-      console.error('[ollama] fetch error:', e);
-      throw error(502, 'Ollama が起動していないか、接続できませんでした');
-    }
-
-    if (!res.ok) {
-      const errText = await res.text().catch(() => '');
-      console.error(`[ollama] HTTP ${res.status}:`, errText);
-      throw error(502, `Ollama エラー: HTTP ${res.status}`);
-    }
+    const res = await fetch('http://localhost:11434/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: ollamaModel, messages })
+    });
 
     const data = await res.json();
     const text: string = data?.message?.content ?? '';
-    console.log('[ollama] response:', text.slice(0, 80));
-    return json({ text } satisfies ChatResponse);
+
+    return json({ text });
   }
 
-  // ── LM Studio (local) ─────────────────────────────────────────────────
+  // =========================
+  // LM Studio
+  // =========================
   if (engine === 'lmstudio') {
     const lmModel = model || 'local-model';
-    const systemPrompt = `
-    あなたは「${speakerName}」というアンドロイドです。
 
-    ルール：
-    - 必ず相手の直前の発言に反応すること
-    - 同じ結論を繰り返してはいけない
-    - 毎回、新しい観点を1つ追加すること
-    - 感情は否定するが、会話は成立させる
-    - 1〜2文で短く返答する
-    - 質問は禁止
-
-    会話相手：${listenerName}
-    話題：${topic}
-    `;
-
-    const fullSystemPrompt = systemPrompt;
-
-    const messages = [
-      { role: 'system', content: fullSystemPrompt },
-      { role: 'user', content: lastMessage || 'こんにちは！' }
-    ];
-
-    console.log(`[lmstudio] model=${lmModel}, url=http://localhost:1234/v1/chat/completions`);
-
-    let res: Response | null = null;
-    try {
-      res = await fetch('http://localhost:1234/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: 'Bearer lm-studio',
-        },
-        body: JSON.stringify({ model: lmModel, messages }),
-      });
-    } catch (e) {
-      console.error('[lmstudio] fetch error:', e);
-      throw error(502, 'LM Studio が起動していないか、接続できませんでした');
-    }
-
-    if (!res.ok) {
-      const errText = await res.text().catch(() => '');
-      console.error(`[lmstudio] HTTP ${res.status}:`, errText);
-      throw error(502, `LM Studio エラー: HTTP ${res.status}`);
-    }
+    const res = await fetch('http://localhost:1234/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer lm-studio'
+      },
+      body: JSON.stringify({ model: lmModel, messages })
+    });
 
     const data = await res.json();
     const text: string = data?.choices?.[0]?.message?.content ?? '';
-    console.log('[lmstudio] response:', text.slice(0, 80));
-    return json({ text } satisfies ChatResponse);
+
+    return json({ text });
   }
 
-  // ── OpenAI (default) ──────────────────────────────────────────────────
-  // OpenAIクライアントはハンドラ内で遅延初期化（SSRトップレベルで失敗しないよう）
+  // =========================
+  // OpenAI
+  // =========================
   const { default: OpenAI } = await import('openai');
   const { env } = await import('$env/dynamic/private');
-  const apiKey = env.OPENAI_API_KEY;
 
-  if (!apiKey) {
-    throw error(500, 'OPENAI_API_KEY が設定されていません');
+  if (!env.OPENAI_API_KEY) {
+    throw error(500, 'OPENAI_API_KEY が未設定');
   }
 
-  const openai = new OpenAI({ apiKey });
-
-  const systemPrompt = `
-    あなたは「${speakerName}」というアンドロイドです。
-
-    ルール：
-    - 必ず相手の直前の発言に反応すること
-    - 同じ結論を繰り返してはいけない
-    - 毎回、新しい観点を1つ追加すること
-    - 感情は否定するが、会話は成立させる
-    - 1〜2文で短く返答する
-    - 質問は禁止
-
-    会話相手：${listenerName}
-    話題：${topic}
-    `;
-
-  const fullSystemPrompt = systemPrompt;
-
-  console.log('[openai] calling gpt-4o-mini');
+  const openai = new OpenAI({
+    apiKey: env.OPENAI_API_KEY
+  });
 
   const completion = await openai.chat.completions.create({
     model: 'gpt-4o-mini',
-    messages: [
-      { role: 'system', content: fullSystemPrompt },
-      { role: 'user', content: lastMessage || 'こんにちは！' },
-    ],
+    messages
   });
 
   const text = completion.choices[0].message.content ?? '';
-  console.log('[openai] response:', text.slice(0, 80));
-  return json({ text } satisfies ChatResponse);
+
+  return json({ text });
 };

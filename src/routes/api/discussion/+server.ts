@@ -5,7 +5,6 @@ export async function POST({ request }) {
   try {
     const { message, characters, turns = 6 } = await request.json();
 
-    // 🔥 キャラ定義
     const char1 = {
       ...characters[0],
       engine: characters[0]?.engine ?? "openai"
@@ -20,33 +19,96 @@ export async function POST({ request }) {
       return json({ message: "Character missing" }, { status: 400 });
     }
 
-    console.log("CHAR1:", char1.engine);
-    console.log("CHAR2:", char2.engine);
-
     let history = "";
     let messages: { speaker: string; text: string }[] = [];
 
-    for (let i = 0; i < turns; i++) {
+    // ===============================
+    // 🔥 品質制御関数群（全部入り）
+    // ===============================
 
+    function sanitizeMessage(text: string): string {
+      return text
+        // 名前付き発言削除（ミュリィ：など）
+        .replace(/^[^\n：:]{1,10}[:：]\s*/u, '')
+
+        // 呼びかけ削除（シエルさん、）
+        .replace(/^[^\s、]{1,10}さん、/, '')
+
+        // 呼びかけ削除（名前だけ）
+        .replace(/^[^\s、]{1,10}、/, '')
+
+        // 英語コロン対策
+        .replace(/^[^\n:]{1,10}:\s*/, '')
+
+        .trim();
+    }
+
+    function limitLength(text: string): string {
+      const sentences = text.split(/[。！？!?]/);
+
+      const trimmed = sentences.slice(0, 2);
+
+      const shortened = trimmed.map(s => s.slice(0, 40));
+
+      return shortened.join('。').trim() + '。';
+    }
+
+    function removeRepetition(text: string): string {
+      const lines = text.split('。');
+      const unique: string[] = [];
+
+      for (const line of lines) {
+        if (!unique.includes(line.trim()) && line.trim() !== "") {
+          unique.push(line.trim());
+        }
+      }
+
+      return unique.join('。') + '。';
+    }
+
+    function cleanup(text: string): string {
+      return text
+        .replace(/\n+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+
+    function refine(text: string): string {
+      return cleanup(
+        removeRepetition(
+          limitLength(
+            sanitizeMessage(text)
+          )
+        )
+      );
+    }
+
+    // ===============================
+    // 🔥 会話ループ
+    // ===============================
+
+    for (let i = 0; i < turns; i++) {
       const isChar1 = i % 2 === 0;
       const current = isChar1 ? char1 : char2;
 
-      // 🔥 プロンプト構築（安全版）
       const basePrompt = `
 ${current.systemPrompt || ""}
 
 【会話ルール】
-・1回の発言は2文まで
+・必ず最初に相手の発言へのリアクションを一言入れる（例：「それはわかるけど」「いや、それ違うでしょ」など）
+・1回の発言は最大2文まで
+・1文は短く（20〜40文字）
 ・1つの主張だけ話す
-・説明しすぎない
-・前の発言にリアクションしてから話す
+・説明しすぎない（解説は禁止）
 ・同じことを繰り返さない
-・キャラの口調を最優先する
+・キャラの口調を最優先
+・自分の名前を名乗らない
+・相手の名前は必要な時だけ使う
 
 【スタイル】
 ・論文調は禁止
+・軽くテンポよく話す
 ・自然な会話をする
-・軽くてもいいので人間っぽく話す
 
 【テーマ】
 ${message}
@@ -58,26 +120,27 @@ ${message}
 【直前の会話】
 ${history}
 
-これに対して返答してください。`
+自然に続けてください。`
         : basePrompt;
 
-      console.log("🧠 使用AI:", current.aiEngine);
+      const rawText = await generateReply({
+        engine: current.engine,
+        prompt,
+        character: current
+      });
 
-      const text = await generateReply({
-      engine: current.aiEngine,
-      prompt,
-      character: current
-    });
+      // 🔥 完全整形
+      const finalText = refine(rawText);
 
-      // 🔥 履歴更新（テンプレ安全版）
-      history += "\n" + current.name + ": " + text;
+      // 🔥 履歴
+      history += "\n" + current.name + ": " + finalText;
 
-      // 🔥 UI用
+      // 🔥 UI出力
       messages = [
         ...messages,
         {
           speaker: current.name,
-          text: text
+          text: finalText
         }
       ];
     }
