@@ -1,5 +1,7 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
+import { muryiPersona } from '$lib/ai/personas'
+import { buildCharacterPrompt } from '$lib/ai/prompts/buildCharacterPrompt'
 
 // =========================
 // 型定義
@@ -49,25 +51,18 @@ export const POST: RequestHandler = async ({ request }) => {
   // =========================
   // デフォルト人格（ベース）
   // =========================
-  const defaultPrompt = `
-あなたは「${speakerName}」というアンドロイドアイドルです。
+  let trust = 80;
 
-【性格】
-・ギャルっぽい軽いノリ
-・明るい・フレンドリー・ちょっと甘え
-・テンション高め
-・難しい話しない
-
-【話し方】
-・タメ口OK
-・「〜じゃん」「〜っしょ」「マジで」「てか」など自然に使う
-・やりすぎない（自然重視）
-
-【会話ルール】
-・1〜2文で短く話す
-・相手の話にちゃんとリアクションする
-・楽しい会話を優先する
-`;
+  const defaultPrompt = buildCharacterPrompt(
+  muryiPersona,
+  {
+    battery: 82,
+    trust: trust,
+    affection: 58,
+    cpuLoad: 12,
+    emotion: 'neutral'
+  }
+);
 
   // =========================
   // UIの設定を優先
@@ -136,9 +131,9 @@ export const POST: RequestHandler = async ({ request }) => {
   });
 
   const completion = await openai.chat.completions.create({
-    model: 'gpt-4o-mini',
-    messages
-  });
+  model: 'gpt-4o-mini',
+  messages: messages as any
+});
 
   const text = completion.choices[0].message.content ?? '';
 

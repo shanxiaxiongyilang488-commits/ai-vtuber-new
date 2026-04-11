@@ -93,6 +93,9 @@ async function sendMessage() {
   inputText = '';
   isLoading = true;
 
+        
+
+
   try {
     const res = await fetch('/api/chat', {
       method: 'POST',
@@ -109,35 +112,43 @@ async function sendMessage() {
       })
     });
 
+    
+
+    
+
+    // 🎤 音声（型エラー回避）
     const data = await res.json();
     const reply: string = data.text ?? '';
 
-    messages = [
-      ...messages,
-      {
-        role: 'ai',
-        speaker: character.name,
-        text: reply,
-        avatar: character.avatar
-      }
-    ];
+// 音声（先）
+if (character.voiceEngine !== 'none' && reply) {
+  const voice = createVoiceEngine({
+    voiceEngine: character.voiceEngine as any,
+    voiceId: character.voiceId,
+    speakerId: character.speakerId
+  });
 
-    // 🎤 音声（型エラー回避）
-    if (character.voiceEngine !== 'none' && reply) {
-      const voice = createVoiceEngine({
-        voiceEngine: character.voiceEngine as any,
-        voiceId: character.voiceId,
-        speakerId: character.speakerId
-      });
+  voice.speak(reply);
+}
 
-      await voice.speak(reply);
+// 表示（後）
+setTimeout(() => {
+  messages = [
+    ...messages,
+    {
+      role: 'ai',
+      speaker: character.name,
+      text: reply,
+      avatar: character.avatar
     }
+  ];
+}, 500);
 
-  } catch (e) {
-    console.error('❌ chat error', e);
-  } finally {
-    isLoading = false;
-  }
+      } catch (e) {
+        console.error('❌ chat error', e);
+      } finally {
+        isLoading = false;
+      }
 }
 
 // ================================
