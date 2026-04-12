@@ -632,6 +632,44 @@
   ];
 
   // ============================================================
+  // Column resize
+  // ============================================================
+  const LS_LEFT  = 'lab-left-width';
+  const LS_RIGHT = 'lab-right-width';
+  const L_DEF = 220, L_MIN = 140, L_MAX = 480;
+  const R_DEF = 340, R_MIN = 200, R_MAX = 560;
+
+  let leftWidth  = $state(L_DEF);
+  let rightWidth = $state(R_DEF);
+  let resizing   = $state<'left' | 'right' | null>(null);
+  let rsStartX = 0;
+  let rsStartW = 0;
+
+  function startResize(side: 'left' | 'right', e: MouseEvent) {
+    resizing = side;
+    rsStartX = e.clientX;
+    rsStartW = side === 'left' ? leftWidth : rightWidth;
+    e.preventDefault();
+  }
+
+  function onRsMove(e: MouseEvent) {
+    if (!resizing) return;
+    const dx = e.clientX - rsStartX;
+    if (resizing === 'left') {
+      leftWidth = Math.max(L_MIN, Math.min(L_MAX, rsStartW + dx));
+    } else {
+      rightWidth = Math.max(R_MIN, Math.min(R_MAX, rsStartW - dx));
+    }
+  }
+
+  function onRsEnd() {
+    if (!resizing) return;
+    localStorage.setItem(LS_LEFT,  String(Math.round(leftWidth)));
+    localStorage.setItem(LS_RIGHT, String(Math.round(rightWidth)));
+    resizing = null;
+  }
+
+  // ============================================================
   // Clock
   // ============================================================
   let clockId: ReturnType<typeof setInterval>;
@@ -639,6 +677,10 @@
     messages[0].time = getTime();
     currentTime = getTime();
     clockId = setInterval(() => { currentTime = getTime(); }, 1000);
+    const sl = localStorage.getItem(LS_LEFT);
+    const sr = localStorage.getItem(LS_RIGHT);
+    if (sl) leftWidth  = Math.max(L_MIN, Math.min(L_MAX,  parseInt(sl)));
+    if (sr) rightWidth = Math.max(R_MIN, Math.min(R_MAX, parseInt(sr)));
   });
   onDestroy(() => clearInterval(clockId));
 </script>
@@ -685,10 +727,17 @@
   </header>
 
   <!-- ==================== MAIN 3-COLUMN GRID ==================== -->
-  <main class="lab-main">
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <main
+    class="lab-main"
+    class:is-resizing={resizing !== null}
+    onmousemove={onRsMove}
+    onmouseup={onRsEnd}
+    onmouseleave={onRsEnd}
+  >
 
     <!-- ===== LEFT: Character Core ===== -->
-    <section class="panel char-panel">
+    <section class="panel char-panel" style="width:{leftWidth}px">
       <div class="panel-hd">
         <span class="ph-diamond">◆</span>
         <span class="ph-text">CHARACTER CORE</span>
@@ -858,8 +907,106 @@
       </div>
     </section>
 
-    <!-- ===== MIDDLE: Personality Control ===== -->
-    <section class="panel control-panel">
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <div class="resize-bar" onmousedown={(e) => startResize('left', e)} aria-hidden="true"></div>
+
+    <!-- ===== MIDDLE: Chat Simulation ===== -->
+    <section class="panel chat-panel">
+      <div class="panel-hd">
+        <span class="ph-diamond">◆</span>
+        <span class="ph-text">CHAT SIMULATION</span>
+        <span class="ph-line"></span>
+        {#if isThinking}
+          <span class="thinking-tag">PROCESSING…</span>
+        {:else}
+          <span class="ph-id">READY</span>
+        {/if}
+      </div>
+
+      <!-- Mood indicator bar -->
+      <div class="chat-mood-bar" style="--mc:{moodColor}">
+        <span class="cmb-label">ACTIVE UNIT:</span>
+        <span class="cmb-name">{charName}</span>
+        <span class="cmb-sep">·</span>
+        <span class="cmb-mood" style="color:{moodColor}">{mood}</span>
+        <div class="cmb-fill" style="background:{moodColor}; opacity:0.08"></div>
+      </div>
+
+      <!-- Messages -->
+      <div class="chat-messages" bind:this={chatEl}>
+        {#each messages as msg (msg.time + msg.role + msg.text.slice(0, 8))}
+          <div class="msg-wrap {msg.role}">
+            {#if msg.role === 'ai'}
+              <div class="msg-av ai-av">
+                <img
+                  src={selectedAvatar}
+                  alt={charName}
+                  onerror={(e) => { (e.target as HTMLImageElement).src = '/avatars/default.png'; }}
+                />
+              </div>
+            {/if}
+            <div class="msg-bubble">
+              <div class="msg-text">{msg.text}</div>
+              <div class="msg-time">{msg.time}</div>
+            </div>
+            {#if msg.role === 'user'}
+              <div class="msg-av user-av">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <circle cx="12" cy="8" r="4" stroke="currentColor" stroke-width="1.5"/>
+                  <path d="M4 20c0-3.5 3.6-6.5 8-6.5s8 3 8 6.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+              </div>
+            {/if}
+          </div>
+        {/each}
+
+        {#if isThinking}
+          <div class="msg-wrap ai">
+            <div class="msg-av ai-av">
+              <img
+                src={selectedAvatar}
+                alt={charName}
+                onerror={(e) => { (e.target as HTMLImageElement).src = '/avatars/default.png'; }}
+              />
+            </div>
+            <div class="msg-bubble thinking">
+              <span class="dot-bounce"></span>
+              <span class="dot-bounce" style="animation-delay:0.18s"></span>
+              <span class="dot-bounce" style="animation-delay:0.36s"></span>
+            </div>
+          </div>
+        {/if}
+      </div>
+
+      <!-- Input -->
+      <div class="chat-input-area">
+        <textarea
+          class="chat-input"
+          placeholder="メッセージを入力... (Enter で送信)"
+          bind:value={inputText}
+          onkeydown={handleKeydown}
+          rows="2"
+        ></textarea>
+        <button
+          class="send-btn"
+          onclick={sendMessage}
+          disabled={isThinking || !inputText.trim()}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M22 2L11 13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          SEND
+        </button>
+      </div>
+    </section>
+
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <div class="resize-bar" onmousedown={(e) => startResize('right', e)} aria-hidden="true"></div>
+
+    <!-- ===== RIGHT: Personality Control ===== -->
+    <section class="panel control-panel" style="width:{rightWidth}px">
       <div class="panel-hd">
         <span class="ph-diamond">◆</span>
         <span class="ph-text">PERSONALITY CONTROL</span>
@@ -1001,93 +1148,6 @@
             </button>
           {/each}
         </div>
-      </div>
-    </section>
-
-    <!-- ===== RIGHT: Chat Simulation ===== -->
-    <section class="panel chat-panel">
-      <div class="panel-hd">
-        <span class="ph-diamond">◆</span>
-        <span class="ph-text">CHAT SIMULATION</span>
-        <span class="ph-line"></span>
-        {#if isThinking}
-          <span class="thinking-tag">PROCESSING…</span>
-        {:else}
-          <span class="ph-id">READY</span>
-        {/if}
-      </div>
-
-      <!-- Mood indicator bar -->
-      <div class="chat-mood-bar" style="--mc:{moodColor}">
-        <span class="cmb-label">ACTIVE UNIT:</span>
-        <span class="cmb-name">{charName}</span>
-        <span class="cmb-sep">·</span>
-        <span class="cmb-mood" style="color:{moodColor}">{mood}</span>
-        <div class="cmb-fill" style="background:{moodColor}; opacity:0.08"></div>
-      </div>
-
-      <!-- Messages -->
-      <div class="chat-messages" bind:this={chatEl}>
-        {#each messages as msg (msg.time + msg.role + msg.text.slice(0, 8))}
-          <div class="msg-wrap {msg.role}">
-            {#if msg.role === 'ai'}
-              <div class="msg-av ai-av">
-                <img
-                  src={selectedAvatar}
-                  alt={charName}
-                  onerror={(e) => { (e.target as HTMLImageElement).src = '/avatars/default.png'; }}
-                />
-              </div>
-            {/if}
-            <div class="msg-bubble">
-              <div class="msg-text">{msg.text}</div>
-              <div class="msg-time">{msg.time}</div>
-            </div>
-            {#if msg.role === 'user'}
-              <div class="msg-av user-av">YOU</div>
-            {/if}
-          </div>
-        {/each}
-
-        {#if isThinking}
-          <div class="msg-wrap ai">
-            <div class="msg-av ai-av">
-              <img
-                src={selectedAvatar}
-                alt={charName}
-                onerror={(e) => { (e.target as HTMLImageElement).src = '/avatars/default.png'; }}
-              />
-            </div>
-            <div class="msg-bubble thinking">
-              <span class="dot-bounce"></span>
-              <span class="dot-bounce" style="animation-delay:0.18s"></span>
-              <span class="dot-bounce" style="animation-delay:0.36s"></span>
-            </div>
-          </div>
-        {/if}
-      </div>
-
-      <!-- Input -->
-      <div class="chat-input-area">
-        <textarea
-          class="chat-input"
-          placeholder="メッセージを入力... (Enter で送信)"
-          bind:value={inputText}
-          onkeydown={handleKeydown}
-          rows="2"
-        ></textarea>
-        <button
-          class="send-btn"
-          onclick={sendMessage}
-          disabled={isThinking || !inputText.trim()}
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M22 2L11 13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-            <path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="currentColor" stroke-width="2"
-              stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-          SEND
-        </button>
       </div>
     </section>
   </main>
@@ -1312,14 +1372,49 @@
    MAIN 3-COLUMN GRID
    ============================================================ */
 .lab-main {
-  display: grid;
-  grid-template-columns: 248px 1fr 290px;
-  gap: 1px;
+  display: flex;
   flex: 1;
   min-height: 0;
   position: relative;
   z-index: 1;
+}
+
+.lab-main.is-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+.chat-panel {
+  flex: 1;
+  min-width: 200px;
+}
+
+.char-panel,
+.control-panel {
+  flex-shrink: 0;
+}
+
+/* ── Resize bar ── */
+.resize-bar {
+  width: 5px;
+  flex-shrink: 0;
   background: var(--pborder);
+  cursor: col-resize;
+  position: relative;
+  transition: background 0.18s;
+  z-index: 5;
+}
+
+.resize-bar::after {
+  content: '';
+  position: absolute;
+  inset: 0 -4px;
+}
+
+.resize-bar:hover,
+.is-resizing .resize-bar {
+  background: rgba(0,229,255,0.25);
+  box-shadow: 0 0 6px rgba(0,229,255,0.3);
 }
 
 /* ============================================================
@@ -1983,9 +2078,9 @@
 
 .msg-wrap {
   display: flex;
-  gap: 8px;
+  gap: 10px;
   align-items: flex-end;
-  max-width: 95%;
+  max-width: 85%;
 }
 
 .msg-wrap.user {
@@ -1995,21 +2090,23 @@
 
 .msg-av {
   flex-shrink: 0;
-  width: 30px;
-  height: 30px;
+  width: 48px;
+  height: 48px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 8px;
   font-weight: 700;
-  letter-spacing: 0.5px;
 }
 
 .ai-av {
   background: var(--bg2);
-  border: 1px solid rgba(0,229,255,0.25);
+  border: 1.5px solid rgba(0,229,255,0.45);
   overflow: hidden;
+  box-shadow:
+    0 0 0 2px rgba(0,229,255,0.07),
+    0 0 14px rgba(0,229,255,0.32),
+    0 0 30px rgba(0,229,255,0.1);
 }
 
 .ai-av img {
@@ -2021,33 +2118,37 @@
 }
 
 .user-av {
-  background: rgba(168,85,247,0.15);
-  border: 1px solid rgba(168,85,247,0.35);
+  background: rgba(168,85,247,0.12);
+  border: 1.5px solid rgba(168,85,247,0.55);
   color: var(--pu);
-  font-size: 7.5px;
-  letter-spacing: 0.3px;
+  box-shadow:
+    0 0 0 2px rgba(168,85,247,0.07),
+    0 0 14px rgba(168,85,247,0.3),
+    0 0 30px rgba(168,85,247,0.1);
 }
 
 .msg-bubble {
-  background: rgba(0,229,255,0.05);
-  border: 1px solid rgba(0,229,255,0.12);
-  border-radius: 6px 6px 6px 2px;
-  padding: 8px 12px;
+  background: linear-gradient(145deg, rgba(0,229,255,0.08) 0%, rgba(0,229,255,0.03) 100%);
+  border: 1px solid rgba(0,229,255,0.22);
+  border-radius: 18px 18px 18px 4px;
+  padding: 10px 14px;
   max-width: 100%;
   position: relative;
+  box-shadow: 0 0 14px rgba(0,229,255,0.1), inset 0 1px 0 rgba(0,229,255,0.07);
 }
 
 .msg-wrap.user .msg-bubble {
-  background: rgba(168,85,247,0.07);
-  border-color: rgba(168,85,247,0.2);
-  border-radius: 6px 6px 2px 6px;
+  background: linear-gradient(145deg, rgba(168,85,247,0.11) 0%, rgba(168,85,247,0.04) 100%);
+  border-color: rgba(168,85,247,0.32);
+  border-radius: 18px 18px 4px 18px;
   text-align: right;
+  box-shadow: 0 0 14px rgba(168,85,247,0.12), inset 0 1px 0 rgba(168,85,247,0.08);
 }
 
 .msg-text {
   font-size: 13px;
   color: var(--text);
-  line-height: 1.6;
+  line-height: 1.65;
   letter-spacing: 0.3px;
   word-break: break-word;
 }
@@ -2055,7 +2156,7 @@
 .msg-time {
   font-size: 9px;
   color: var(--muted);
-  margin-top: 5px;
+  margin-top: 6px;
   letter-spacing: 0.5px;
   text-align: right;
 }
@@ -2063,10 +2164,11 @@
 /* Thinking bubble */
 .msg-bubble.thinking {
   display: flex;
-  gap: 4px;
+  gap: 5px;
   align-items: center;
-  padding: 11px 16px;
-  min-width: 54px;
+  padding: 14px 18px;
+  min-width: 64px;
+  border-radius: 18px 18px 18px 4px;
 }
 
 .dot-bounce {
