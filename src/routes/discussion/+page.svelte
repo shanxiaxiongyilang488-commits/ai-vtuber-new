@@ -168,7 +168,7 @@
   <!-- 左：キャラ -->
   <div class="sidebar">
     {#each characters as char, i}
-      <div class="char-card" on:click={() => openSettings(i)}>
+      <div class="char-card" onclick={() => openSettings(i)}>
         <img src={char.avatar} alt={char.name} />
         <p>{char.name}</p>
 
@@ -245,8 +245,8 @@
       />
 
       <div class="button-row">
-        <button on:click={startDiscussion}>会話開始</button>
-        <button class="btn-secondary" on:click={startDummyDiscussion}>ダミー会話</button>
+        <button onclick={startDiscussion}>会話開始</button>
+        <button class="btn-secondary" onclick={startDummyDiscussion}>ダミー会話</button>
       </div>
     </div>
   </div>

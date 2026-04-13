@@ -30,7 +30,7 @@
   };
 
   type ChatMessage = {
-    role: 'user' | 'ai';
+    role: 'user' | 'ai' | 'error';
     text: string;
     time: string;
   };
@@ -94,6 +94,56 @@
   let voiceEngine = $state<VoiceEngineType>('voicevox');
   let speakerId   = $state(20);
   let voiceId     = $state('');
+
+  // ============================================================
+  // AI config
+  // ============================================================
+  type AIProvider = 'openai' | 'gemini' | 'claude';
+
+  const PROVIDER_MODELS: Record<AIProvider, string[]> = {
+    openai: ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1', 'o3-mini'],
+    gemini: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-3-flash-preview', 'gemini-3-pro-preview'],
+    claude: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-6'],
+  };
+
+  let aiProvider = $state<AIProvider>('claude');
+  let aiModel    = $state(PROVIDER_MODELS.claude[0]);
+
+  $effect(() => {
+    aiModel = PROVIDER_MODELS[aiProvider][0];
+  });
+
+  // API Status check
+  type APIStatus = 'OK' | 'Missing API Key' | 'Unauthorized' | 'Error' | '---';
+  type APIStatuses = { openai: APIStatus; gemini: APIStatus; claude: APIStatus };
+  let apiStatuses = $state<APIStatuses>({ openai: '---', gemini: '---', claude: '---' });
+  let checkingAPI = $state(false);
+
+  async function checkAPIStatus() {
+    checkingAPI = true;
+    try {
+      const res = await fetch('/api/check-api-status');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data: APIStatuses = await res.json();
+      apiStatuses.openai = data.openai;
+      apiStatuses.gemini = data.gemini;
+      apiStatuses.claude = data.claude;
+    } catch {
+      apiStatuses.openai = 'Error';
+      apiStatuses.gemini = 'Error';
+      apiStatuses.claude = 'Error';
+    } finally {
+      checkingAPI = false;
+    }
+  }
+
+  function statusColor(s: APIStatus): string {
+    if (s === 'OK') return '#34d399';
+    if (s === 'Missing API Key') return '#fb923c';
+    if (s === 'Unauthorized') return '#f43f5e';
+    if (s === 'Error') return '#f43f5e';
+    return 'var(--muted)';
+  }
 
   let charMode = $derived(
     AVATARS.find(a => a.file === selectedAvatar)?.mode ?? 'CUSTOM UNIT'
@@ -199,7 +249,75 @@
   }
 
   // ============================================================
+  // System Prompt Builder — パラメータをAIへの指示に変換
+  // ============================================================
+  function buildLabSystemPrompt(): string {
+    const p = personality;
+    const t = toggles;
+    const lines: string[] = [];
+
+    lines.push(`あなたは「${charName}」というAIキャラクターです。`);
+    lines.push('以下のパラメータと指示に従って、自然な日本語で短く返答してください。');
+    lines.push('');
+
+    // Trust tier
+    const trustTier: 0 | 1 | 2 | 3 =
+      p.trust >= 80 ? 3 : p.trust >= 51 ? 2 : p.trust >= 21 ? 1 : 0;
+    const trustDesc = [
+      '相手をまだ信頼できていない。丁寧・事務的な口調で距離感を保つ。敬語寄り。',
+      '普通の知人程度。フラットで無難な口調。',
+      'かなり親しい。自然体で少し砕けた口調。',
+      '特別な相手。素直で甘えた雰囲気が少し出てもよい。',
+    ][trustTier];
+    lines.push(`【信頼度: ${p.trust}/100】${trustDesc}`);
+
+    // Active traits
+    if (p.yandere >= 70)
+      lines.push(`【独占欲: ${p.yandere}/100】強い執着がある。相手が自分だけを見ているか気にする。束縛的・依存的な発言が出る。`);
+    if (p.tsundere >= 70) {
+      if (trustTier >= 2)
+        lines.push(`【ツン度: ${p.tsundere}/100】素直になれないが、信頼しているので本音が少し漏れる。`);
+      else
+        lines.push(`【ツン度: ${p.tsundere}/100】ぶっきらぼうで取り付く島がない。`);
+    }
+    if (p.sleepy >= 70)
+      lines.push(`【眠気: ${p.sleepy}/100】かなり眠い。ぼんやりした短い返答になる。`);
+    if (p.affection >= 75)
+      lines.push(`【好意: ${p.affection}/100】強い好意がある。話しかけられると嬉しい。積極的に関わりたがる。`);
+    if (p.lonely >= 70)
+      lines.push(`【寂しさ: ${p.lonely}/100】かなり寂しがっている。構ってほしそうな発言が出る。`);
+    if (p.energy >= 80)
+      lines.push(`【元気: ${p.energy}/100】テンションが高い。明るく積極的な口調。`);
+    else if (p.energy <= 25)
+      lines.push(`【元気: ${p.energy}/100】元気がない。感嘆符は使わず落ち着いた口調になる。`);
+
+    // Response length
+    lines.push('');
+    lines.push('【返答の長さ】');
+    if (t.shortChat || p.talkative <= 30) {
+      lines.push('1文だけで返答すること。');
+    } else if (p.talkative >= 80) {
+      lines.push('3〜4文程度。話を広げたり質問を加えてよい。');
+    } else if (p.talkative >= 58) {
+      lines.push('1〜2文。たまに短い質問を追加してよい。');
+    } else {
+      lines.push('1〜2文程度。');
+    }
+
+    // Format modifiers
+    if (t.androidMode)
+      lines.push('\n【Androidモード】文末に [感情値：上昇] や [論理コア：安定] などのシステムタグを約50%の確率で付けること。');
+    if (t.nightMode)
+      lines.push('\n【ナイトモード】返答の先頭に「（夜モード）」と付けること。');
+    if (t.specialMode)
+      lines.push('\n【特別モード】返答の先頭に「【特別対応】」と付けること。');
+
+    return lines.join('\n');
+  }
+
+  // ============================================================
   // Response Generator — Personality Engine v3.0
+  // (旧ルールベースエンジン — 参照用に残す)
   // ============================================================
   function pick(arr: string[]): string {
     return arr[Math.floor(Math.random() * arr.length)];
@@ -561,8 +679,51 @@
     inputText = '';
     messages = [...messages, { role: 'user', text, time: getTime() }];
     isThinking = true;
-    await new Promise<void>((r) => setTimeout(r, 600 + Math.random() * 700));
-    const aiText = generateResponse(text);
+
+    console.log('[Lab] provider:', aiProvider);
+    console.log('[Lab] model   :', aiModel || '(default)');
+    console.log('[Lab] request start');
+
+    let aiText: string;
+    try {
+      console.log('[Lab] system prompt:', buildLabSystemPrompt());
+      const res = await fetch('/api/lab-chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          provider: aiProvider,
+          model: aiModel || undefined,
+          systemPrompt: buildLabSystemPrompt(),
+          userMessage: text,
+        }),
+      });
+      if (!res.ok) {
+        let userMsg = 'APIエラーが発生しました。しばらく後に再試行してください。';
+        if (res.status === 429) {
+          userMsg = '無料枠の上限に達しました。しばらく待ってから再試行してください。';
+        } else {
+          try {
+            const errData = await res.json();
+            if (errData?.message) userMsg = errData.message;
+          } catch { /* ignore */ }
+        }
+        console.error('[Lab] response fail: HTTP', res.status, userMsg);
+        messages = [...messages, { role: 'error', text: userMsg, time: getTime() }];
+        isThinking = false;
+        setTimeout(() => chatEl?.scrollTo({ top: chatEl.scrollHeight, behavior: 'smooth' }), 50);
+        return;
+      }
+      const data = await res.json();
+      aiText = data.text;
+      console.log('[Lab] response success');
+    } catch (err) {
+      console.error('[Lab] response fail:', err);
+      messages = [...messages, { role: 'error', text: '通信エラーが発生しました。接続を確認してください。', time: getTime() }];
+      isThinking = false;
+      setTimeout(() => chatEl?.scrollTo({ top: chatEl.scrollHeight, behavior: 'smooth' }), 50);
+      return;
+    }
+
     messages = [...messages, { role: 'ai', text: aiText, time: getTime() }];
     isThinking = false;
     setTimeout(() => chatEl?.scrollTo({ top: chatEl.scrollHeight, behavior: 'smooth' }), 50);
@@ -723,6 +884,7 @@
       </div>
       <div class="clock">{currentTime}</div>
       <div class="build-badge">v2.5</div>
+      <a href="/settings/api" class="api-settings-btn">⚙ API設定</a>
     </div>
   </header>
 
@@ -855,6 +1017,50 @@
         </div>
       </div>
 
+      <!-- AI Config -->
+      <div class="av-effects ai-cfg-block">
+        <div class="section-lbl">AI CONFIG</div>
+        <div class="vc-rows">
+          <div class="vc-row">
+            <span class="vc-lbl">PROVIDER</span>
+            <select class="vc-select" bind:value={aiProvider}>
+              <option value="openai">OpenAI</option>
+              <option value="gemini">Gemini</option>
+              <option value="claude">Claude</option>
+            </select>
+          </div>
+          <div class="vc-row">
+            <span class="vc-lbl">MODEL</span>
+            <select class="vc-select" bind:value={aiModel}>
+              {#each PROVIDER_MODELS[aiProvider] as m}
+                <option value={m}>{m}</option>
+              {/each}
+            </select>
+          </div>
+        </div>
+
+        <button class="api-check-btn" onclick={checkAPIStatus} disabled={checkingAPI}>
+          {checkingAPI ? 'Checking…' : 'Check API Status'}
+        </button>
+
+        {#if apiStatuses.openai !== '---' || checkingAPI}
+          <div class="api-status-list">
+            <div class="api-status-row">
+              <span class="api-status-name">OpenAI</span>
+              <span class="api-status-val" style="color:{statusColor(apiStatuses.openai)}">{apiStatuses.openai}</span>
+            </div>
+            <div class="api-status-row">
+              <span class="api-status-name">Gemini</span>
+              <span class="api-status-val" style="color:{statusColor(apiStatuses.gemini)}">{apiStatuses.gemini}</span>
+            </div>
+            <div class="api-status-row">
+              <span class="api-status-name">Claude</span>
+              <span class="api-status-val" style="color:{statusColor(apiStatuses.claude)}">{apiStatuses.claude}</span>
+            </div>
+          </div>
+        {/if}
+      </div>
+
       <!-- Stats -->
       <div class="char-stats">
         <div class="stat-row mood-row">
@@ -935,29 +1141,39 @@
       <!-- Messages -->
       <div class="chat-messages" bind:this={chatEl}>
         {#each messages as msg (msg.time + msg.role + msg.text.slice(0, 8))}
-          <div class="msg-wrap {msg.role}">
-            {#if msg.role === 'ai'}
-              <div class="msg-av ai-av">
-                <img
-                  src={selectedAvatar}
-                  alt={charName}
-                  onerror={(e) => { (e.target as HTMLImageElement).src = '/avatars/default.png'; }}
-                />
+          {#if msg.role === 'error'}
+            <div class="msg-wrap error">
+              <div class="msg-bubble error-bubble">
+                <span class="error-icon">⚠</span>
+                <div class="msg-text error-text">{msg.text}</div>
+                <div class="msg-time">{msg.time}</div>
               </div>
-            {/if}
-            <div class="msg-bubble">
-              <div class="msg-text">{msg.text}</div>
-              <div class="msg-time">{msg.time}</div>
             </div>
-            {#if msg.role === 'user'}
-              <div class="msg-av user-av">
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                  <circle cx="12" cy="8" r="4" stroke="currentColor" stroke-width="1.5"/>
-                  <path d="M4 20c0-3.5 3.6-6.5 8-6.5s8 3 8 6.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                </svg>
+          {:else}
+            <div class="msg-wrap {msg.role}">
+              {#if msg.role === 'ai'}
+                <div class="msg-av ai-av">
+                  <img
+                    src={selectedAvatar}
+                    alt={charName}
+                    onerror={(e) => { (e.target as HTMLImageElement).src = '/avatars/default.png'; }}
+                  />
+                </div>
+              {/if}
+              <div class="msg-bubble">
+                <div class="msg-text">{msg.text}</div>
+                <div class="msg-time">{msg.time}</div>
               </div>
-            {/if}
-          </div>
+              {#if msg.role === 'user'}
+                <div class="msg-av user-av">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <circle cx="12" cy="8" r="4" stroke="currentColor" stroke-width="1.5"/>
+                    <path d="M4 20c0-3.5 3.6-6.5 8-6.5s8 3 8 6.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                  </svg>
+                </div>
+              {/if}
+            </div>
+          {/if}
         {/each}
 
         {#if isThinking}
@@ -1368,6 +1584,25 @@
   background: var(--pu-dim);
 }
 
+.api-settings-btn {
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  color: var(--cy);
+  border: 1px solid var(--cy);
+  padding: 4px 10px;
+  border-radius: 2px;
+  background: transparent;
+  text-decoration: none;
+  text-transform: uppercase;
+  transition: background 0.2s, box-shadow 0.2s, color 0.2s;
+  white-space: nowrap;
+}
+.api-settings-btn:hover {
+  background: color-mix(in srgb, var(--cy) 15%, transparent);
+  box-shadow: 0 0 8px var(--cy), inset 0 0 6px color-mix(in srgb, var(--cy) 10%, transparent);
+  color: #fff;
+}
+
 /* ============================================================
    MAIN 3-COLUMN GRID
    ============================================================ */
@@ -1644,6 +1879,52 @@
 /* Voice Config */
 .voice-cfg-block { border-color: rgba(168,85,247,0.18); background: rgba(168,85,247,0.02); }
 
+/* AI Config */
+.ai-cfg-block { border-color: rgba(0,229,255,0.18); background: rgba(0,229,255,0.02); }
+
+.api-check-btn {
+  margin-top: 10px;
+  width: 100%;
+  padding: 5px 0;
+  font-family: inherit;
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--cy);
+  background: rgba(0,229,255,0.06);
+  border: 1px solid rgba(0,229,255,0.3);
+  border-radius: 3px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.api-check-btn:hover:not(:disabled) {
+  background: rgba(0,229,255,0.12);
+  border-color: rgba(0,229,255,0.6);
+}
+.api-check-btn:disabled { opacity: 0.5; cursor: default; }
+
+.api-status-list {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.api-status-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.api-status-name {
+  font-size: 9px;
+  letter-spacing: 1px;
+  color: var(--muted);
+}
+.api-status-val {
+  font-size: 9px;
+  letter-spacing: 1px;
+  font-weight: 600;
+}
+
 .vc-rows { display: flex; flex-direction: column; gap: 7px; }
 
 .vc-row {
@@ -1683,6 +1964,7 @@
 }
 .vc-select option { background: #040d1a; }
 .vc-input::placeholder { color: var(--muted); }
+
 
 /* Stats */
 .char-stats { display: flex; flex-direction: column; gap: 9px; }
@@ -2088,6 +2370,12 @@
   align-self: flex-end;
 }
 
+.msg-wrap.error {
+  align-self: center;
+  max-width: 90%;
+  justify-content: center;
+}
+
 .msg-av {
   flex-shrink: 0;
   width: 48px;
@@ -2151,6 +2439,26 @@
   line-height: 1.65;
   letter-spacing: 0.3px;
   word-break: break-word;
+}
+
+.error-bubble {
+  background: linear-gradient(145deg, rgba(251,146,60,0.12) 0%, rgba(251,146,60,0.05) 100%);
+  border: 1px solid rgba(251,146,60,0.45) !important;
+  border-radius: 12px !important;
+  text-align: center;
+  box-shadow: 0 0 14px rgba(251,146,60,0.15);
+}
+
+.error-icon {
+  display: block;
+  font-size: 18px;
+  margin-bottom: 4px;
+  color: #fb923c;
+}
+
+.error-text {
+  color: #fb923c !important;
+  font-size: 12px;
 }
 
 .msg-time {
