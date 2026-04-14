@@ -65,6 +65,27 @@
 
   let avatarEffects = $state<AvatarEffects>({ rotate: true, glowPulse: true });
 
+  // ── PNGTuber (2COL only) ──────────────────────────────────────
+  let pngBlinking    = $state(false);
+  let pngtuberActive = false;   // mount/destroy フラグ（メモリリーク防止）
+  let blinkTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function scheduleNextBlink() {
+    blinkTimer = setTimeout(() => {
+      if (!pngtuberActive) return;
+      if (!isThinking) {
+        pngBlinking = true;
+        setTimeout(() => {
+          if (!pngtuberActive) return;
+          pngBlinking = false;
+          scheduleNextBlink();
+        }, 120);                           // 瞬き持続 120ms
+      } else {
+        scheduleNextBlink();               // thinking中は次の周期へ
+      }
+    }, 3000 + Math.random() * 3000);      // 3〜6秒ランダム間隔
+  }
+
   function getTime() {
     return new Date().toLocaleTimeString('ja-JP', { hour12: false });
   }
@@ -1284,10 +1305,17 @@ ${recent}
 
     sessionStore.init();
     resetIdleTimer(); // autoTalk ON の場合、起動直後からタイマー開始
+
+    // PNGTuber 瞬きスケジューラー起動
+    pngtuberActive = true;
+    scheduleNextBlink();
   });
   onDestroy(() => {
     clearInterval(clockId);
     if (idleTimerId) clearTimeout(idleTimerId);
+    // PNGTuber クリーンアップ
+    pngtuberActive = false;
+    if (blinkTimer) clearTimeout(blinkTimer);
   });
 </script>
 
@@ -1861,9 +1889,14 @@ ${recent}
               src={selectedAvatar}
               alt={charName}
               class="cvl-img"
+              class:png-speaking={isThinking}
+              class:png-blink={pngBlinking && !isThinking}
               onerror={(e) => { (e.target as HTMLImageElement).src = '/avatars/default.png'; }}
             />
             <div class="scan-line"></div>
+            {#if isThinking}
+              <div class="png-think-overlay" aria-hidden="true"></div>
+            {/if}
           </div>
         </div>
 
@@ -3657,5 +3690,55 @@ ${recent}
   width: 22px;
   text-align: right;
   flex-shrink: 0;
+}
+
+/* ============================================================
+   PNGTUBER — 2COL-only avatar animations
+   ============================================================ */
+
+/* 瞬き: 目の位置(上30%)を起点に一瞬潰す */
+.cvl-img.png-blink {
+  animation: pngtuber-blink 0.12s ease-in-out;
+  transform-origin: 50% 30%;
+}
+
+/* 口パク: 縦方向の小さいバウンス（発話感） */
+.cvl-img.png-speaking {
+  animation: pngtuber-speak 0.28s ease-in-out infinite;
+}
+
+/* Thinking オーバーレイ: 紫グローを cvl-inner の上に重ねる */
+.png-think-overlay {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  pointer-events: none;
+  animation: pngtuber-think-glow 0.85s ease-in-out infinite;
+}
+
+@keyframes pngtuber-blink {
+  0%, 100% { transform: scaleY(1);    }
+  40%, 60% { transform: scaleY(0.04); }
+}
+
+@keyframes pngtuber-speak {
+  0%   { transform: translateY(0)    scaleY(1);    }
+  20%  { transform: translateY(-3px) scaleY(1.01); }
+  50%  { transform: translateY(0)    scaleY(0.99); }
+  80%  { transform: translateY(-2px) scaleY(1.01); }
+  100% { transform: translateY(0)    scaleY(1);    }
+}
+
+@keyframes pngtuber-think-glow {
+  0%, 100% {
+    box-shadow: inset 0 0 0 2px rgba(168,85,247,0.18),
+                0 0 10px rgba(168,85,247,0.12);
+    background: rgba(168,85,247,0.01);
+  }
+  50% {
+    box-shadow: inset 0 0 0 3px rgba(168,85,247,0.65),
+                0 0 32px rgba(168,85,247,0.32);
+    background: rgba(168,85,247,0.05);
+  }
 }
 </style>
