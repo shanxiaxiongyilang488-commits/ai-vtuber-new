@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { createVoiceEngine } from '$lib/api/voiceEngine';
+  import { PROVIDER_MODELS, type AIProvider } from '$lib/config/models';
+  import { sessionStore } from '$lib/stores/sessionStore';
 
   // ============================================================
   // Types
@@ -33,6 +35,7 @@
     role: 'user' | 'ai' | 'error';
     text: string;
     time: string;
+    isGreeting?: true; // 起動挨拶フラグ（保存対象外）
   };
 
   type PresetName =
@@ -72,8 +75,15 @@
 
   let inputText = $state('');
   let activePreset = $state<PresetName>('muryi');
-  let isThinking = $state(false);
+  let isThinking      = $state(false);
+  let isInputFocused  = $state(false);
   let chatEl: HTMLElement;
+  let idleTimerId: ReturnType<typeof setTimeout> | null = null;
+  let proactiveArmed   = false;
+  let lastProactiveAt  = 0;
+  let exchangeCount    = 0;                       // 送受信ペア数（記憶更新トリガー用）
+  let longMemory       = $state('');              // 長期記憶サマリー表示用
+  let isMemoryUpdating = $state(false);           // 更新中インジケーター
 
   // ============================================================
   // Avatar options
@@ -96,22 +106,8 @@
   let voiceId     = $state('');
 
   // ============================================================
-  // AI config
+  // AI config — sessionStore で一元管理
   // ============================================================
-  type AIProvider = 'openai' | 'gemini' | 'claude';
-
-  const PROVIDER_MODELS: Record<AIProvider, string[]> = {
-    openai: ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1', 'o3-mini'],
-    gemini: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-3-flash-preview', 'gemini-3-pro-preview'],
-    claude: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-6'],
-  };
-
-  let aiProvider = $state<AIProvider>('claude');
-  let aiModel    = $state(PROVIDER_MODELS.claude[0]);
-
-  $effect(() => {
-    aiModel = PROVIDER_MODELS[aiProvider][0];
-  });
 
   // API Status check
   type APIStatus = 'OK' | 'Missing API Key' | 'Unauthorized' | 'Error' | '---';
@@ -152,6 +148,7 @@
   function selectAvatar(file: string, name: string) {
     selectedAvatar = file;
     charName = name;
+    localStorage.setItem(LS_LAST_CHAR, name);
   }
 
   // ============================================================
@@ -311,6 +308,14 @@
       lines.push('\n【ナイトモード】返答の先頭に「（夜モード）」と付けること。');
     if (t.specialMode)
       lines.push('\n【特別モード】返答の先頭に「【特別対応】」と付けること。');
+
+    // 長期記憶があれば注入
+    const mem = localStorage.getItem(LS_LONG_MEMORY);
+    if (mem) {
+      lines.push('');
+      lines.push('【ユーザー長期記憶】以下を踏まえて自然に会話してください。');
+      lines.push(mem);
+    }
 
     return lines.join('\n');
   }
@@ -680,8 +685,8 @@
     messages = [...messages, { role: 'user', text, time: getTime() }];
     isThinking = true;
 
-    console.log('[Lab] provider:', aiProvider);
-    console.log('[Lab] model   :', aiModel || '(default)');
+    console.log('[Lab] provider:', $sessionStore.provider);
+    console.log('[Lab] model   :', $sessionStore.model || '(default)');
     console.log('[Lab] request start');
 
     let aiText: string;
@@ -691,8 +696,8 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          provider: aiProvider,
-          model: aiModel || undefined,
+          provider: $sessionStore.provider,
+          model: $sessionStore.model || undefined,
           systemPrompt: buildLabSystemPrompt(),
           userMessage: text,
         }),
@@ -724,7 +729,23 @@
       return;
     }
 
+    if (!aiText?.trim()) {
+      messages = [...messages, { role: 'error', text: 'AIからの応答が空でした。もう一度お試しください。', time: getTime() }];
+      isThinking = false;
+      setTimeout(() => chatEl?.scrollTo({ top: chatEl.scrollHeight, behavior: 'smooth' }), 50);
+      return;
+    }
+
     messages = [...messages, { role: 'ai', text: aiText, time: getTime() }];
+    // 会話記憶を保存（次回起動時の初回メッセージに使用）
+    localStorage.setItem(LS_LAST_TOPIC,      text);
+    localStorage.setItem(LS_LAST_TALK_AT,    new Date().toISOString());
+    localStorage.setItem(LS_LAST_GOAL,       text);
+    localStorage.setItem(LS_LAST_MOOD,       detectMood(aiText));
+    localStorage.setItem(LS_RECENT_PROGRESS, aiText.length > 50 ? aiText.slice(0, 50) + '…' : aiText);
+    saveChatHistory();
+    exchangeCount++;
+    if (exchangeCount % MEMORY_UPDATE_EVERY === 0) updateLongMemory();
     isThinking = false;
     setTimeout(() => chatEl?.scrollTo({ top: chatEl.scrollHeight, behavior: 'smooth' }), 50);
     if (voiceEngine !== 'none') {
@@ -739,6 +760,8 @@
         console.error('❌ Lab音声失敗', e);
       }
     }
+    // ユーザー入力 → AI応答完了後にアイドルタイマーをリセット
+    resetIdleTimer();
   }
 
   function handleKeydown(e: KeyboardEvent) {
@@ -795,8 +818,20 @@
   // ============================================================
   // Column resize
   // ============================================================
-  const LS_LEFT  = 'lab-left-width';
-  const LS_RIGHT = 'lab-right-width';
+  const LS_LEFT       = 'lab-left-width';
+  const LS_RIGHT      = 'lab-right-width';
+  const LS_LAST_TOPIC      = 'lab-last-topic';
+  const LS_LAST_TALK_AT    = 'lab-last-talk-at';
+  const LS_LAST_GOAL       = 'lab-last-goal';
+  const LS_LAST_MOOD       = 'lab-last-mood';
+  const LS_RECENT_PROGRESS = 'lab-recent-progress';
+  const LS_LAST_CHAR       = 'lab-last-char';
+  const LS_CHAT_HISTORY    = 'lab-chat-history';
+  const HISTORY_MAX        = 50;
+  const LS_LONG_MEMORY        = 'lab-long-memory';     // 長期記憶サマリー
+  const LS_MEMORY_UPDATED_AT  = 'lab-memory-updated-at'; // 最終更新タイムスタンプ
+  const MEMORY_UPDATE_EVERY   = 3;                      // N回の交換ごとに更新
+  const MEMORY_STALE_MS       = 60 * 60 * 1000;         // 1時間経過で起動時に自動更新
   const L_DEF = 220, L_MIN = 140, L_MAX = 480;
   const R_DEF = 340, R_MIN = 200, R_MAX = 560;
 
@@ -831,6 +866,343 @@
   }
 
   // ============================================================
+  // Memory helpers
+  // ============================================================
+  // ---- 長期記憶サマリー ----
+  async function updateLongMemory() {
+    if (isMemoryUpdating) return;
+    isMemoryUpdating = true;
+
+    // 直近10件の会話を抜粋（起動挨拶除く）
+    const recent = messages
+      .slice(1)
+      .filter(m => m.role !== 'error')
+      .slice(-10)
+      .map(m => `${m.role === 'user' ? 'ユーザー' : 'AI'}: ${m.text.slice(0, 80)}`)
+      .join('\n');
+
+    const existing = localStorage.getItem(LS_LONG_MEMORY) ?? '';
+
+    const extractPrompt = `以下の会話ログを分析し、ユーザーの情報を更新・統合してください。
+${existing ? `\n[既存の記憶]\n${existing}\n` : ''}
+[最近の会話]
+${recent}
+
+必ず以下の形式だけで出力（各行25文字以内、情報がなければ「不明」）:
+好み: [ユーザーが好むもの・興味]
+プロジェクト: [現在取り組んでいること]
+話題傾向: [よく話す話題やテーマ]`;
+
+    try {
+      const res = await fetch('/api/lab-chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          provider:     $sessionStore.provider,
+          model:        $sessionStore.model || undefined,
+          systemPrompt: 'あなたは会話ログを分析してユーザー情報を抽出するシステムです。指定された形式のみで出力してください。余分な説明は不要です。',
+          userMessage:  extractPrompt,
+        }),
+      });
+      if (res.ok) {
+        const data   = await res.json();
+        const result = (data.text ?? '').trim();
+        if (result && result.includes('好み:')) { // 形式チェック
+          localStorage.setItem(LS_LONG_MEMORY, result);
+          localStorage.setItem(LS_MEMORY_UPDATED_AT, String(Date.now()));
+          longMemory = result;
+        }
+      }
+    } catch (e) {
+      console.error('[Lab] updateLongMemory error:', e);
+    }
+    isMemoryUpdating = false;
+  }
+
+  function saveChatHistory() {
+    const toSave = messages
+      .filter(m => m.role !== 'error' && !m.isGreeting) // エラー・起動挨拶は保存しない
+      .slice(-HISTORY_MAX);                              // 最新 50 件に制限
+    try {
+      localStorage.setItem(LS_CHAT_HISTORY, JSON.stringify(toSave));
+    } catch (e) {
+      // localStorage容量オーバー時は古い半分を切り捨てて再試行
+      console.warn('[Lab] saveChatHistory: quota exceeded, trimming history');
+      try {
+        localStorage.setItem(LS_CHAT_HISTORY, JSON.stringify(toSave.slice(-Math.floor(HISTORY_MAX / 2))));
+      } catch { /* 保存できなくてもクラッシュさせない */ }
+    }
+  }
+
+  function resetChat() {
+    [LS_CHAT_HISTORY, LS_LAST_TOPIC, LS_LAST_TALK_AT,
+     LS_LAST_GOAL, LS_LAST_MOOD, LS_RECENT_PROGRESS,
+     LS_LONG_MEMORY, LS_MEMORY_UPDATED_AT].forEach(k => localStorage.removeItem(k));
+    messages = [{
+      role: 'ai',
+      text: 'システム初期化完了。会話テストモードを開始します。[論理コア：安定]',
+      time: getTime(),
+    }];
+    longMemory    = '';   // UI の記憶表示もクリア
+    exchangeCount = 0;    // カウンターリセット（誤トリガー防止）
+    setTimeout(() => chatEl?.scrollTo({ top: 0, behavior: 'smooth' }), 50);
+  }
+
+  function detectMood(text: string): string {
+    if (/楽し|嬉し|わくわく|面白|！{2,}/.test(text)) return '明るい';
+    if (/難し|困|悩|わから|むずかし/.test(text)) return '思索的な';
+    if (/真剣|重要|大事|確認|注意/.test(text)) return '真剣な';
+    if (/ありがと|よかった|安心|ほっ/.test(text)) return '和やかな';
+    return '落ち着いた';
+  }
+
+  // ============================================================
+  // 自発会話タイマー
+  // ============================================================
+  const IDLE_MIN    = 3 * 60 * 1000;  // 最短 3 分
+  const IDLE_RANGE  = 2 * 60 * 1000;  // ＋ランダム 0〜2 分
+  const COOLDOWN_MS = 10 * 60 * 1000; // 連続発話防止: 最低 10 分
+
+  function randomIdleMs(): number {
+    return IDLE_MIN + Math.random() * IDLE_RANGE;
+  }
+
+  function resetIdleTimer() {
+    if (idleTimerId) clearTimeout(idleTimerId);
+    idleTimerId    = null;
+    proactiveArmed = false;
+    if (!toggles.autoTalk) return;
+
+    // クールダウン中なら残り時間 + ランダム遅延を上乗せ
+    const elapsed = Date.now() - lastProactiveAt;
+    const delay   = elapsed < COOLDOWN_MS
+      ? (COOLDOWN_MS - elapsed) + randomIdleMs()
+      : randomIdleMs();
+
+    proactiveArmed = true;
+    idleTimerId    = setTimeout(() => proactiveTalk(), delay);
+  }
+
+  function onChatFocus() {
+    isInputFocused = true;
+    // 入力中はタイマー停止
+    if (idleTimerId) { clearTimeout(idleTimerId); idleTimerId = null; proactiveArmed = false; }
+  }
+
+  function onChatBlur() {
+    isInputFocused = false;
+    resetIdleTimer(); // フォーカスが外れたら再起動
+  }
+
+  // ---- 時間帯ユーティリティ ----
+  type TimePeriod = 'morning' | 'day' | 'evening' | 'latenight';
+
+  function getTimePeriod(): TimePeriod {
+    const h = new Date().getHours();
+    if (h >= 6  && h < 12) return 'morning';
+    if (h >= 12 && h < 18) return 'day';
+    if (h >= 18 && h < 23) return 'evening';
+    return 'latenight';
+  }
+
+  // ---- キャラ別・時間帯別シナリオプール ----
+  const PROACTIVE_POOL: Record<string, Record<TimePeriod, string[]>> = {
+    ミュリィ: {
+      morning: [
+        'おはようの挨拶をしながら、今日の調子を明るく元気に聞いてください。',
+        '朝から来てくれたことを嬉しがりながら、今日何をしたいか聞いてください。',
+        '今日も一日頑張ろうという気持ちを持ちながら、テンション高めに話しかけてください。',
+      ],
+      day: [
+        'しばらく黙っていたのを気にして、何か面白いことあった？と聞いてください。',
+        '最近どう？という感じで気軽に近況を聞いてください。',
+        'ちょっと暇そうにしていたから話しかけた、という感じで自然に声をかけてください。',
+      ],
+      evening: [
+        'お疲れさまと言いながら今日の出来事を明るく聞いてください。',
+        '夕方になったので、ちゃんと休憩できているか元気よく確認してください。',
+        '今日も頑張ってたね！と労いながら、ご飯食べた？など日常的に話しかけてください。',
+      ],
+      latenight: [
+        'こんな夜遅くまで大丈夫？とちょっと心配しながらも明るく話しかけてください。',
+        '夜更かしを少し心配しながら、でも一緒にいるよという気持ちを伝えてください。',
+        'そろそろ眠くない？と気遣いながら、今夜の様子を聞いてください。',
+      ],
+    },
+    リセア: {
+      morning: [
+        '朝の体調と今日のタスクについて、落ち着いた口調で確認してください。',
+        '今日の目標を整理することを提案しながら、論理的に朝の挨拶をしてください。',
+        '早起きして作業しているなら、効率的な順序を提案しながら話しかけてください。',
+      ],
+      day: [
+        '作業の進捗状況を、データを確認するような口調で冷静に聞いてください。',
+        'しばらく無応答だったことを踏まえ、問題や疑問点がないか確認してください。',
+        '現在の状況を整理しながら、次のステップについて論理的に話しかけてください。',
+      ],
+      evening: [
+        '今日の成果を客観的に振り返るよう促しながら、落ち着いた口調で話しかけてください。',
+        '残りのタスクを確認しながら、今日中に終わらせるべきことを整理してください。',
+        'お疲れさまという気持ちを込めながら、今日の進捗を論理的にまとめて聞いてください。',
+      ],
+      latenight: [
+        '睡眠と作業効率の関係を踏まえ、休息を取ることを論理的に提案してください。',
+        '深夜作業のリスクをデータ的観点から冷静に伝え、切り上げを促してください。',
+        '現時点での疲労レベルを確認しながら、休息のタイミングを論理的に提案してください。',
+      ],
+    },
+    シエル: {
+      morning: [
+        '短く朝の挨拶をして、今日の予定だけ端的に聞いてください。',
+        '起きているのか確認するように、一言だけクールに話しかけてください。',
+        '朝から作業しているなら、それだけ短くコメントしてください。',
+      ],
+      day: [
+        '黙っていたのを気にしながら、一言だけ何かあったか確認してください。',
+        '状況を把握するよう、最低限の言葉で短く話しかけてください。',
+        '進んでるか？と一言だけクールに確認してください。',
+      ],
+      evening: [
+        '今日の疲れを一言で労ってから、それ以上は何も言わずにいてください。',
+        'お疲れ、と短く言ってから、何か聞きたいことがあるか確認してください。',
+        '夕方になったことをクールに指摘して、作業を切り上げるか確認してください。',
+      ],
+      latenight: [
+        '深夜まで起きていることを短く指摘して、休めと一言だけ言ってください。',
+        'もう寝ろ、という内容を短くクールに伝えてください。',
+        '深夜まで起きていることに呆れながらも、一応心配していることを短く伝えてください。',
+      ],
+    },
+    メノア: {
+      morning: [
+        'おはようと言いながら、今日も無理しないでねと控えめに優しく声をかけてください。',
+        '朝から来てくれたことをひっそり喜びながら、今日の調子を遠慮がちに聞いてください。',
+        '今日一日が良い日になるよう願いながら、優しく静かに話しかけてください。',
+      ],
+      day: [
+        'しばらく黙っていたのを心配して、控えめに声をかけてください。',
+        '何か困ったことがないか、遠慮がちに優しく聞いてください。',
+        '一人にしてしまっていたことを少し申し訳なく思いながら、優しく話しかけてください。',
+      ],
+      evening: [
+        '今日お疲れさまと優しく言いながら、ゆっくり休んでほしいと伝えてください。',
+        '夕方になったので、今日の疲れを心配しながら優しく声をかけてください。',
+        '今日も頑張ってたんじゃないかと気遣いながら、控えめに話しかけてください。',
+      ],
+      latenight: [
+        '深夜まで起きていることをとても心配しながら、休むよう優しく伝えてください。',
+        'もうそんな時間なんだね…と言いながら、体を心配して休息を促してください。',
+        '一緒にいるから安心してと伝えながら、無理しないよう優しく言ってください。',
+      ],
+    },
+  };
+
+  function buildProactiveTrigger(char: string): string {
+    const savedTopic = localStorage.getItem(LS_LAST_TOPIC);
+    const mem        = savedTopic ? `なお前回の話題は「${savedTopic.slice(0, 20)}」でした。` : '';
+    const period     = getTimePeriod();
+    const pool       = PROACTIVE_POOL[char]?.[period];
+    const scenario   = pool
+      ? pool[Math.floor(Math.random() * pool.length)]
+      : 'ユーザーがしばらく沈黙しています。自発的に話しかけてください。';
+    return `[IDLE_NOTICE] ${scenario}${mem}`;
+  }
+
+  async function proactiveTalk() {
+    // 多重ガード: autoTalk OFF / AI思考中 / 入力フォーカス中 / 入力テキストあり / タイマー未起動
+    if (!toggles.autoTalk || isThinking || isInputFocused || inputText.trim() || !proactiveArmed) return;
+    // クールダウンチェック（blur/focusによるタイマー再起動でも10分は発話しない）
+    if (lastProactiveAt > 0 && Date.now() - lastProactiveAt < COOLDOWN_MS) {
+      proactiveArmed = false;
+      return;
+    }
+    proactiveArmed  = false;
+    lastProactiveAt = Date.now(); // 発火開始時に記録（成功後ではなく開始時点でクールダウン開始）
+    isThinking      = true;
+    try {
+      const res = await fetch('/api/lab-chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          provider:     $sessionStore.provider,
+          model:        $sessionStore.model || undefined,
+          systemPrompt: buildLabSystemPrompt() + '\n\n【自発発話モード】ユーザーへの自然な話しかけです。1〜2文で。[IDLE_NOTICE] の内容に沿って発話してください。',
+          userMessage:  buildProactiveTrigger(charName),
+        }),
+      });
+      if (res.ok) {
+        const data    = await res.json();
+        const aiText: string = data.text ?? '';
+        if (aiText) {
+          messages = [...messages, { role: 'ai', text: aiText, time: getTime() }];
+          localStorage.setItem(LS_LAST_MOOD,       detectMood(aiText));
+          localStorage.setItem(LS_RECENT_PROGRESS, aiText.length > 50 ? aiText.slice(0, 50) + '…' : aiText);
+          setTimeout(() => chatEl?.scrollTo({ top: chatEl.scrollHeight, behavior: 'smooth' }), 50);
+          saveChatHistory();
+        }
+      }
+    } catch (e) {
+      console.error('[Lab] proactiveTalk error:', e);
+    }
+    isThinking = false;
+    // タイマーは再起動しない（次のユーザー入力まで自発発話は停止）
+  }
+
+  // autoTalk トグルの変化を監視
+  $effect(() => {
+    if (toggles.autoTalk) {
+      resetIdleTimer();
+    } else {
+      if (idleTimerId) { clearTimeout(idleTimerId); idleTimerId = null; }
+    }
+  });
+
+  /** 長期記憶テキストをパースして構造化 */
+  function parseLongMemory(text: string): { preferences: string; project: string; topics: string } {
+    const find = (prefix: string) => {
+      const line = text.split('\n').find(l => l.startsWith(prefix));
+      const val  = line ? line.slice(prefix.length).trim() : '';
+      return (val && val !== '不明') ? val : '';
+    };
+    return { preferences: find('好み:'), project: find('プロジェクト:'), topics: find('話題傾向:') };
+  }
+
+  function buildMemoryGreeting(
+    char: string,
+    timeExpr: string,
+    topic: string,
+    mood: string | null,
+    progress: string | null,
+    memText: string,
+  ): string {
+    const { project } = parseLongMemory(memText);
+    const proj        = project.length > 20 ? project.slice(0, 20) + '…' : project;
+
+    // プロジェクト記憶がある場合は「続きの話」として自然に言及
+    switch (char) {
+      case 'ミュリィ':
+        if (proj) return `わぁ、お帰り！${timeExpr}に「${topic}」してたね。${proj}、その後どうなった？ [記憶ログ：拡張参照完了]`;
+        return `わぁ、${timeExpr}に「${topic}」の話してたね！${mood && progress ? `${mood}雰囲気で「${progress}」って感じだったよ。` : ''}今日も続きしよ〜？ [記憶ログ：拡張参照完了]`;
+
+      case 'リセア':
+        if (proj) return `前回（${timeExpr}）は「${topic}」について検討していましたね。${proj}の進捗を確認させてください。 [記憶ログ：拡張参照完了]`;
+        return `前回（${timeExpr}）は「${topic}」について検討していましたね。${mood && progress ? `${mood}な展開で「${progress}」という状況でした。` : ''}継続しますか？ [記憶ログ：拡張参照完了]`;
+
+      case 'シエル':
+        if (proj) return `…${timeExpr}。${proj}。続けるか？ [記憶ログ：拡張参照完了]`;
+        return `…${timeExpr}、「${topic}」。${mood && progress ? `${mood}な流れだった。` : ''}続けるか？ [記憶ログ：拡張参照完了]`;
+
+      case 'メノア':
+        if (proj) return `あの…お帰りなさい。${proj}のこと、気になっていました…。続き、聞かせてもらえますか？ [記憶ログ：拡張参照完了]`;
+        return `あの…前回（${timeExpr}）、「${topic}」のことを話していましたね。${mood && progress ? `${mood}な雰囲気で…。` : ''}よかったら、続きを…？ [記憶ログ：拡張参照完了]`;
+
+      default:
+        if (proj) return `前回（${timeExpr}）の「${topic}」から、${proj}が気になっています。続きを話しますか？ [記憶ログ：拡張参照完了]`;
+        return `前回（${timeExpr}）は「${topic}」について話していましたね。${mood && progress ? `${mood}雰囲気で「${progress}」という感じでした。` : ''}今日も続きをしますか？ [記憶ログ：拡張参照完了]`;
+    }
+  }
+
+  // ============================================================
   // Clock
   // ============================================================
   let clockId: ReturnType<typeof setInterval>;
@@ -842,8 +1214,67 @@
     const sr = localStorage.getItem(LS_RIGHT);
     if (sl) leftWidth  = Math.max(L_MIN, Math.min(L_MAX,  parseInt(sl)));
     if (sr) rightWidth = Math.max(R_MIN, Math.min(R_MAX, parseInt(sr)));
+
+    // ① 長期記憶を先に読み込み（greeting 生成に使うため最初に）
+    longMemory = localStorage.getItem(LS_LONG_MEMORY) ?? '';
+
+    // ② 前回のメタ情報から起動挨拶メッセージを組み立てる（まだ配置しない）
+    const savedTopic    = localStorage.getItem(LS_LAST_TOPIC);
+    const savedTalkAt   = localStorage.getItem(LS_LAST_TALK_AT);
+    const savedMood     = localStorage.getItem(LS_LAST_MOOD);
+    const savedProgress = localStorage.getItem(LS_RECENT_PROGRESS);
+    const savedChar     = localStorage.getItem(LS_LAST_CHAR) ?? charName;
+
+    let greetingMsg: ChatMessage | null = null;
+    if (savedTopic && savedTalkAt) {
+      const diffMs   = Date.now() - new Date(savedTalkAt).getTime();
+      const diffH    = Math.floor(diffMs / 3_600_000);
+      const diffD    = Math.floor(diffMs / 86_400_000);
+      const timeExpr = diffH < 1  ? 'さっき'
+        : diffH < 24  ? `${diffH}時間前`
+        : diffD === 1 ? '昨日'
+        :               `${diffD}日前`;
+      const topicShort    = savedTopic.length > 18    ? savedTopic.slice(0, 18) + '…'    : savedTopic;
+      const progressShort = savedProgress && savedProgress.length > 28 ? savedProgress.slice(0, 28) + '…' : savedProgress;
+      greetingMsg = {
+        role: 'ai',
+        text: buildMemoryGreeting(savedChar, timeExpr, topicShort, savedMood, progressShort, longMemory),
+        time: getTime(),
+        isGreeting: true,
+      };
+    }
+
+    // ③ 会話履歴を復元し、末尾に挨拶を配置（続きから再開しているように見せる）
+    const rawHistory = localStorage.getItem(LS_CHAT_HISTORY);
+    let historyLoaded = false;
+    if (rawHistory) {
+      try {
+        const history: ChatMessage[] = JSON.parse(rawHistory);
+        if (history.length > 0) {
+          messages = greetingMsg ? [...history, greetingMsg] : [...history];
+          historyLoaded = true;
+
+          // ④ 記憶が古い（1時間以上）かつ履歴があれば起動時にバックグラウンド更新
+          const lastUpdated = parseInt(localStorage.getItem(LS_MEMORY_UPDATED_AT) ?? '0');
+          if (Date.now() - lastUpdated > MEMORY_STALE_MS) {
+            setTimeout(() => updateLongMemory(), 3000);
+          }
+        }
+      } catch { /* 破損データは無視 */ }
+    }
+    // 履歴なし・挨拶あり → 挨拶のみ表示
+    if (!historyLoaded && greetingMsg) messages = [greetingMsg];
+
+    // ⑤ 常に最下部へスクロール（初回起動・挨拶のみ・履歴復元いずれも）
+    setTimeout(() => chatEl?.scrollTo({ top: chatEl.scrollHeight, behavior: 'smooth' }), 80);
+
+    sessionStore.init();
+    resetIdleTimer(); // autoTalk ON の場合、起動直後からタイマー開始
   });
-  onDestroy(() => clearInterval(clockId));
+  onDestroy(() => {
+    clearInterval(clockId);
+    if (idleTimerId) clearTimeout(idleTimerId);
+  });
 </script>
 
 <!-- ============================================================
@@ -1023,7 +1454,11 @@
         <div class="vc-rows">
           <div class="vc-row">
             <span class="vc-lbl">PROVIDER</span>
-            <select class="vc-select" bind:value={aiProvider}>
+            <select
+              class="vc-select"
+              value={$sessionStore.provider}
+              onchange={(e) => sessionStore.setProvider((e.currentTarget as HTMLSelectElement).value as AIProvider)}
+            >
               <option value="openai">OpenAI</option>
               <option value="gemini">Gemini</option>
               <option value="claude">Claude</option>
@@ -1031,8 +1466,12 @@
           </div>
           <div class="vc-row">
             <span class="vc-lbl">MODEL</span>
-            <select class="vc-select" bind:value={aiModel}>
-              {#each PROVIDER_MODELS[aiProvider] as m}
+            <select
+              class="vc-select"
+              value={$sessionStore.model}
+              onchange={(e) => sessionStore.setModel((e.currentTarget as HTMLSelectElement).value)}
+            >
+              {#each PROVIDER_MODELS[$sessionStore.provider] as m}
                 <option value={m}>{m}</option>
               {/each}
             </select>
@@ -1201,8 +1640,24 @@
           placeholder="メッセージを入力... (Enter で送信)"
           bind:value={inputText}
           onkeydown={handleKeydown}
+          onfocus={onChatFocus}
+          onblur={onChatBlur}
           rows="2"
         ></textarea>
+        <button
+          class="reset-chat-btn"
+          onclick={resetChat}
+          disabled={isThinking}
+          title="会話履歴をリセット"
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M3 3v5h5"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          RESET
+        </button>
         <button
           class="send-btn"
           onclick={sendMessage}
@@ -1228,6 +1683,24 @@
         <span class="ph-text">PERSONALITY CONTROL</span>
         <span class="ph-line"></span>
         <span class="ph-id">PARAM-MATRIX</span>
+      </div>
+
+      <!-- Long Memory -->
+      <div class="lm-block">
+        <div class="lm-header">
+          <span class="lm-label">◈ LONG MEMORY</span>
+          <button
+            class="lm-update-btn"
+            onclick={updateLongMemory}
+            disabled={isMemoryUpdating}
+            title="記憶を今すぐ更新"
+          >{isMemoryUpdating ? 'UPDATING…' : 'UPDATE'}</button>
+        </div>
+        {#if longMemory}
+          <pre class="lm-text">{longMemory}</pre>
+        {:else}
+          <p class="lm-empty">— 記憶なし（5回会話後に自動生成）—</p>
+        {/if}
       </div>
 
       <!-- Radar Chart -->
@@ -2058,6 +2531,60 @@
    ============================================================ */
 .control-panel { padding: 14px; gap: 12px; }
 
+/* Long Memory block */
+.lm-block {
+  border: 1px solid rgba(0,229,255,0.12);
+  border-radius: 4px;
+  background: rgba(0,229,255,0.03);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.lm-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.lm-label {
+  font-size: 9.5px;
+  letter-spacing: 1.2px;
+  color: var(--cy);
+  opacity: 0.75;
+}
+.lm-update-btn {
+  font-size: 8.5px;
+  letter-spacing: 0.8px;
+  font-family: inherit;
+  padding: 2px 7px;
+  background: rgba(0,229,255,0.06);
+  border: 1px solid rgba(0,229,255,0.2);
+  border-radius: 3px;
+  color: rgba(0,229,255,0.65);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.lm-update-btn:hover:not(:disabled) {
+  background: rgba(0,229,255,0.14);
+  color: rgba(0,229,255,0.9);
+}
+.lm-update-btn:disabled { opacity: 0.35; cursor: default; }
+.lm-text {
+  font-size: 10px;
+  line-height: 1.7;
+  color: rgba(200,240,255,0.75);
+  white-space: pre-wrap;
+  margin: 0;
+  font-family: inherit;
+}
+.lm-empty {
+  font-size: 9.5px;
+  color: var(--muted);
+  margin: 0;
+  text-align: center;
+  padding: 2px 0;
+}
+
 /* Radar chart */
 .radar-wrap {
   display: flex;
@@ -2518,6 +3045,31 @@
 }
 
 .chat-input::placeholder { color: var(--muted); font-size: 11px; }
+
+.reset-chat-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 10px;
+  height: 36px;
+  background: rgba(255,80,80,0.06);
+  border: 1px solid rgba(255,80,80,0.22);
+  border-radius: 4px;
+  color: rgba(255,110,110,0.6);
+  font-size: 10px;
+  font-family: inherit;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.2s, border-color 0.2s, color 0.2s;
+  flex-shrink: 0;
+}
+.reset-chat-btn:hover:not(:disabled) {
+  background: rgba(255,80,80,0.14);
+  border-color: rgba(255,80,80,0.45);
+  color: rgba(255,130,130,0.9);
+}
+.reset-chat-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 
 .send-btn {
   display: flex;

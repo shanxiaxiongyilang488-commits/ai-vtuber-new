@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { PROVIDER_MODELS, DEFAULT_MODELS } from '$lib/config/models';
 
   // ── Types ──────────────────────────────────────────────────────────────────
   type ConnectionStatus = 'not_tested' | 'connected' | 'failed' | 'quota' | 'invalid_key' | 'testing';
@@ -22,26 +23,19 @@
   // ── State ──────────────────────────────────────────────────────────────────
   let openai = $state<ApiSection>({
     key: '',
-    model: 'gpt-4o',
+    model: DEFAULT_MODELS.openai,
     status: 'not_tested',
   });
 
   let claude = $state<ApiSection>({
     key: '',
-    model: 'claude-sonnet-4-6',
+    model: DEFAULT_MODELS.claude,
     status: 'not_tested',
   });
 
-  const GEMINI_MODELS = [
-    'gemini-2.5-flash',
-    'gemini-2.5-pro',
-    'gemini-3-flash-preview',
-    'gemini-3-pro-preview',
-  ] as const;
-
   let gemini = $state<ApiSection>({
     key: '',
-    model: 'gemini-2.5-flash',
+    model: DEFAULT_MODELS.gemini,
     status: 'not_tested',
   });
 
@@ -59,13 +53,13 @@
     const g = (k: string) => localStorage.getItem(k) ?? '';
 
     openai.key   = g('api_openai_key');
-    openai.model = g('api_openai_model') || 'gpt-4o';
+    openai.model = g('api_openai_model') || DEFAULT_MODELS.openai;
 
     claude.key   = g('api_claude_key');
-    claude.model = g('api_claude_model') || 'claude-sonnet-4-6';
+    claude.model = g('api_claude_model') || DEFAULT_MODELS.claude;
 
     gemini.key   = g('api_gemini_key');
-    gemini.model = g('api_gemini_model') || 'gemini-2.5-flash';
+    gemini.model = g('api_gemini_model') || DEFAULT_MODELS.gemini;
 
     local.baseUrl = g('api_local_url') || 'http://localhost:1234';
     local.model   = g('api_local_model') || 'local-model';
@@ -205,12 +199,11 @@
         </label>
         <label class="field">
           <span class="field-label">Model</span>
-          <input
-            type="text"
-            class="input"
-            placeholder="gpt-4o"
-            bind:value={openai.model}
-          />
+          <select class="input select-input" bind:value={openai.model}>
+            {#each PROVIDER_MODELS.openai as m}
+              <option value={m}>{m}</option>
+            {/each}
+          </select>
         </label>
       </div>
 
@@ -247,12 +240,11 @@
         </label>
         <label class="field">
           <span class="field-label">Model</span>
-          <input
-            type="text"
-            class="input"
-            placeholder="claude-sonnet-4-6"
-            bind:value={claude.model}
-          />
+          <select class="input select-input" bind:value={claude.model}>
+            {#each PROVIDER_MODELS.claude as m}
+              <option value={m}>{m}</option>
+            {/each}
+          </select>
         </label>
       </div>
 
@@ -290,7 +282,7 @@
         <label class="field">
           <span class="field-label">Model</span>
           <select class="input select-input" bind:value={gemini.model}>
-            {#each GEMINI_MODELS as m}
+            {#each PROVIDER_MODELS.gemini as m}
               <option value={m}>{m}</option>
             {/each}
           </select>
