@@ -816,6 +816,18 @@
   ];
 
   // ============================================================
+  // Layout Mode
+  // ============================================================
+  type LayoutMode = '3col' | '2col';
+  let layoutMode = $state<LayoutMode>('3col');
+  const LS_LAYOUT_MODE = 'lab-layout-mode';
+
+  function setLayoutMode(m: LayoutMode) {
+    layoutMode = m;
+    localStorage.setItem(LS_LAYOUT_MODE, m);
+  }
+
+  // ============================================================
   // Column resize
   // ============================================================
   const LS_LEFT       = 'lab-left-width';
@@ -1214,6 +1226,8 @@ ${recent}
     const sr = localStorage.getItem(LS_RIGHT);
     if (sl) leftWidth  = Math.max(L_MIN, Math.min(L_MAX,  parseInt(sl)));
     if (sr) rightWidth = Math.max(R_MIN, Math.min(R_MAX, parseInt(sr)));
+    const slm = localStorage.getItem(LS_LAYOUT_MODE);
+    if (slm === '3col' || slm === '2col') layoutMode = slm;
 
     // ① 長期記憶を先に読み込み（greeting 生成に使うため最初に）
     longMemory = localStorage.getItem(LS_LONG_MEMORY) ?? '';
@@ -1315,11 +1329,25 @@ ${recent}
       </div>
       <div class="clock">{currentTime}</div>
       <div class="build-badge">v2.5</div>
+      <div class="layout-switch" role="group" aria-label="Layout mode">
+        <button
+          class="ls-btn"
+          class:active={layoutMode === '3col'}
+          onclick={() => setLayoutMode('3col')}
+          title="Research layout (3 columns)"
+        >3COL</button>
+        <button
+          class="ls-btn"
+          class:active={layoutMode === '2col'}
+          onclick={() => setLayoutMode('2col')}
+          title="Viewer layout (chat + large viewer)"
+        >2COL</button>
+      </div>
       <a href="/settings/api" class="api-settings-btn">⚙ API設定</a>
     </div>
   </header>
 
-  <!-- ==================== MAIN 3-COLUMN GRID ==================== -->
+  <!-- ==================== MAIN 2-COLUMN GRID ==================== -->
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <main
     class="lab-main"
@@ -1329,233 +1357,7 @@ ${recent}
     onmouseleave={onRsEnd}
   >
 
-    <!-- ===== LEFT: Character Core ===== -->
-    <section class="panel char-panel" style="width:{leftWidth}px">
-      <div class="panel-hd">
-        <span class="ph-diamond">◆</span>
-        <span class="ph-text">CHARACTER CORE</span>
-        <span class="ph-line"></span>
-        <span class="ph-id">CH-001</span>
-      </div>
-
-      <!-- Avatar display -->
-      <div class="avatar-wrap" class:glow-active={avatarEffects.glowPulse}>
-        <div
-          class="avatar-ring"
-          style="animation-play-state: {avatarEffects.rotate ? 'running' : 'paused'}"
-        >
-          <div class="avatar-inner">
-            <img
-              src={selectedAvatar}
-              alt={charName}
-              class="av-img"
-              onerror={(e) => { (e.target as HTMLImageElement).src = '/avatars/default.png'; }}
-            />
-            <div class="scan-line"></div>
-          </div>
-        </div>
-
-        <!-- Name display / edit -->
-        <div class="av-name-row">
-          {#if editingName}
-            <input
-              class="av-name-input"
-              type="text"
-              bind:value={charName}
-              onblur={() => { editingName = false; }}
-              onkeydown={(e) => { if (e.key === 'Enter') editingName = false; }}
-              />
-          {:else}
-            <button class="av-name" onclick={() => { editingName = true; }}>{charName}</button>
-          {/if}
-        </div>
-        <div class="av-mode">{charMode}</div>
-      </div>
-
-      <!-- Avatar selector grid -->
-      <div class="av-selector">
-        <div class="section-lbl">CHARACTER SELECT</div>
-        <div class="av-grid">
-          {#each AVATARS as av}
-            <button
-              class="av-thumb"
-              class:active={selectedAvatar === av.file}
-              onclick={() => selectAvatar(av.file, av.name)}
-              title={av.name}
-            >
-              <img
-                src={av.file}
-                alt={av.name}
-                onerror={(e) => { (e.target as HTMLImageElement).src = '/avatars/default.png'; }}
-              />
-              <span>{av.name}</span>
-            </button>
-          {/each}
-        </div>
-      </div>
-
-      <!-- Avatar Effects -->
-      <div class="av-effects">
-        <div class="section-lbl">AVATAR EFFECTS</div>
-        <div class="toggle-list">
-          <label class="toggle-item">
-            <input type="checkbox" class="toggle-cb" bind:checked={avatarEffects.rotate} />
-            <span class="toggle-track"><span class="toggle-thumb"></span></span>
-            <span class="toggle-lbl">Rotate ON</span>
-          </label>
-          <label class="toggle-item">
-            <input type="checkbox" class="toggle-cb" bind:checked={avatarEffects.glowPulse} />
-            <span class="toggle-track"><span class="toggle-thumb"></span></span>
-            <span class="toggle-lbl">Glow Pulse ON</span>
-          </label>
-        </div>
-      </div>
-
-      <!-- Voice Config -->
-      <div class="av-effects voice-cfg-block">
-        <div class="section-lbl">VOICE CONFIG</div>
-        <div class="vc-rows">
-          <div class="vc-row">
-            <span class="vc-lbl">ENGINE</span>
-            <select class="vc-select" bind:value={voiceEngine}>
-              <option value="none">NONE</option>
-              <option value="voicevox">VOICEVOX</option>
-              <option value="elevenlabs">ELEVENLABS</option>
-            </select>
-          </div>
-          {#if voiceEngine === 'voicevox'}
-            <div class="vc-row">
-              <span class="vc-lbl">SPEAKER ID</span>
-              <input
-                type="number"
-                class="vc-input"
-                bind:value={speakerId}
-                min="0" max="999"
-              />
-            </div>
-          {/if}
-          {#if voiceEngine === 'elevenlabs'}
-            <div class="vc-row">
-              <span class="vc-lbl">VOICE ID</span>
-              <input
-                type="text"
-                class="vc-input"
-                bind:value={voiceId}
-                placeholder="voice id…"
-              />
-            </div>
-          {/if}
-        </div>
-      </div>
-
-      <!-- AI Config -->
-      <div class="av-effects ai-cfg-block">
-        <div class="section-lbl">AI CONFIG</div>
-        <div class="vc-rows">
-          <div class="vc-row">
-            <span class="vc-lbl">PROVIDER</span>
-            <select
-              class="vc-select"
-              value={$sessionStore.provider}
-              onchange={(e) => sessionStore.setProvider((e.currentTarget as HTMLSelectElement).value as AIProvider)}
-            >
-              <option value="openai">OpenAI</option>
-              <option value="gemini">Gemini</option>
-              <option value="claude">Claude</option>
-            </select>
-          </div>
-          <div class="vc-row">
-            <span class="vc-lbl">MODEL</span>
-            <select
-              class="vc-select"
-              value={$sessionStore.model}
-              onchange={(e) => sessionStore.setModel((e.currentTarget as HTMLSelectElement).value)}
-            >
-              {#each PROVIDER_MODELS[$sessionStore.provider] as m}
-                <option value={m}>{m}</option>
-              {/each}
-            </select>
-          </div>
-        </div>
-
-        <button class="api-check-btn" onclick={checkAPIStatus} disabled={checkingAPI}>
-          {checkingAPI ? 'Checking…' : 'Check API Status'}
-        </button>
-
-        {#if apiStatuses.openai !== '---' || checkingAPI}
-          <div class="api-status-list">
-            <div class="api-status-row">
-              <span class="api-status-name">OpenAI</span>
-              <span class="api-status-val" style="color:{statusColor(apiStatuses.openai)}">{apiStatuses.openai}</span>
-            </div>
-            <div class="api-status-row">
-              <span class="api-status-name">Gemini</span>
-              <span class="api-status-val" style="color:{statusColor(apiStatuses.gemini)}">{apiStatuses.gemini}</span>
-            </div>
-            <div class="api-status-row">
-              <span class="api-status-name">Claude</span>
-              <span class="api-status-val" style="color:{statusColor(apiStatuses.claude)}">{apiStatuses.claude}</span>
-            </div>
-          </div>
-        {/if}
-      </div>
-
-      <!-- Stats -->
-      <div class="char-stats">
-        <div class="stat-row mood-row">
-          <span class="stat-lbl">Mood</span>
-          <span class="mood-val" style="color:{moodColor}; text-shadow: 0 0 10px {moodColor}60">{mood}</span>
-        </div>
-
-        <div class="stat-row">
-          <span class="stat-lbl">Battery</span>
-          <div class="bar-wrap">
-            <div class="bar battery-bar" style="width:{battery}%"></div>
-          </div>
-          <span class="stat-num">{battery}%</span>
-        </div>
-
-        <div class="stat-row">
-          <span class="stat-lbl">Trust</span>
-          <div class="bar-wrap">
-            <div class="bar trust-bar" style="width:{personality.trust}%"></div>
-          </div>
-          <span class="stat-num">{personality.trust}</span>
-        </div>
-
-        <div class="stat-row">
-          <span class="stat-lbl">Affection</span>
-          <div class="bar-wrap">
-            <div class="bar affection-bar" style="width:{personality.affection}%"></div>
-          </div>
-          <span class="stat-num">{personality.affection}</span>
-        </div>
-      </div>
-
-      <!-- Status log -->
-      <div class="char-log">
-        <div class="log-title">SYSTEM LOG</div>
-        <div class="log-entry"><span class="ld ok"></span>Emotion Core Stable</div>
-        <div class="log-entry"><span class="ld ok"></span>Voice Link Active</div>
-        <div class="log-entry">
-          <span class="ld {memorySyncOk ? 'ok' : 'warn'}"></span>
-          Memory Sync {memorySyncOk ? 'Ready' : 'Pending'}
-        </div>
-        <div class="log-entry">
-          <span class="ld {toggles.androidMode ? 'ok' : 'off'}"></span>
-          Android Mode {toggles.androidMode ? 'ACTIVE' : 'STANDBY'}
-        </div>
-        <div class="log-entry">
-          <span class="ld {toggles.specialMode ? 'special' : 'off'}"></span>
-          Special Mode {toggles.specialMode ? 'ON' : 'OFF'}
-        </div>
-      </div>
-    </section>
-
-    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <div class="resize-bar" onmousedown={(e) => startResize('left', e)} aria-hidden="true"></div>
-
-    <!-- ===== MIDDLE: Chat Simulation ===== -->
+    <!-- ===== LEFT: Chat Simulation ===== -->
     <section class="panel chat-panel">
       <div class="panel-hd">
         <span class="ph-diamond">◆</span>
@@ -1673,12 +1475,245 @@ ${recent}
       </div>
     </section>
 
+  {#if layoutMode === '3col'}
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <div class="resize-bar" onmousedown={(e) => startResize('right', e)} aria-hidden="true"></div>
 
-    <!-- ===== RIGHT: Personality Control ===== -->
-    <section class="panel control-panel" style="width:{rightWidth}px">
+    <!-- ===== RIGHT: Character Viewer + Controls ===== -->
+    <section class="panel right-panel" style="width:{rightWidth}px">
+
+      <!-- ── CHARACTER VIEWER ── -->
       <div class="panel-hd">
+        <span class="ph-diamond">◆</span>
+        <span class="ph-text">CHARACTER VIEWER</span>
+        <span class="ph-line"></span>
+        <span class="ph-id">UNIT-VIEW</span>
+      </div>
+
+      <div class="char-viewer">
+        <!-- キャラクター画像表示エリア -->
+        <div class="cv-avatar-wrap" class:glow-active={avatarEffects.glowPulse}>
+          <div
+            class="cv-avatar-ring"
+            style="animation-play-state: {avatarEffects.rotate ? 'running' : 'paused'}"
+          >
+            <div class="avatar-inner">
+              <img
+                src={selectedAvatar}
+                alt={charName}
+                class="av-img"
+                onerror={(e) => { (e.target as HTMLImageElement).src = '/avatars/default.png'; }}
+              />
+              <div class="scan-line"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- キャラ名 -->
+        <div class="av-name-row">
+          {#if editingName}
+            <input
+              class="av-name-input"
+              type="text"
+              bind:value={charName}
+              onblur={() => { editingName = false; }}
+              onkeydown={(e) => { if (e.key === 'Enter') editingName = false; }}
+            />
+          {:else}
+            <button class="av-name cv-name-large" onclick={() => { editingName = true; }}>{charName}</button>
+          {/if}
+        </div>
+        <div class="av-mode">{charMode}</div>
+
+        <!-- Speaking... 表示 -->
+        <div class="cv-speaking" class:active={isThinking}>
+          {#if isThinking}
+            <span class="dot-bounce"></span>
+            <span class="dot-bounce" style="animation-delay:0.18s"></span>
+            <span class="dot-bounce" style="animation-delay:0.36s"></span>
+            <span class="cv-speak-label">Speaking...</span>
+          {:else}
+            <span class="cv-standby">◉ STANDBY</span>
+          {/if}
+        </div>
+
+        <!-- 音声進行バー（ダミー） -->
+        <div class="cv-voice-wrap">
+          <div class="cv-voice-label">VOICE OUTPUT</div>
+          <div class="cv-voice-track">
+            <div class="cv-voice-fill" class:speaking={isThinking}></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── CHARACTER CORE ── -->
+      <div class="panel-hd cv-sub-hd">
+        <span class="ph-diamond">◆</span>
+        <span class="ph-text">CHARACTER CORE</span>
+        <span class="ph-line"></span>
+        <span class="ph-id">CH-001</span>
+      </div>
+
+      <!-- Avatar selector grid -->
+      <div class="av-selector">
+        <div class="section-lbl">CHARACTER SELECT</div>
+        <div class="av-grid">
+          {#each AVATARS as av}
+            <button
+              class="av-thumb"
+              class:active={selectedAvatar === av.file}
+              onclick={() => selectAvatar(av.file, av.name)}
+              title={av.name}
+            >
+              <img
+                src={av.file}
+                alt={av.name}
+                onerror={(e) => { (e.target as HTMLImageElement).src = '/avatars/default.png'; }}
+              />
+              <span>{av.name}</span>
+            </button>
+          {/each}
+        </div>
+      </div>
+
+      <!-- Avatar Effects -->
+      <div class="av-effects">
+        <div class="section-lbl">AVATAR EFFECTS</div>
+        <div class="toggle-list">
+          <label class="toggle-item">
+            <input type="checkbox" class="toggle-cb" bind:checked={avatarEffects.rotate} />
+            <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            <span class="toggle-lbl">Rotate ON</span>
+          </label>
+          <label class="toggle-item">
+            <input type="checkbox" class="toggle-cb" bind:checked={avatarEffects.glowPulse} />
+            <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            <span class="toggle-lbl">Glow Pulse ON</span>
+          </label>
+        </div>
+      </div>
+
+      <!-- Voice Config -->
+      <div class="av-effects voice-cfg-block">
+        <div class="section-lbl">VOICE CONFIG</div>
+        <div class="vc-rows">
+          <div class="vc-row">
+            <span class="vc-lbl">ENGINE</span>
+            <select class="vc-select" bind:value={voiceEngine}>
+              <option value="none">NONE</option>
+              <option value="voicevox">VOICEVOX</option>
+              <option value="elevenlabs">ELEVENLABS</option>
+            </select>
+          </div>
+          {#if voiceEngine === 'voicevox'}
+            <div class="vc-row">
+              <span class="vc-lbl">SPEAKER ID</span>
+              <input type="number" class="vc-input" bind:value={speakerId} min="0" max="999" />
+            </div>
+          {/if}
+          {#if voiceEngine === 'elevenlabs'}
+            <div class="vc-row">
+              <span class="vc-lbl">VOICE ID</span>
+              <input type="text" class="vc-input" bind:value={voiceId} placeholder="voice id…" />
+            </div>
+          {/if}
+        </div>
+      </div>
+
+      <!-- AI Config -->
+      <div class="av-effects ai-cfg-block">
+        <div class="section-lbl">AI CONFIG</div>
+        <div class="vc-rows">
+          <div class="vc-row">
+            <span class="vc-lbl">PROVIDER</span>
+            <select
+              class="vc-select"
+              value={$sessionStore.provider}
+              onchange={(e) => sessionStore.setProvider((e.currentTarget as HTMLSelectElement).value as AIProvider)}
+            >
+              <option value="openai">OpenAI</option>
+              <option value="gemini">Gemini</option>
+              <option value="claude">Claude</option>
+            </select>
+          </div>
+          <div class="vc-row">
+            <span class="vc-lbl">MODEL</span>
+            <select
+              class="vc-select"
+              value={$sessionStore.model}
+              onchange={(e) => sessionStore.setModel((e.currentTarget as HTMLSelectElement).value)}
+            >
+              {#each PROVIDER_MODELS[$sessionStore.provider] as m}
+                <option value={m}>{m}</option>
+              {/each}
+            </select>
+          </div>
+        </div>
+        <button class="api-check-btn" onclick={checkAPIStatus} disabled={checkingAPI}>
+          {checkingAPI ? 'Checking…' : 'Check API Status'}
+        </button>
+        {#if apiStatuses.openai !== '---' || checkingAPI}
+          <div class="api-status-list">
+            <div class="api-status-row">
+              <span class="api-status-name">OpenAI</span>
+              <span class="api-status-val" style="color:{statusColor(apiStatuses.openai)}">{apiStatuses.openai}</span>
+            </div>
+            <div class="api-status-row">
+              <span class="api-status-name">Gemini</span>
+              <span class="api-status-val" style="color:{statusColor(apiStatuses.gemini)}">{apiStatuses.gemini}</span>
+            </div>
+            <div class="api-status-row">
+              <span class="api-status-name">Claude</span>
+              <span class="api-status-val" style="color:{statusColor(apiStatuses.claude)}">{apiStatuses.claude}</span>
+            </div>
+          </div>
+        {/if}
+      </div>
+
+      <!-- Stats -->
+      <div class="char-stats">
+        <div class="stat-row mood-row">
+          <span class="stat-lbl">Mood</span>
+          <span class="mood-val" style="color:{moodColor}; text-shadow: 0 0 10px {moodColor}60">{mood}</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-lbl">Battery</span>
+          <div class="bar-wrap"><div class="bar battery-bar" style="width:{battery}%"></div></div>
+          <span class="stat-num">{battery}%</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-lbl">Trust</span>
+          <div class="bar-wrap"><div class="bar trust-bar" style="width:{personality.trust}%"></div></div>
+          <span class="stat-num">{personality.trust}</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-lbl">Affection</span>
+          <div class="bar-wrap"><div class="bar affection-bar" style="width:{personality.affection}%"></div></div>
+          <span class="stat-num">{personality.affection}</span>
+        </div>
+      </div>
+
+      <!-- Status log -->
+      <div class="char-log">
+        <div class="log-title">SYSTEM LOG</div>
+        <div class="log-entry"><span class="ld ok"></span>Emotion Core Stable</div>
+        <div class="log-entry"><span class="ld ok"></span>Voice Link Active</div>
+        <div class="log-entry">
+          <span class="ld {memorySyncOk ? 'ok' : 'warn'}"></span>
+          Memory Sync {memorySyncOk ? 'Ready' : 'Pending'}
+        </div>
+        <div class="log-entry">
+          <span class="ld {toggles.androidMode ? 'ok' : 'off'}"></span>
+          Android Mode {toggles.androidMode ? 'ACTIVE' : 'STANDBY'}
+        </div>
+        <div class="log-entry">
+          <span class="ld {toggles.specialMode ? 'special' : 'off'}"></span>
+          Special Mode {toggles.specialMode ? 'ON' : 'OFF'}
+        </div>
+      </div>
+
+      <!-- ── PERSONALITY CONTROL ── -->
+      <div class="panel-hd cv-sub-hd">
         <span class="ph-diamond">◆</span>
         <span class="ph-text">PERSONALITY CONTROL</span>
         <span class="ph-line"></span>
@@ -1706,63 +1741,31 @@ ${recent}
       <!-- Radar Chart -->
       <div class="radar-wrap">
         <svg viewBox="0 0 250 250" class="radar-svg" aria-label="Personality radar chart">
-          <!-- Background grid rings -->
           {#each [0.25, 0.5, 0.75, 1.0] as frac}
-            <polygon
-              points={gridRing(frac)}
-              fill="none"
-              stroke="rgba(0,229,255,0.08)"
-              stroke-width={frac === 1.0 ? 1.2 : 0.9}
-            />
+            <polygon points={gridRing(frac)} fill="none" stroke="rgba(0,229,255,0.08)"
+              stroke-width={frac === 1.0 ? 1.2 : 0.9} />
           {/each}
-
-          <!-- Axis lines -->
           {#each RADAR_KEYS as _, i}
             {@const end = pt(i, 1)}
-            <line
-              x1={CX} y1={CY}
-              x2={end.x} y2={end.y}
-              stroke="rgba(0,229,255,0.12)"
-              stroke-width="0.9"
-            />
+            <line x1={CX} y1={CY} x2={end.x} y2={end.y}
+              stroke="rgba(0,229,255,0.12)" stroke-width="0.9" />
           {/each}
-
-          <!-- Filled area -->
-          <polygon
-            points={radarPolygon}
-            fill="rgba(0,229,255,0.09)"
-            stroke="rgba(0,229,255,0.65)"
-            stroke-width="1.8"
-            style="filter: drop-shadow(0 0 5px rgba(0,229,255,0.45))"
-          />
-
-          <!-- Vertex dots -->
+          <polygon points={radarPolygon} fill="rgba(0,229,255,0.09)"
+            stroke="rgba(0,229,255,0.65)" stroke-width="1.8"
+            style="filter: drop-shadow(0 0 5px rgba(0,229,255,0.45))" />
           {#each RADAR_KEYS as k, i}
             {@const p = pt(i, personality[k] / 100)}
-            <circle cx={p.x} cy={p.y} r="4"
-              fill={RADAR_COLORS[i]}
-              stroke="rgba(0,0,20,0.8)"
-              stroke-width="1.2"
-              style="filter: drop-shadow(0 0 5px {RADAR_COLORS[i]})"
-            />
+            <circle cx={p.x} cy={p.y} r="4" fill={RADAR_COLORS[i]}
+              stroke="rgba(0,0,20,0.8)" stroke-width="1.2"
+              style="filter: drop-shadow(0 0 5px {RADAR_COLORS[i]})" />
           {/each}
-
-          <!-- Axis labels -->
           {#each RADAR_LABELS as label, i}
             {@const lp = labelPt(i)}
-            <text
-              x={lp.x} y={lp.y}
-              text-anchor="middle"
-              dominant-baseline="central"
-              font-size="9.5"
-              font-family="Consolas, monospace"
-              fill={RADAR_COLORS[i]}
+            <text x={lp.x} y={lp.y} text-anchor="middle" dominant-baseline="central"
+              font-size="9.5" font-family="Consolas, monospace" fill={RADAR_COLORS[i]}
               style="filter: drop-shadow(0 0 3px {RADAR_COLORS[i]}70)"
-              letter-spacing="0.5"
-            >{label}</text>
+              letter-spacing="0.5">{label}</text>
           {/each}
-
-          <!-- Center dot -->
           <circle cx={CX} cy={CY} r="3" fill="rgba(0,229,255,0.45)"/>
         </svg>
       </div>
@@ -1783,8 +1786,7 @@ ${recent}
             </div>
             <div class="slider-track-outer">
               <input
-                type="range"
-                min="0" max="100"
+                type="range" min="0" max="100"
                 class="cyber-slider"
                 style="--sc:{s.color}; --pct:{personality[s.key]}%"
                 bind:value={personality[s.key]}
@@ -1794,7 +1796,6 @@ ${recent}
             <span class="slider-val" style="color:{s.color}; text-shadow: 0 0 8px {s.color}60">
               {personality[s.key]}
             </span>
-
             {#if tooltipKey === s.key}
               <div class="slider-tooltip">
                 <span class="tt-key">{s.label}</span>
@@ -1813,9 +1814,7 @@ ${recent}
           {#each TOGGLE_LIST as item}
             <label class="toggle-item">
               <input type="checkbox" class="toggle-cb" bind:checked={toggles[item.key]} />
-              <span class="toggle-track">
-                <span class="toggle-thumb"></span>
-              </span>
+              <span class="toggle-track"><span class="toggle-thumb"></span></span>
               <span class="toggle-lbl">{item.label}</span>
             </label>
           {/each}
@@ -1839,6 +1838,74 @@ ${recent}
         </div>
       </div>
     </section>
+
+  {:else}
+    <!-- ===== 2COL: Large Character Viewer ===== -->
+    <section class="panel char-viewer-large">
+      <div class="panel-hd">
+        <span class="ph-diamond">◆</span>
+        <span class="ph-text">CHARACTER VIEWER</span>
+        <span class="ph-line"></span>
+        <div class="cv-type-tabs" role="group" aria-label="Viewer type">
+          <button class="cv-tab active" disabled>IMAGE</button>
+          <button class="cv-tab" disabled title="近日対応予定">PNG-TUBER</button>
+          <button class="cv-tab" disabled title="近日対応予定">VRM</button>
+        </div>
+      </div>
+
+      <!-- Large image display area -->
+      <div class="cvl-stage" class:glow-active={avatarEffects.glowPulse}>
+        <div class="cvl-ring" style="animation-play-state:{avatarEffects.rotate ? 'running' : 'paused'}">
+          <div class="cvl-inner">
+            <img
+              src={selectedAvatar}
+              alt={charName}
+              class="cvl-img"
+              onerror={(e) => { (e.target as HTMLImageElement).src = '/avatars/default.png'; }}
+            />
+            <div class="scan-line"></div>
+          </div>
+        </div>
+
+        <!-- Thinking overlay dots -->
+        {#if isThinking}
+          <div class="cvl-thinking-overlay">
+            <span class="dot-bounce"></span>
+            <span class="dot-bounce" style="animation-delay:0.18s"></span>
+            <span class="dot-bounce" style="animation-delay:0.36s"></span>
+          </div>
+        {/if}
+      </div>
+
+      <!-- Info bar at bottom -->
+      <div class="cvl-info-bar">
+        <div class="cvl-name-block">
+          <span class="cvl-name">{charName}</span>
+          <span class="cvl-mode">{charMode}</span>
+        </div>
+        <div class="cvl-status-block">
+          <span class="cvl-mood" style="color:{moodColor}; text-shadow:0 0 10px {moodColor}60">{mood}</span>
+          {#if isThinking}
+            <span class="cvl-speak-badge">Speaking…</span>
+          {:else}
+            <span class="cvl-standby">◉ STANDBY</span>
+          {/if}
+        </div>
+        <div class="cvl-bars">
+          <div class="cvl-bar-row">
+            <span class="cvl-bar-lbl">TRUST</span>
+            <div class="cvl-bar-track"><div class="cvl-bar-fill" style="width:{personality.trust}%; background:#00e5ff"></div></div>
+            <span class="cvl-bar-val">{personality.trust}</span>
+          </div>
+          <div class="cvl-bar-row">
+            <span class="cvl-bar-lbl">ENERGY</span>
+            <div class="cvl-bar-track"><div class="cvl-bar-fill" style="width:{personality.energy}%; background:#34d399"></div></div>
+            <span class="cvl-bar-val">{personality.energy}</span>
+          </div>
+        </div>
+      </div>
+    </section>
+  {/if}
   </main>
 
   <!-- ==================== PROMPT MONITOR ==================== -->
@@ -2097,9 +2164,9 @@ ${recent}
   min-width: 200px;
 }
 
-.char-panel,
-.control-panel {
+.right-panel {
   flex-shrink: 0;
+  padding: 14px 12px;
 }
 
 /* ── Resize bar ── */
@@ -3185,6 +3252,115 @@ ${recent}
 .param-chip.hi .pk { color: var(--pu); }
 
 /* ============================================================
+   RIGHT PANEL — CHARACTER VIEWER
+   ============================================================ */
+.char-viewer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 0 16px;
+  border-bottom: 1px solid rgba(0,229,255,0.12);
+}
+
+.cv-avatar-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* Larger ring for the viewer */
+.cv-avatar-ring {
+  width: 200px; height: 200px;
+  border-radius: 50%;
+  padding: 3px;
+  background: conic-gradient(var(--cy) 0%, var(--pu) 50%, var(--cy) 100%);
+  animation: ring-spin 8s linear infinite;
+  flex-shrink: 0;
+}
+
+.cv-avatar-wrap.glow-active .avatar-inner {
+  animation: avatar-glow-pulse 3s ease-in-out infinite;
+}
+
+/* Larger name in the viewer */
+.cv-name-large {
+  font-size: 22px;
+  letter-spacing: 3px;
+  text-shadow: 0 0 18px var(--cy-glow), 0 0 40px rgba(0,229,255,0.1);
+}
+
+/* Speaking indicator */
+.cv-speaking {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  padding: 5px 16px;
+  border-radius: 14px;
+  background: rgba(0,229,255,0.04);
+  border: 1px solid rgba(0,229,255,0.08);
+  transition: border-color 0.3s, background 0.3s, box-shadow 0.3s;
+}
+
+.cv-speaking.active {
+  border-color: rgba(0,229,255,0.38);
+  background: rgba(0,229,255,0.09);
+  box-shadow: 0 0 16px rgba(0,229,255,0.14);
+}
+
+.cv-speak-label {
+  font-size: 11px;
+  letter-spacing: 2px;
+  color: var(--cy);
+  text-shadow: 0 0 8px var(--cy-glow);
+  font-weight: 600;
+}
+
+.cv-standby {
+  font-size: 10px;
+  letter-spacing: 2.5px;
+  color: var(--muted);
+}
+
+/* Voice progress bar */
+.cv-voice-wrap {
+  width: 100%;
+  padding: 0 4px;
+}
+
+.cv-voice-label {
+  font-size: 8.5px;
+  letter-spacing: 2px;
+  color: var(--muted);
+  margin-bottom: 5px;
+}
+
+.cv-voice-track {
+  width: 100%;
+  height: 4px;
+  background: rgba(0,229,255,0.08);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.cv-voice-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--cy), var(--pu));
+  border-radius: 2px;
+}
+
+.cv-voice-fill.speaking {
+  animation: voice-wave 1.4s ease-in-out infinite;
+}
+
+/* Sub-section header spacing inside right-panel */
+.cv-sub-hd {
+  margin-top: 6px;
+}
+
+/* ============================================================
    ANIMATIONS
    ============================================================ */
 @keyframes hex-pulse {
@@ -3224,5 +3400,262 @@ ${recent}
 @keyframes blink {
   0%, 100% { opacity: 1; }
   50%       { opacity: 0.4; }
+}
+
+@keyframes voice-wave {
+  0%   { width: 8%;  }
+  20%  { width: 55%; }
+  40%  { width: 28%; }
+  60%  { width: 78%; }
+  80%  { width: 42%; }
+  100% { width: 8%;  }
+}
+
+/* ============================================================
+   LAYOUT SWITCH (header toggle)
+   ============================================================ */
+.layout-switch {
+  display: flex;
+  border: 1px solid var(--pborder);
+  border-radius: 3px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.ls-btn {
+  font-family: inherit;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  border-right: 1px solid var(--pborder);
+}
+
+.ls-btn:last-child { border-right: none; }
+
+.ls-btn:hover {
+  background: rgba(0,229,255,0.08);
+  color: var(--cy);
+}
+
+.ls-btn.active {
+  background: rgba(0,229,255,0.13);
+  color: var(--cy);
+  text-shadow: 0 0 8px var(--cy-glow);
+}
+
+/* ============================================================
+   2COL: LARGE CHARACTER VIEWER
+   ============================================================ */
+.char-viewer-large {
+  flex: 1.4;
+  min-width: 300px;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 16px;
+  gap: 0;
+  overflow: hidden;
+}
+
+/* Viewer type tabs in panel-hd */
+.cv-type-tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.cv-tab {
+  font-family: inherit;
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  color: var(--muted);
+  background: rgba(0,229,255,0.03);
+  border: 1px solid var(--pborder);
+  padding: 3px 9px;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.cv-tab.active,
+.cv-tab:not([disabled]):hover {
+  color: var(--cy);
+  border-color: var(--cy);
+  background: rgba(0,229,255,0.08);
+  text-shadow: 0 0 6px var(--cy-glow);
+}
+
+.cv-tab[disabled]:not(.active) {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* Large stage area */
+.cvl-stage {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  padding: 24px 0 16px;
+  min-height: 0;
+}
+
+/* Spinning conic ring — large version */
+.cvl-ring {
+  width: min(360px, 55vh);
+  height: min(360px, 55vh);
+  border-radius: 50%;
+  padding: 4px;
+  background: conic-gradient(var(--cy) 0%, var(--pu) 50%, var(--cy) 100%);
+  animation: ring-spin 10s linear infinite;
+  flex-shrink: 0;
+}
+
+/* Glow when glowPulse is on */
+.cvl-stage.glow-active .cvl-inner {
+  animation: avatar-glow-pulse 3s ease-in-out infinite;
+}
+
+.cvl-inner {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--bg2);
+  position: relative;
+  border: 1px solid rgba(0,229,255,0.22);
+}
+
+.cvl-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top;
+  display: block;
+  border-radius: 50%;
+}
+
+/* Thinking dots overlay on large viewer */
+.cvl-thinking-overlay {
+  position: absolute;
+  bottom: 30px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 6px;
+  background: rgba(2,9,18,0.75);
+  padding: 6px 14px;
+  border-radius: 20px;
+  border: 1px solid var(--pborder);
+}
+
+/* Info bar at bottom of 2col viewer */
+.cvl-info-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 10px 4px 4px;
+  border-top: 1px solid var(--pborder);
+  flex-wrap: wrap;
+}
+
+.cvl-name-block {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 90px;
+}
+
+.cvl-name {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 2.5px;
+  color: var(--cy);
+  text-shadow: 0 0 12px var(--cy-glow);
+  line-height: 1;
+}
+
+.cvl-mode {
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.cvl-status-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 80px;
+}
+
+.cvl-mood {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+}
+
+.cvl-speak-badge {
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  color: var(--pu);
+  text-shadow: 0 0 8px var(--pu-glow);
+  animation: blink 0.9s ease-in-out infinite;
+}
+
+.cvl-standby {
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  color: var(--muted);
+}
+
+.cvl-bars {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 120px;
+}
+
+.cvl-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cvl-bar-lbl {
+  font-size: 8.5px;
+  letter-spacing: 1.5px;
+  color: var(--muted);
+  width: 44px;
+  flex-shrink: 0;
+}
+
+.cvl-bar-track {
+  flex: 1;
+  height: 3px;
+  background: rgba(0,229,255,0.08);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.cvl-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+.cvl-bar-val {
+  font-size: 9px;
+  color: var(--text2);
+  width: 22px;
+  text-align: right;
+  flex-shrink: 0;
 }
 </style>
