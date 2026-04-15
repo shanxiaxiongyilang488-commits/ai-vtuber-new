@@ -5,7 +5,9 @@
       "Bash(npx svelte-check:*)",
       "Bash(npm install:*)",
       "Bash(node -e \"const p = require\\(''./package.json''\\); console.log\\(p.dependencies\\)\")",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "Bash(npm run:*)",
+      "Bash(npx vite:*)"
     ]
   }
 }

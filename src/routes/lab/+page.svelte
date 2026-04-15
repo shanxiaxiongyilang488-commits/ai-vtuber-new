@@ -3,6 +3,7 @@
   import { createVoiceEngine } from '$lib/api/voiceEngine';
   import { PROVIDER_MODELS, type AIProvider } from '$lib/config/models';
   import { sessionStore } from '$lib/stores/sessionStore';
+  import AvatarViewer from '$lib/components/AvatarViewer.svelte';
 
   // ============================================================
   // Types
@@ -849,6 +850,20 @@
   }
 
   // ============================================================
+  // 2COL Viewer Tab — IMAGE / VRM
+  // ============================================================
+  type ViewerTab = 'image' | 'vrm';
+  let viewerTab  = $state<ViewerTab>('image');
+  let vrmFileUrl = $state('');          // blob URL（ファイル選択後に設定）
+
+  function handleVrmFile(e: Event) {
+    const file = (e.target as HTMLInputElement).files?.[0];
+    if (!file) return;
+    if (vrmFileUrl) URL.revokeObjectURL(vrmFileUrl);
+    vrmFileUrl = URL.createObjectURL(file);
+  }
+
+  // ============================================================
   // Column resize
   // ============================================================
   const LS_LEFT       = 'lab-left-width';
@@ -1316,6 +1331,8 @@ ${recent}
     // PNGTuber クリーンアップ
     pngtuberActive = false;
     if (blinkTimer) clearTimeout(blinkTimer);
+    // VRM blob URL 解放
+    if (vrmFileUrl) URL.revokeObjectURL(vrmFileUrl);
   });
 </script>
 
@@ -1875,40 +1892,65 @@ ${recent}
         <span class="ph-text">CHARACTER VIEWER</span>
         <span class="ph-line"></span>
         <div class="cv-type-tabs" role="group" aria-label="Viewer type">
-          <button class="cv-tab active" disabled>IMAGE</button>
+          <button
+            class="cv-tab"
+            class:active={viewerTab === 'image'}
+            onclick={() => viewerTab = 'image'}
+          >IMAGE</button>
           <button class="cv-tab" disabled title="近日対応予定">PNG-TUBER</button>
-          <button class="cv-tab" disabled title="近日対応予定">VRM</button>
+          <button
+            class="cv-tab"
+            class:active={viewerTab === 'vrm'}
+            onclick={() => viewerTab = 'vrm'}
+          >VRM</button>
         </div>
       </div>
 
-      <!-- Large image display area -->
-      <div class="cvl-stage" class:glow-active={avatarEffects.glowPulse}>
-        <div class="cvl-ring" style="animation-play-state:{avatarEffects.rotate ? 'running' : 'paused'}">
-          <div class="cvl-inner">
-            <img
-              src={selectedAvatar}
-              alt={charName}
-              class="cvl-img"
-              class:png-speaking={isThinking}
-              class:png-blink={pngBlinking && !isThinking}
-              onerror={(e) => { (e.target as HTMLImageElement).src = '/avatars/default.png'; }}
-            />
-            <div class="scan-line"></div>
-            {#if isThinking}
-              <div class="png-think-overlay" aria-hidden="true"></div>
+      {#if viewerTab === 'image'}
+        <!-- Large image display area (PNGTuber) -->
+        <div class="cvl-stage" class:glow-active={avatarEffects.glowPulse}>
+          <div class="cvl-ring" style="animation-play-state:{avatarEffects.rotate ? 'running' : 'paused'}">
+            <div class="cvl-inner">
+              <img
+                src={selectedAvatar}
+                alt={charName}
+                class="cvl-img"
+                class:png-speaking={isThinking}
+                class:png-blink={pngBlinking && !isThinking}
+                onerror={(e) => { (e.target as HTMLImageElement).src = '/avatars/default.png'; }}
+              />
+              <div class="scan-line"></div>
+              {#if isThinking}
+                <div class="png-think-overlay" aria-hidden="true"></div>
+              {/if}
+            </div>
+          </div>
+
+          <!-- Thinking overlay dots -->
+          {#if isThinking}
+            <div class="cvl-thinking-overlay">
+              <span class="dot-bounce"></span>
+              <span class="dot-bounce" style="animation-delay:0.18s"></span>
+              <span class="dot-bounce" style="animation-delay:0.36s"></span>
+            </div>
+          {/if}
+        </div>
+
+      {:else}
+        <!-- VRM display area -->
+        <div class="cvl-stage cvl-vrm-stage">
+          <AvatarViewer vrmUrl={vrmFileUrl} isThinking={isThinking} />
+          <div class="vrm-load-row">
+            <label class="vrm-file-btn">
+              ◈ VRM を読み込む
+              <input type="file" accept=".vrm" onchange={handleVrmFile} hidden />
+            </label>
+            {#if vrmFileUrl}
+              <span class="vrm-loaded-badge">● LOADED</span>
             {/if}
           </div>
         </div>
-
-        <!-- Thinking overlay dots -->
-        {#if isThinking}
-          <div class="cvl-thinking-overlay">
-            <span class="dot-bounce"></span>
-            <span class="dot-bounce" style="animation-delay:0.18s"></span>
-            <span class="dot-bounce" style="animation-delay:0.36s"></span>
-          </div>
-        {/if}
-      </div>
+      {/if}
 
       <!-- Info bar at bottom -->
       <div class="cvl-info-bar">
@@ -3690,6 +3732,58 @@ ${recent}
   width: 22px;
   text-align: right;
   flex-shrink: 0;
+}
+
+/* ============================================================
+   VRM STAGE — 2COL-only
+   ============================================================ */
+.cvl-vrm-stage {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+
+/* AvatarViewer が cvl-vrm-stage を埋める */
+.cvl-vrm-stage :global(.vrm-wrap) {
+  flex: 1;
+  min-height: 0;
+}
+
+/* VRM ファイル読み込みバー */
+.vrm-load-row {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  border-top: 1px solid rgba(0,229,255,0.08);
+}
+
+.vrm-file-btn {
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 9px;
+  letter-spacing: 1.4px;
+  color: var(--cy);
+  background: rgba(0,229,255,0.06);
+  border: 1px solid rgba(0,229,255,0.25);
+  padding: 4px 10px;
+  border-radius: 3px;
+  transition: background 0.15s, border-color 0.15s;
+  user-select: none;
+}
+.vrm-file-btn:hover {
+  background: rgba(0,229,255,0.14);
+  border-color: rgba(0,229,255,0.55);
+}
+
+.vrm-loaded-badge {
+  font-size: 8px;
+  letter-spacing: 1.2px;
+  color: #34d399;
+  text-shadow: 0 0 8px #34d39960;
 }
 
 /* ============================================================
