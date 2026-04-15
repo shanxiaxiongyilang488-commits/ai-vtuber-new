@@ -98,6 +98,7 @@
   let inputText = $state('');
   let activePreset = $state<PresetName>('muryi');
   let isThinking      = $state(false);
+  let isSpeaking      = $state(false);
   let isInputFocused  = $state(false);
   let chatEl: HTMLElement;
   let idleTimerId: ReturnType<typeof setTimeout> | null = null;
@@ -777,9 +778,12 @@
           voiceId: voiceId || undefined,
           speakerId,
         });
+        isSpeaking = true;
         await engine.speak(aiText);
       } catch (e) {
         console.error('❌ Lab音声失敗', e);
+      } finally {
+        isSpeaking = false;
       }
     }
     // ユーザー入力 → AI応答完了後にアイドルタイマーをリセット
@@ -1939,7 +1943,7 @@ ${recent}
       {:else}
         <!-- VRM display area -->
         <div class="cvl-stage cvl-vrm-stage">
-          <AvatarViewer vrmUrl={vrmFileUrl} isThinking={isThinking} />
+          <AvatarViewer vrmUrl={vrmFileUrl} isThinking={isThinking} isSpeaking={isSpeaking} />
           <div class="vrm-load-row">
             <label class="vrm-file-btn">
               ◈ VRM を読み込む
