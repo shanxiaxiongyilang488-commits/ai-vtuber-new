@@ -109,6 +109,21 @@
   let longMemory       = $state('');              // 長期記憶サマリー表示用
   let isMemoryUpdating = $state(false);           // 更新中インジケーター
 
+  // ── Compare Mode ─────────────────────────────────────────────
+  type TSEmotionResult = { emotion: string; confidence: number; detail: string };
+  type PyEmotionResult = {
+    emotion: string; confidence: number;
+    delta_trust: number; reason: string;
+    source: 'python' | 'fallback';
+  };
+  let compareMode        = $state(false);
+  let compareInput       = $state('');
+  let compareRunning     = $state(false);
+  let compareTestedText  = $state('');
+  let compareError       = $state<string | null>(null);
+  let tsCompareResult    = $state<TSEmotionResult | null>(null);
+  let pyCompareResult    = $state<PyEmotionResult | null>(null);
+
   // ============================================================
   // Avatar options
   // ============================================================
@@ -1016,6 +1031,53 @@ ${recent}
     return '落ち着いた';
   }
 
+  // ── Compare Mode ─────────────────────────────────────────────
+  /** Python emotion.py のキーワード方式を TS で再現（比較用） */
+  function analyzeEmotionTS(text: string): TSEmotionResult {
+    const rules: [string, RegExp][] = [
+      ['joy',           /嬉し|楽し|わくわく|好き|ありがとう|やった|すごい|最高|幸せ|喜|笑|うれ|たのし|いいね|素敵|大好き/],
+      ['embarrassment', /恥ず|照れ|きゃ|ドキ|ドキドキ|やめて|照れ|もう.*やだ/],
+      ['sadness',       /悲し|寂し|つら|ごめん|申し訳|落ち込|泣|残念|はあ|はぁ|辛|悔し|さみし/],
+      ['anger',         /むかつ|うざ|最悪|ふざけ|きらい|嫌い|怒|腹立|イライラ|バカ|うるさ/],
+    ];
+    let topEmotion = 'neutral';
+    let maxHits = 0;
+    for (const [emotion, pattern] of rules) {
+      const hits = (text.match(new RegExp(pattern.source, 'g')) ?? []).length;
+      if (hits > maxHits) { maxHits = hits; topEmotion = emotion; }
+    }
+    const base = maxHits > 0 ? Math.min(0.9, 0.4 + maxHits * 0.2) : 0.3;
+    const lowTrust = personality.trust < 30 && (topEmotion === 'anger' || topEmotion === 'sadness');
+    const confidence = parseFloat(Math.min(1.0, base * (lowTrust ? 1.2 : 1.0)).toFixed(2));
+    return { emotion: topEmotion, confidence, detail: maxHits > 0 ? `keyword_hit:${maxHits}` : 'no_keyword' };
+  }
+
+  async function runCompare() {
+    const text = compareInput.trim();
+    if (!text || compareRunning) return;
+    compareRunning    = true;
+    compareError      = null;
+    compareTestedText = text;
+    tsCompareResult   = null;
+    pyCompareResult   = null;
+
+    tsCompareResult = analyzeEmotionTS(text);
+
+    try {
+      const res = await fetch('/api/emotion-py', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, current_emotion: 'neutral', trust: personality.trust }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      pyCompareResult = await res.json();
+    } catch (err) {
+      compareError = 'Python API: ' + (err instanceof Error ? err.message : String(err));
+    } finally {
+      compareRunning = false;
+    }
+  }
+
   // ============================================================
   // 自発会話タイマー
   // ============================================================
@@ -1422,6 +1484,12 @@ ${recent}
         <span class="ph-diamond">◆</span>
         <span class="ph-text">CHAT SIMULATION</span>
         <span class="ph-line"></span>
+        <button
+          class="compare-toggle-btn"
+          class:active={compareMode}
+          onclick={() => { compareMode = !compareMode; }}
+          title="感情エンジン比較モード (TS vs Python)"
+        >COMPARE</button>
         {#if isThinking}
           <span class="thinking-tag">PROCESSING…</span>
         {:else}
@@ -1493,6 +1561,96 @@ ${recent}
           </div>
         {/if}
       </div>
+
+      <!-- Compare Mode Panel -->
+      {#if compareMode}
+        <div class="cmp-panel">
+          <div class="cmp-hd">
+            <span class="cmp-diamond">◆</span>
+            <span class="cmp-title">EMOTION COMPARE</span>
+            <span class="cmp-badge ts">TS</span>
+            <span class="cmp-vs">vs</span>
+            <span class="cmp-badge py">PY</span>
+            <span class="cmp-flex"></span>
+            <span class="cmp-sub">感情エンジン比較モード</span>
+          </div>
+
+          <div class="cmp-input-row">
+            <input
+              class="cmp-input"
+              type="text"
+              placeholder="分析するテキストを入力… (Enter で実行)"
+              bind:value={compareInput}
+              onkeydown={(e) => { if (e.key === 'Enter') runCompare(); }}
+            />
+            <button
+              class="cmp-run-btn"
+              onclick={runCompare}
+              disabled={compareRunning || !compareInput.trim()}
+            >{compareRunning ? '分析中…' : 'ANALYZE'}</button>
+          </div>
+
+          {#if compareTestedText}
+            <div class="cmp-tested">
+              <span class="ct-label">LAST INPUT:</span>
+              <span class="ct-text">"{compareTestedText}"</span>
+              <span class="ct-trust">TRUST:{personality.trust}</span>
+            </div>
+          {/if}
+
+          {#if compareError}
+            <div class="cmp-error">{compareError}</div>
+          {/if}
+
+          <div class="cmp-cols">
+            <!-- TypeScript 側 -->
+            <div class="cmp-col ts-side">
+              <div class="cmp-col-hd">TypeScript <span class="cmp-badge ts sm">TS</span></div>
+              {#if tsCompareResult}
+                <div class="cmp-emotion" style="--ec: var(--cy)">{tsCompareResult.emotion}</div>
+                <div class="cmp-conf">{(tsCompareResult.confidence * 100).toFixed(0)}%</div>
+                <div class="cmp-detail">{tsCompareResult.detail}</div>
+                <div class="cmp-extra">mood: {mood.toLowerCase()}</div>
+              {:else}
+                <div class="cmp-empty">— 未実行 —</div>
+              {/if}
+            </div>
+
+            <!-- Python 側 -->
+            <div class="cmp-col py-side">
+              <div class="cmp-col-hd">Python <span class="cmp-badge py sm">PY</span></div>
+              {#if compareRunning}
+                <div class="cmp-empty">分析中…</div>
+              {:else if pyCompareResult}
+                <div class="cmp-emotion" style="--ec: #a78bfa">{pyCompareResult.emotion}</div>
+                <div class="cmp-conf">{(pyCompareResult.confidence * 100).toFixed(0)}%</div>
+                <div class="cmp-detail">{pyCompareResult.reason}</div>
+                <div
+                  class="cmp-delta"
+                  class:pos={pyCompareResult.delta_trust >= 0}
+                  class:neg={pyCompareResult.delta_trust < 0}
+                >Δtrust {pyCompareResult.delta_trust >= 0 ? '+' : ''}{pyCompareResult.delta_trust}</div>
+                {#if pyCompareResult.source === 'fallback'}
+                  <span class="cmp-fallback">FALLBACK</span>
+                {/if}
+              {:else}
+                <div class="cmp-empty">— 未実行 —</div>
+              {/if}
+            </div>
+          </div>
+
+          {#if tsCompareResult && pyCompareResult}
+            <div class="cmp-verdict" class:match={tsCompareResult.emotion === pyCompareResult.emotion}>
+              {tsCompareResult.emotion === pyCompareResult.emotion ? '✓ MATCH' : '✗ MISMATCH'}
+              <span class="cv-detail">
+                {tsCompareResult.emotion === pyCompareResult.emotion
+                  ? '両エンジンの結果が一致'
+                  : `TS: ${tsCompareResult.emotion} / PY: ${pyCompareResult.emotion}`}
+              </span>
+            </div>
+          {/if}
+        </div>
+      {/if}
 
       <!-- Input -->
       <div class="chat-input-area">
@@ -3886,5 +4044,226 @@ ${recent}
                 0 0 32px rgba(168,85,247,0.32);
     background: rgba(168,85,247,0.05);
   }
+}
+
+/* ============================================================
+   COMPARE MODE TOGGLE
+   ============================================================ */
+.compare-toggle-btn {
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  font-family: inherit;
+  color: var(--muted);
+  border: 1px solid var(--muted);
+  background: transparent;
+  padding: 2px 8px;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s, background 0.2s, box-shadow 0.2s;
+  flex-shrink: 0;
+}
+.compare-toggle-btn:hover {
+  color: var(--cy);
+  border-color: var(--cy);
+  background: var(--cy-dim);
+}
+.compare-toggle-btn.active {
+  color: #a78bfa;
+  border-color: #a78bfa;
+  background: rgba(167,139,250,0.12);
+  box-shadow: 0 0 6px rgba(167,139,250,0.3);
+}
+
+/* ============================================================
+   COMPARE PANEL
+   ============================================================ */
+.cmp-panel {
+  flex-shrink: 0;
+  border: 1px solid rgba(167,139,250,0.25);
+  border-radius: 4px;
+  background: rgba(167,139,250,0.04);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cmp-hd {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(167,139,250,0.15);
+}
+.cmp-diamond { color: #a78bfa; font-size: 10px; }
+.cmp-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: #a78bfa;
+  text-shadow: 0 0 8px rgba(167,139,250,0.4);
+}
+.cmp-badge {
+  font-size: 8px;
+  letter-spacing: 1px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 2px;
+}
+.cmp-badge.ts { background: rgba(0,229,255,0.15); color: var(--cy); border: 1px solid rgba(0,229,255,0.3); }
+.cmp-badge.py { background: rgba(167,139,250,0.15); color: #a78bfa; border: 1px solid rgba(167,139,250,0.3); }
+.cmp-badge.sm { font-size: 7px; padding: 1px 4px; }
+.cmp-vs { font-size: 8px; color: var(--muted); letter-spacing: 1px; }
+.cmp-flex { flex: 1; }
+.cmp-sub { font-size: 8.5px; color: var(--muted); letter-spacing: 1px; }
+
+.cmp-input-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.cmp-input {
+  flex: 1;
+  background: rgba(0,229,255,0.04);
+  border: 1px solid var(--pborder);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 11px;
+  padding: 5px 8px;
+  border-radius: 3px;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.cmp-input:focus {
+  border-color: rgba(167,139,250,0.5);
+  box-shadow: 0 0 6px rgba(167,139,250,0.2);
+}
+.cmp-input::placeholder { color: var(--muted); }
+.cmp-run-btn {
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  font-family: inherit;
+  padding: 5px 12px;
+  border-radius: 3px;
+  border: 1px solid #a78bfa;
+  background: rgba(167,139,250,0.12);
+  color: #a78bfa;
+  cursor: pointer;
+  transition: background 0.2s, box-shadow 0.2s;
+  flex-shrink: 0;
+}
+.cmp-run-btn:hover:not(:disabled) {
+  background: rgba(167,139,250,0.22);
+  box-shadow: 0 0 8px rgba(167,139,250,0.3);
+}
+.cmp-run-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.cmp-tested {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 9px;
+}
+.ct-label { color: var(--muted); letter-spacing: 1px; }
+.ct-text { color: var(--text2); font-style: italic; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.ct-trust { color: var(--cy); letter-spacing: 1px; flex-shrink: 0; }
+
+.cmp-error {
+  font-size: 9.5px;
+  color: var(--red);
+  padding: 4px 8px;
+  background: rgba(244,63,94,0.08);
+  border: 1px solid rgba(244,63,94,0.2);
+  border-radius: 3px;
+}
+
+.cmp-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.cmp-col {
+  padding: 8px 10px;
+  border-radius: 3px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ts-side { background: rgba(0,229,255,0.04); border: 1px solid rgba(0,229,255,0.12); }
+.py-side { background: rgba(167,139,250,0.04); border: 1px solid rgba(167,139,250,0.12); }
+
+.cmp-col-hd {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  color: var(--text2);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  margin-bottom: 3px;
+}
+.cmp-emotion {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: var(--ec);
+  text-shadow: 0 0 10px var(--ec);
+  text-transform: uppercase;
+}
+.cmp-conf {
+  font-size: 11px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.cmp-detail {
+  font-size: 9px;
+  color: var(--muted);
+  letter-spacing: 0.5px;
+}
+.cmp-extra {
+  font-size: 9px;
+  color: var(--muted);
+  font-style: italic;
+}
+.cmp-delta { font-size: 10px; letter-spacing: 1px; }
+.cmp-delta.pos { color: var(--green); }
+.cmp-delta.neg { color: var(--red); }
+.cmp-fallback {
+  font-size: 8px;
+  padding: 1px 5px;
+  border-radius: 2px;
+  background: rgba(251,146,60,0.15);
+  border: 1px solid rgba(251,146,60,0.3);
+  color: var(--orange);
+  letter-spacing: 1px;
+  align-self: flex-start;
+}
+.cmp-empty { font-size: 10px; color: var(--muted); font-style: italic; }
+
+.cmp-verdict {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  background: rgba(244,63,94,0.08);
+  border: 1px solid rgba(244,63,94,0.2);
+  color: var(--red);
+}
+.cmp-verdict.match {
+  background: rgba(52,211,153,0.08);
+  border-color: rgba(52,211,153,0.2);
+  color: var(--green);
+}
+.cv-detail {
+  font-size: 9px;
+  font-weight: 400;
+  letter-spacing: 0.5px;
+  color: var(--text2);
 }
 </style>
