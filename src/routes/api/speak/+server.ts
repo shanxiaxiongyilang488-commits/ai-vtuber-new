@@ -8,11 +8,15 @@ const FALLBACK_VOICE_ID = '21m00Tcm4TlvDq8ikWAM';
 export const POST: RequestHandler = async ({ request }) => {
   let text = '';
   let voiceId = '';
+  let provider = '';
+  let voiceName = '';
 
   try {
     const body = await request.json();
     text = body.text ?? '';
     voiceId = body.voiceId ?? '';
+    provider = body.provider ?? '';
+    voiceName = body.voiceName ?? '';
   } catch {
     return json({ error: 'Invalid JSON' }, { status: 400 });
   }
@@ -23,6 +27,60 @@ export const POST: RequestHandler = async ({ request }) => {
 
   // SvelteKitでは process.env ではなく $env/dynamic/private を使う
   const { env } = await import('$env/dynamic/private');
+
+  // ===== Google TTS =====
+  if (provider === 'google') {
+    const googleApiKey = env.GOOGLE_TTS_API_KEY;
+    if (!googleApiKey) {
+      console.error('[speak] GOOGLE_TTS_API_KEY が設定されていません');
+      return json({ error: 'GOOGLE_TTS_API_KEY not set' }, { status: 500 });
+    }
+
+    const targetVoice = voiceName || 'ja-JP-Neural2-B';
+    const languageCode = targetVoice.slice(0, 5); // 'ja-JP'
+
+    let googleRes: Response;
+    try {
+      googleRes = await fetch(
+        `https://texttospeech.googleapis.com/v1/text:synthesize?key=${googleApiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            input: { text },
+            voice: { languageCode, name: targetVoice },
+            audioConfig: { audioEncoding: 'MP3' }
+          })
+        }
+      );
+    } catch (e) {
+      console.error('[speak] Google TTS fetch error:', e);
+      return json({ error: 'Google TTS に接続できませんでした' }, { status: 502 });
+    }
+
+    if (!googleRes.ok) {
+      const errText = await googleRes.text().catch(() => '');
+      console.error(`[speak] Google TTS HTTP ${googleRes.status}:`, errText);
+      return json(
+        { error: `Google TTS error: HTTP ${googleRes.status}`, detail: errText },
+        { status: googleRes.status }
+      );
+    }
+
+    const googleData = await googleRes.json() as { audioContent: string };
+    const binaryStr = atob(googleData.audioContent);
+    const bytes = new Uint8Array(binaryStr.length);
+    for (let i = 0; i < binaryStr.length; i++) {
+      bytes[i] = binaryStr.charCodeAt(i);
+    }
+
+    console.log(`[speak] Google TTS voice=${targetVoice}, bytes=${bytes.byteLength}`);
+    return new Response(bytes.buffer, {
+      headers: { 'Content-Type': 'audio/mpeg' }
+    });
+  }
+
+  // ===== ElevenLabs (既存) =====
   const apiKey = env.ELEVENLABS_API_KEY;
 
   if (!apiKey) {

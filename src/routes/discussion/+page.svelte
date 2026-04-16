@@ -1,5 +1,4 @@
 <script lang="ts">
-  import CharacterSettingsModal from '$lib/components/CharacterSettingsModal.svelte';
   import { createVoiceEngine } from '$lib/api/voiceEngine';
 
   type CharacterConfig = {
@@ -19,9 +18,21 @@
     avatar?: string;
   };
 
+  // ===== モード =====
+  let mode: 'discussion' | 'radio' = 'discussion';
+
   // ===== 状態 =====
   let topic = '';
   let messages: ChatMessage[] = [];
+
+  // ===== ラジオ設定 =====
+  let radioTheme = '';
+  let radioDuration: 3 | 5 | 10 = 5;
+  let radioAtmosphere: 'bright' | 'midnight' | 'news' = 'bright';
+  let radioTtsProvider: 'none' | 'google' = 'none';
+
+  // キャラ順に対応する Google TTS ボイス名
+  const GOOGLE_VOICES: readonly [string, string] = ['ja-JP-Neural2-B', 'ja-JP-Neural2-D'];
 
   // ===== キャラ設定 =====
   let characters: CharacterConfig[] = [
@@ -74,8 +85,17 @@
     closeSettings();
   }
 
+  // ===== 並走キャンセル用 runId =====
+  // 新しい会話を開始するたびにインクリメント。
+  // 各非同期ループはループ前後で runId が一致するか確認し、
+  // 一致しなければ即座に中断する（= 前の会話を自動キャンセル）。
+  let runId = 0;
+
   // ===== ダミー会話 =====
   async function startDummyDiscussion() {
+    const myRunId = ++runId;
+    console.log(`[dummy] start runId=${myRunId}`);
+
     const dummyMessages: ChatMessage[] = [
       { speaker: characters[0].name, text: 'こんにちは！今日の話題は何ですか？' },
       { speaker: characters[1].name, text: 'そうですね、最近のAI技術について話しましょうか。' },
@@ -88,6 +108,8 @@
     messages = [];
 
     for (const msg of dummyMessages) {
+      if (myRunId !== runId) { console.log(`[dummy] runId=${myRunId} cancelled`); break; }
+
       const char = characters.find((c) => c.name === msg.speaker);
 
       messages = [
@@ -111,6 +133,87 @@
           console.error('❌ ダミー会話音声失敗', e);
         }
       }
+    }
+  }
+
+  // ===== ラジオ =====
+  async function startRadio() {
+    if (!radioTheme.trim()) return;
+    const myRunId = ++runId;
+    console.log(`[radio] start runId=${myRunId}, theme="${radioTheme}", tts="${radioTtsProvider}"`);
+
+    try {
+      const res = await fetch('/api/radio', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          theme: radioTheme,
+          duration: radioDuration,
+          atmosphere: radioAtmosphere,
+          characters
+        })
+      });
+
+      if (myRunId !== runId) { console.log(`[radio] runId=${myRunId} cancelled after fetch`); return; }
+
+      if (!res.ok) {
+        console.error(`[radio] API error HTTP ${res.status}`, await res.json().catch(() => null));
+        return;
+      }
+
+      const data = await res.json();
+      console.log('[radio] API data:', data);
+
+      const list: ChatMessage[] = data.messages ?? [];
+      console.log(`[radio] list.length=${list.length}`, list);
+
+      if (list.length === 0) {
+        console.warn('[radio] ⚠ メッセージが空です。API レスポンスを確認してください。');
+      }
+
+      messages = list.map((msg) => {
+        const char = characters.find((c) => c.name === msg.speaker);
+        return { ...msg, avatar: char?.avatar ?? '/avatars/default.png' };
+      });
+      console.log(`[radio] messages 代入完了 count=${messages.length}`, messages);
+
+      // ===== Google TTS 順番再生 =====
+      if (radioTtsProvider === 'google') {
+        console.log('[radio] Google TTS ループ開始');
+        for (const msg of messages) {
+          if (myRunId !== runId) { console.log('[radio TTS] cancelled'); break; }
+
+          const charIdx = characters.findIndex((c) => c.name === msg.speaker);
+          const voiceName = GOOGLE_VOICES[charIdx] ?? GOOGLE_VOICES[0];
+          console.log(`[radio TTS] speaker="${msg.speaker}" voice=${voiceName} text="${msg.text.slice(0,30)}..."`);
+          try {
+            const ttsRes = await fetch('/api/speak', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ text: msg.text, provider: 'google', voiceName })
+            });
+            if (!ttsRes.ok) {
+              const errBody = await ttsRes.json().catch(() => null);
+              console.warn(`[radio TTS] skip HTTP ${ttsRes.status}`, errBody);
+              continue;
+            }
+            const url = URL.createObjectURL(await ttsRes.blob());
+            await new Promise<void>((resolve) => {
+              const audio = new Audio(url);
+              audio.onended = () => { URL.revokeObjectURL(url); resolve(); };
+              audio.onerror = () => { URL.revokeObjectURL(url); resolve(); };
+              audio.play().catch(() => { URL.revokeObjectURL(url); resolve(); });
+            });
+          } catch (e) {
+            console.error('[radio TTS] Google TTS error:', e);
+          }
+        }
+        console.log('[radio] Google TTS ループ終了');
+      } else {
+        console.log(`[radio] TTS provider="${radioTtsProvider}" → 音声再生なし`);
+      }
+    } catch (e) {
+      console.error('❌ radio API エラー', e);
     }
   }
 
@@ -183,13 +286,18 @@
       <div class="status-title">● システム状態</div>
       <div class="status-row"><span>ステータス</span><b>待機中</b></div>
       <div class="status-row"><span>発言数</span><b>{messages.length}</b></div>
-      <div class="status-row"><span>モード</span><b>対話型</b></div>
+      <div class="status-row"><span>モード</span><b>{mode === 'radio' ? 'ラジオ' : '対話型'}</b></div>
       <div class="hint">カードをクリックして設定を開く</div>
     </div>
   </div>
 
   <!-- 右：会話 -->
   <div class="main">
+    <div class="mode-tabs">
+      <button class={`tab ${mode === 'discussion' ? 'tab-active' : ''}`} onclick={() => (mode = 'discussion')}>討論</button>
+      <button class={`tab ${mode === 'radio' ? 'tab-active' : ''}`} onclick={() => (mode = 'radio')}>ラジオ</button>
+    </div>
+
     <p class="count">件数: {messages.length}</p>
 
     <div class="messages">
@@ -238,26 +346,54 @@
     </div>
 
     <div class="input-area">
-      <input
-        class="topic-input"
-        placeholder="議論するトピックを入力してください..."
-        bind:value={topic}
-      />
-
-      <div class="button-row">
-        <button onclick={startDiscussion}>会話開始</button>
-        <button class="btn-secondary" onclick={startDummyDiscussion}>ダミー会話</button>
-      </div>
+      {#if mode === 'radio'}
+        <input
+          class="topic-input"
+          placeholder="ラジオのテーマを入力..."
+          bind:value={radioTheme}
+        />
+        <div class="radio-options">
+          <div class="radio-option-group">
+            <span class="option-label">時間</span>
+            <div class="option-chips">
+              <button class={`chip ${radioDuration === 3 ? 'chip-active' : ''}`} onclick={() => (radioDuration = 3)}>3分</button>
+              <button class={`chip ${radioDuration === 5 ? 'chip-active' : ''}`} onclick={() => (radioDuration = 5)}>5分</button>
+              <button class={`chip ${radioDuration === 10 ? 'chip-active' : ''}`} onclick={() => (radioDuration = 10)}>10分</button>
+            </div>
+          </div>
+          <div class="radio-option-group">
+            <span class="option-label">雰囲気</span>
+            <div class="option-chips">
+              <button class={`chip ${radioAtmosphere === 'bright' ? 'chip-active' : ''}`} onclick={() => (radioAtmosphere = 'bright')}>明るい</button>
+              <button class={`chip ${radioAtmosphere === 'midnight' ? 'chip-active' : ''}`} onclick={() => (radioAtmosphere = 'midnight')}>深夜</button>
+              <button class={`chip ${radioAtmosphere === 'news' ? 'chip-active' : ''}`} onclick={() => (radioAtmosphere = 'news')}>情報番組</button>
+            </div>
+          </div>
+          <div class="radio-option-group">
+            <span class="option-label">TTS</span>
+            <div class="option-chips">
+              <button class={`chip ${radioTtsProvider === 'none' ? 'chip-active' : ''}`} onclick={() => (radioTtsProvider = 'none')}>なし</button>
+              <button class={`chip ${radioTtsProvider === 'google' ? 'chip-active' : ''}`} onclick={() => (radioTtsProvider = 'google')}>Google</button>
+            </div>
+          </div>
+        </div>
+        <div class="button-row">
+          <button onclick={startRadio}>ラジオ開始</button>
+        </div>
+      {:else}
+        <input
+          class="topic-input"
+          placeholder="議論するトピックを入力してください..."
+          bind:value={topic}
+        />
+        <div class="button-row">
+          <button onclick={startDiscussion}>会話開始</button>
+          <button class="btn-secondary" onclick={startDummyDiscussion}>ダミー会話</button>
+        </div>
+      {/if}
     </div>
   </div>
 </div>
-
-<CharacterSettingsModal
-  open={showSettings}
-  character={selectedCharacter}
-  onclose={closeSettings}
-  onsave={handleCharacterSave}
-/>
 
 <!-- モーダル -->
 {#if showSettings && selectedCharacter}
@@ -278,7 +414,7 @@
 
       <div class="modal-actions">
         <button class="btn-cancel" onclick={closeSettings}>キャンセル</button>
-        <button onclick={saveCharacter}>保存</button>
+        <button onclick={() => selectedCharacter && handleCharacterSave(selectedCharacter)}>保存</button>
       </div>
 
     </div>
@@ -601,5 +737,86 @@
     background: rgba(255, 255, 255, 0.15);
     box-shadow: none;
     transform: none;
+  }
+
+  /* ===================== Mode tabs ===================== */
+  .mode-tabs {
+    display: flex;
+    gap: 8px;
+    padding: 12px 16px 0;
+  }
+
+  .tab {
+    padding: 5px 18px;
+    border-radius: 20px;
+    border: 1px solid rgba(34, 211, 238, 0.3);
+    background: transparent;
+    color: #888;
+    font-size: 12px;
+    font-weight: normal;
+    cursor: pointer;
+    transition: 0.2s;
+  }
+
+  .tab:hover {
+    background: rgba(34, 211, 238, 0.08);
+    transform: none;
+    box-shadow: none;
+  }
+
+  .tab-active {
+    background: rgba(34, 211, 238, 0.12);
+    border-color: #22d3ee;
+    color: #22d3ee;
+  }
+
+  /* ===================== Radio options ===================== */
+  .radio-options {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .radio-option-group {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .option-label {
+    font-size: 11px;
+    color: #888;
+    width: 36px;
+    flex-shrink: 0;
+  }
+
+  .option-chips {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .chip {
+    padding: 4px 12px;
+    border-radius: 16px;
+    border: 1px solid rgba(34, 211, 238, 0.2);
+    background: transparent;
+    color: #888;
+    font-size: 12px;
+    font-weight: normal;
+    cursor: pointer;
+    transition: 0.2s;
+  }
+
+  .chip:hover {
+    background: rgba(34, 211, 238, 0.08);
+    transform: none;
+    box-shadow: none;
+  }
+
+  .chip-active {
+    background: rgba(34, 211, 238, 0.15);
+    border-color: #22d3ee;
+    color: #22d3ee;
   }
 </style>

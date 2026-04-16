@@ -3,7 +3,8 @@
   import { createVoiceEngine } from '$lib/api/voiceEngine';
   import { PROVIDER_MODELS, type AIProvider } from '$lib/config/models';
   import { sessionStore } from '$lib/stores/sessionStore';
-  import AvatarViewer from '$lib/components/AvatarViewer.svelte';
+  import AvatarViewer    from '$lib/components/AvatarViewer.svelte';
+  import PNGTuberViewer  from '$lib/components/PNGTuberViewer.svelte';
 
   // ============================================================
   // Types
@@ -778,12 +779,13 @@
           voiceId: voiceId || undefined,
           speakerId,
         });
-        isSpeaking = true;
-        await engine.speak(aiText);
+        await engine.speak(aiText, {
+          onStart: () => { isSpeaking = true; },
+          onEnd:   () => { isSpeaking = false; },
+        });
       } catch (e) {
         console.error('❌ Lab音声失敗', e);
-      } finally {
-        isSpeaking = false;
+        isSpeaking = false; // エラー時のフォールバック
       }
     }
     // ユーザー入力 → AI応答完了後にアイドルタイマーをリセット
@@ -856,8 +858,14 @@
   // ============================================================
   // 2COL Viewer Tab — IMAGE / VRM
   // ============================================================
-  type ViewerTab = 'image' | 'vrm';
+  type ViewerTab = 'image' | 'png' | 'vrm';
   let viewerTab  = $state<ViewerTab>('image');
+
+  const LS_VIEWER_TAB = 'lab-viewer-tab';
+  function setViewerTab(t: ViewerTab) {
+    viewerTab = t;
+    localStorage.setItem(LS_VIEWER_TAB, t);
+  }
   let vrmFileUrl = $state('');          // blob URL（ファイル選択後に設定）
 
   function handleVrmFile(e: Event) {
@@ -1268,6 +1276,8 @@ ${recent}
     if (sr) rightWidth = Math.max(R_MIN, Math.min(R_MAX, parseInt(sr)));
     const slm = localStorage.getItem(LS_LAYOUT_MODE);
     if (slm === '3col' || slm === '2col') layoutMode = slm;
+    const svt = localStorage.getItem(LS_VIEWER_TAB);
+    if (svt === 'image' || svt === 'png' || svt === 'vrm') viewerTab = svt;
 
     // ① 長期記憶を先に読み込み（greeting 生成に使うため最初に）
     longMemory = localStorage.getItem(LS_LONG_MEMORY) ?? '';
@@ -1899,19 +1909,23 @@ ${recent}
           <button
             class="cv-tab"
             class:active={viewerTab === 'image'}
-            onclick={() => viewerTab = 'image'}
+            onclick={() => setViewerTab('image')}
           >IMAGE</button>
-          <button class="cv-tab" disabled title="近日対応予定">PNG-TUBER</button>
+          <button
+            class="cv-tab"
+            class:active={viewerTab === 'png'}
+            onclick={() => setViewerTab('png')}
+          >PNG-TUBER</button>
           <button
             class="cv-tab"
             class:active={viewerTab === 'vrm'}
-            onclick={() => viewerTab = 'vrm'}
+            onclick={() => setViewerTab('vrm')}
           >VRM</button>
         </div>
       </div>
 
       {#if viewerTab === 'image'}
-        <!-- Large image display area (PNGTuber) -->
+        <!-- IMAGE モード: スキャンライン付き円形ビュー -->
         <div class="cvl-stage" class:glow-active={avatarEffects.glowPulse}>
           <div class="cvl-ring" style="animation-play-state:{avatarEffects.rotate ? 'running' : 'paused'}">
             <div class="cvl-inner">
@@ -1930,7 +1944,23 @@ ${recent}
             </div>
           </div>
 
-          <!-- Thinking overlay dots -->
+          {#if isThinking}
+            <div class="cvl-thinking-overlay">
+              <span class="dot-bounce"></span>
+              <span class="dot-bounce" style="animation-delay:0.18s"></span>
+              <span class="dot-bounce" style="animation-delay:0.36s"></span>
+            </div>
+          {/if}
+        </div>
+
+      {:else if viewerTab === 'png'}
+        <!-- PNG-TUBER モード: 口パク・まばたき・状態差分 -->
+        <div class="cvl-stage cvl-png-stage">
+          <PNGTuberViewer
+            src={selectedAvatar.replace('.png', '')}
+            {isSpeaking}
+            {isThinking}
+          />
           {#if isThinking}
             <div class="cvl-thinking-overlay">
               <span class="dot-bounce"></span>
@@ -1941,7 +1971,7 @@ ${recent}
         </div>
 
       {:else}
-        <!-- VRM display area -->
+        <!-- VRM モード -->
         <div class="cvl-stage cvl-vrm-stage">
           <AvatarViewer vrmUrl={vrmFileUrl} isThinking={isThinking} isSpeaking={isSpeaking} />
           <div class="vrm-load-row">
@@ -3736,6 +3766,24 @@ ${recent}
   width: 22px;
   text-align: right;
   flex-shrink: 0;
+}
+
+/* ============================================================
+   PNG-TUBER STAGE — 2COL-only
+   ============================================================ */
+.cvl-png-stage {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+  padding: 16px;
+}
+
+/* PNGTuberViewer のルート要素が cvl-png-stage を埋める */
+.cvl-png-stage :global(.png-tuber-wrap) {
+  flex: 1;
+  min-height: 0;
 }
 
 /* ============================================================

@@ -1,5 +1,22 @@
 import type { VoiceEngine } from '$lib/types/character';
 
+/** audio.play() 開始〜終了まで待機し、onStart/onEnd を正確なタイミングで発火する */
+function playAudio(
+  url: string,
+  onStart?: () => void,
+  onEnd?: () => void,
+): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const audio = new Audio(url);
+    const finish = () => { onEnd?.(); resolve(); };
+    audio.addEventListener('play',   () => onStart?.(), { once: true });
+    audio.addEventListener('ended',  finish,            { once: true });
+    audio.addEventListener('pause',  finish,            { once: true });
+    audio.addEventListener('error',  finish,            { once: true });
+    audio.play().catch(finish); // autoplay ブロック等でも onEnd を呼ぶ
+  });
+}
+
 export function createVoiceEngine(character: {
   voiceEngine: VoiceEngine;
   voiceId?: string;
@@ -8,9 +25,13 @@ export function createVoiceEngine(character: {
   const { voiceEngine: engine, voiceId, speakerId } = character;
 
   return {
-    async speak(text: string) {
+    async speak(
+      text: string,
+      options?: { onStart?: () => void; onEnd?: () => void },
+    ) {
       if (!text) return;
       if (engine === 'none') return;
+      const { onStart, onEnd } = options ?? {};
 
       if (engine === 'elevenlabs') {
         try {
@@ -20,8 +41,8 @@ export function createVoiceEngine(character: {
             body: JSON.stringify({ text, voiceId: voiceId || '' })
           });
           if (!res.ok) { console.error('ElevenLabs failed:', res.status); return; }
-          const blob = await res.blob();
-          await new Audio(URL.createObjectURL(blob)).play();
+          const url = URL.createObjectURL(await res.blob());
+          await playAudio(url, onStart, onEnd);
         } catch (e) {
           console.error('ElevenLabs error:', e);
         }
@@ -42,7 +63,8 @@ export function createVoiceEngine(character: {
             { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(query) }
           );
           if (!audioRes.ok) { console.error('VoiceVox synthesis failed'); return; }
-          await new Audio(URL.createObjectURL(await audioRes.blob())).play();
+          const url = URL.createObjectURL(await audioRes.blob());
+          await playAudio(url, onStart, onEnd);
         } catch (e) {
           console.error('VoiceVox error:', e);
         }
