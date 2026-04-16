@@ -124,6 +124,17 @@
   let tsCompareResult    = $state<TSEmotionResult | null>(null);
   let pyCompareResult    = $state<PyEmotionResult | null>(null);
 
+  type CompareLogEntry = {
+    timestamp: string;
+    input: string;
+    trust: number;
+    ts_emotion: string; ts_confidence: number; ts_detail: string;
+    py_emotion: string; py_confidence: number; py_delta_trust: number;
+    py_reason: string; py_source: string;
+    match: boolean;
+  };
+  let compareLog = $state<CompareLogEntry[]>([]);
+
   // ============================================================
   // Avatar options
   // ============================================================
@@ -1071,11 +1082,60 @@ ${recent}
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       pyCompareResult = await res.json();
+      // ── CSV ログに追記 ────────────────────────────────────────
+      if (tsCompareResult && pyCompareResult) {
+        compareLog = [...compareLog, {
+          timestamp: new Date().toISOString(),
+          input: text,
+          trust: personality.trust,
+          ts_emotion: tsCompareResult.emotion,
+          ts_confidence: tsCompareResult.confidence,
+          ts_detail: tsCompareResult.detail,
+          py_emotion: pyCompareResult.emotion,
+          py_confidence: pyCompareResult.confidence,
+          py_delta_trust: pyCompareResult.delta_trust,
+          py_reason: pyCompareResult.reason,
+          py_source: pyCompareResult.source,
+          match: tsCompareResult.emotion === pyCompareResult.emotion,
+        }];
+      }
     } catch (err) {
       compareError = 'Python API: ' + (err instanceof Error ? err.message : String(err));
     } finally {
       compareRunning = false;
     }
+  }
+
+  function exportCompareCSV() {
+    if (compareLog.length === 0) return;
+    const headers = [
+      'timestamp','input','trust',
+      'ts_emotion','ts_confidence_%','ts_detail',
+      'py_emotion','py_confidence_%','py_delta_trust','py_reason','py_source',
+      'match',
+    ];
+    const rows = compareLog.map(e => [
+      e.timestamp,
+      `"${e.input.replace(/"/g, '""')}"`,
+      e.trust,
+      e.ts_emotion,
+      (e.ts_confidence * 100).toFixed(0),
+      e.ts_detail,
+      e.py_emotion,
+      (e.py_confidence * 100).toFixed(0),
+      e.py_delta_trust,
+      `"${e.py_reason.replace(/"/g, '""')}"`,
+      e.py_source,
+      e.match,
+    ].join(','));
+    const csv = '\uFEFF' + [headers.join(','), ...rows].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `compare_log_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   // ============================================================
@@ -1649,6 +1709,25 @@ ${recent}
               </span>
             </div>
           {/if}
+
+          <!-- CSV Log Bar -->
+          <div class="cmp-log-bar">
+            <span class="cmp-log-count">
+              LOG <span class="cmp-log-num">{compareLog.length}</span>/10
+            </span>
+            <button
+              class="cmp-log-btn"
+              onclick={exportCompareCSV}
+              disabled={compareLog.length === 0}
+              title="CSV ダウンロード"
+            >↓ CSV</button>
+            <button
+              class="cmp-log-btn cmp-log-clear"
+              onclick={() => { compareLog = []; }}
+              disabled={compareLog.length === 0}
+              title="ログをクリア"
+            >CLEAR</button>
+          </div>
         </div>
       {/if}
 
@@ -4265,5 +4344,46 @@ ${recent}
   font-weight: 400;
   letter-spacing: 0.5px;
   color: var(--text2);
+}
+.cmp-log-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+.cmp-log-count {
+  font-size: 9px;
+  letter-spacing: 1px;
+  color: var(--muted);
+  margin-right: auto;
+}
+.cmp-log-num {
+  color: #a78bfa;
+  font-weight: 700;
+}
+.cmp-log-btn {
+  font-size: 9px;
+  letter-spacing: 1px;
+  font-family: inherit;
+  padding: 2px 8px;
+  border-radius: 2px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text2);
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s, background 0.2s;
+}
+.cmp-log-btn:not(:disabled):hover {
+  color: var(--cy);
+  border-color: var(--cy);
+  background: var(--cy-dim);
+}
+.cmp-log-btn:disabled { opacity: 0.35; cursor: default; }
+.cmp-log-btn.cmp-log-clear:not(:disabled):hover {
+  color: var(--red);
+  border-color: var(--red);
+  background: rgba(244,63,94,0.08);
 }
 </style>
