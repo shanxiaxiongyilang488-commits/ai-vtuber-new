@@ -12,7 +12,8 @@
       "WebFetch(domain:github.com)",
       "WebFetch(domain:pixiv.github.io)",
       "WebFetch(domain:discourse.threejs.org)",
-      "WebFetch(domain:vrm.dev)"
+      "WebFetch(domain:vrm.dev)",
+      "Bash(powershell *)"
     ]
   }
 }

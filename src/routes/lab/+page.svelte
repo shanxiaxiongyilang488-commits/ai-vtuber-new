@@ -100,6 +100,8 @@
   let activePreset = $state<PresetName>('muryi');
   let isThinking      = $state(false);
   let isSpeaking      = $state(false);
+  let currentEmotion  = $state('neutral');   // PNG-TUBERに渡す感情名
+  let emotionPin      = $state('');          // '' = AUTO（AI検出）、それ以外 = 固定
   let isInputFocused  = $state(false);
   let chatEl: HTMLElement;
   let idleTimerId: ReturnType<typeof setTimeout> | null = null;
@@ -108,6 +110,9 @@
   let exchangeCount    = 0;                       // 送受信ペア数（記憶更新トリガー用）
   let longMemory       = $state('');              // 長期記憶サマリー表示用
   let isMemoryUpdating = $state(false);           // 更新中インジケーター
+
+  // pin が空 = AI自動検出、pin が設定済み = 固定感情
+  const pngEmotion = $derived(emotionPin || currentEmotion);
 
   // ── Compare Mode ─────────────────────────────────────────────
   type TSEmotionResult = { emotion: string; confidence: number; detail: string };
@@ -165,6 +170,15 @@
     { file: '/avatars/piona.png',  name: 'ピオナ',   mode: 'BRIGHT · TYPE-P'  },
     { file: '/avatars/default.png',name: 'Custom',   mode: 'CUSTOM UNIT'      },
   ];
+
+  // 感情検出結果 → PNG ファイル名マッピング
+  // analyzeEmotionTS が返すキー → static/avatars/{char}/{name}.png
+  const EMOTION_IMAGE: Record<string, string> = {
+    joy:           'smile',
+    embarrassment: 'blush',
+    sadness:       'sad',
+    anger:         'angry',
+  };
 
   // ============================================================
   // Voice config (independent of avatar / personality)
@@ -816,6 +830,8 @@
     exchangeCount++;
     if (exchangeCount % MEMORY_UPDATE_EVERY === 0) updateLongMemory();
     isThinking = false;
+    // AI 応答テキストから感情を検出 → PNG-TUBER に反映（pin が空のときのみ上書き）
+    if (!emotionPin) currentEmotion = EMOTION_IMAGE[analyzeEmotionTS(aiText).emotion] ?? 'neutral';
     setTimeout(() => chatEl?.scrollTo({ top: chatEl.scrollHeight, behavior: 'smooth' }), 50);
     if (voiceEngine !== 'none') {
       try {
@@ -2409,12 +2425,13 @@ ${recent}
         </div>
 
       {:else if viewerTab === 'png'}
-        <!-- PNG-TUBER モード: 口パク・まばたき・状態差分 -->
+        <!-- PNG-TUBER モード: 口パク・まばたき・感情切替 -->
         <div class="cvl-stage cvl-png-stage">
           <PNGTuberViewer
             src={selectedAvatar.replace('.png', '')}
             {isSpeaking}
             {isThinking}
+            emotion={pngEmotion}
           />
           {#if isThinking}
             <div class="cvl-thinking-overlay">
@@ -2423,6 +2440,30 @@ ${recent}
               <span class="dot-bounce" style="animation-delay:0.36s"></span>
             </div>
           {/if}
+          <!-- 感情オーバーライド行 -->
+          <div class="vrm-load-row">
+            <span class="vrm-loaded-badge" style="opacity:0.7">
+              EMO: {pngEmotion}
+            </span>
+            <select
+              class="vc-select"
+              value={emotionPin}
+              onchange={(e) => { emotionPin = (e.target as HTMLSelectElement).value; }}
+            >
+              <option value="">AUTO</option>
+              <option value="neutral">neutral</option>
+              <option value="smile">smile</option>
+              <option value="angry">angry</option>
+              <option value="sad">sad</option>
+              <option value="blush">blush</option>
+              <option value="laugh">laugh</option>
+              <option value="smug">smug</option>
+              <option value="sleepy">sleepy</option>
+              <option value="panic">panic</option>
+              <option value="heart">heart</option>
+              <option value="wink">wink</option>
+            </select>
+          </div>
         </div>
 
       {:else}

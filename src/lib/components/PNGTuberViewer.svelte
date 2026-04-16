@@ -6,11 +6,13 @@
     src        = '',      // 拡張子なしのベースパス例: /avatars/muryi
     isSpeaking = false,
     isThinking = false,
+    emotion    = 'neutral',   // 感情名: 'smile' | 'angry' | 'sad' | 'blush' | ... | 'neutral'
     audioEl    = null as HTMLAudioElement | null,
   }: {
     src?:        string;
     isSpeaking?: boolean;
     isThinking?: boolean;
+    emotion?:    string;
     audioEl?:    HTMLAudioElement | null;
   } = $props();
 
@@ -18,10 +20,13 @@
   // 0 = 3状態 PNG (_idle / _speak / _blink)
   // 1 = 単体 PNG (src + '.png')
   // 2 = /avatars/default.png
-  let fallbackLevel = $state(0);
+  let fallbackLevel    = $state(0);
+  let emotionImgFailed = $state(false);   // 感情画像が存在しない場合のフラグ
 
-  // src が切り替わったらフォールバックをリセット
-  $effect(() => { void src; fallbackLevel = 0; });
+  // src が切り替わったらフォールバックを全リセット
+  $effect(() => { void src; fallbackLevel = 0; emotionImgFailed = false; });
+  // emotion が変わったら感情フォールバックだけリセット
+  $effect(() => { void emotion; emotionImgFailed = false; });
 
   // ── まばたきスケジューラー ─────────────────────────────────────
   let blinking = $state(false);
@@ -44,6 +49,17 @@
       }
     }, 2500 + Math.random() * 3500);        // 2.5〜6秒間隔
   }
+
+  // ── 口パクフレーム交互切替（talk_a ↔ talk_i） ─────────────────
+  // isSpeaking 中に 150ms 間隔で talk_a / talk_i を交互に切り替える
+  let talkFrame = $state(false);   // false=talk_a, true=talk_i
+
+  $effect(() => {
+    if (!isSpeaking) { talkFrame = false; return; }
+    talkFrame = false;
+    const t = setInterval(() => { talkFrame = !talkFrame; }, 150);
+    return () => clearInterval(t);
+  });
 
   // ── 音量解析による口パク（audioEl オプション） ──────────────────
   // audioEl なしでも isSpeaking=true で口パク演出は動く。
@@ -78,19 +94,25 @@
   });
 
   // ── 表示画像決定 ─────────────────────────────────────────────────
-  // 優先順位: speak > blink > idle
-  // fallbackLevel > 0 のときは単体 PNG / default.png を使用
+  // 優先順位: speak(talk_a/talk_i 交互) > blink > 感情表情 > idle
+  // fallback: level1=既存フラットPNG({src}.png) / level2=default.png
   const imgSrc = $derived(
     fallbackLevel === 2 ? '/avatars/default.png'
     : fallbackLevel === 1 ? `${src}.png`
-    : isSpeaking               ? `${src}_speak.png`
-    : (blinking && !isThinking) ? `${src}_blink.png`
-    : `${src}_idle.png`
+    : isSpeaking                                   ? `${src}/${talkFrame ? 'talk_i' : 'talk_a'}.png`
+    : (blinking && !isThinking)                    ? `${src}/blink.png`
+    : (emotion !== 'neutral' && !emotionImgFailed) ? `${src}/${emotion}.png`
+    : `${src}/idle.png`
   );
 
   // 画像が存在しない場合にフォールバックレベルを上げる
   function onImgError() {
-    if (fallbackLevel < 2) fallbackLevel++;
+    // level 0 の感情画像失敗 → idle に戻すだけ（level は上げない）
+    if (fallbackLevel === 0 && !isSpeaking && !blinking && emotion !== 'neutral' && !emotionImgFailed) {
+      emotionImgFailed = true;
+    } else if (fallbackLevel < 2) {
+      fallbackLevel++;   // idle/blink/talk が失敗 → 既存フラットPNG → default.png
+    }
   }
 
   onMount(() => {
