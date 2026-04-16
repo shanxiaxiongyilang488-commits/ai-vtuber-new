@@ -135,6 +135,25 @@
   };
   let compareLog = $state<CompareLogEntry[]>([]);
 
+  // ── Batch Test Mode ────────────────────────────────────────
+  type BatchRow = {
+    text: string; label: string;
+    ts_emotion: string; py_emotion: string;
+    ts_match: boolean; py_match: boolean; both_match: boolean;
+  };
+  type BatchResult = {
+    total: number;
+    ts_acc: number; py_acc: number; agree: number;
+    per_label: Record<string, { ts_ok: number; py_ok: number; n: number }>;
+    rows: BatchRow[];
+  };
+  let batchMode     = $state(false);
+  let batchRunning  = $state(false);
+  let batchProgress = $state(0);
+  let batchTotal    = $state(0);
+  let batchResult   = $state<BatchResult | null>(null);
+  let batchError    = $state<string | null>(null);
+
   // ============================================================
   // Avatar options
   // ============================================================
@@ -1138,6 +1157,104 @@ ${recent}
     URL.revokeObjectURL(url);
   }
 
+  // ── Batch Test helpers ────────────────────────────────────
+  function parseCsvLine(line: string): string[] {
+    const result: string[] = [];
+    let cur = '';
+    let inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (c === '"') {
+        if (inQ && line[i + 1] === '"') { cur += '"'; i++; }
+        else inQ = !inQ;
+      } else if (c === ',' && !inQ) { result.push(cur); cur = ''; }
+      else cur += c;
+    }
+    result.push(cur);
+    return result;
+  }
+
+  async function runBatchTest(file: File) {
+    batchRunning = true;
+    batchProgress = 0;
+    batchResult = null;
+    batchError = null;
+
+    const raw = await file.text();
+    const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    const startIdx = lines[0].toLowerCase().startsWith('text') ? 1 : 0;
+    const dataLines = lines.slice(startIdx, startIdx + 100);
+    batchTotal = dataLines.length;
+
+    if (dataLines.length === 0) {
+      batchError = 'CSV にデータ行がありません';
+      batchRunning = false;
+      return;
+    }
+
+    const rows: BatchRow[] = [];
+    for (let i = 0; i < dataLines.length; i++) {
+      const parts = parseCsvLine(dataLines[i]);
+      if (parts.length < 2) { batchProgress = i + 1; continue; }
+      const text  = parts[0].trim();
+      const label = parts[1].trim().toLowerCase();
+
+      const ts = analyzeEmotionTS(text);
+      let py_emotion = 'neutral';
+      try {
+        const res = await fetch('/api/emotion-py', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, current_emotion: 'neutral', trust: personality.trust }),
+        });
+        if (res.ok) { const d = await res.json(); py_emotion = d.emotion; }
+      } catch { /* fallback: neutral */ }
+
+      rows.push({
+        text, label,
+        ts_emotion: ts.emotion,
+        py_emotion,
+        ts_match:   ts.emotion   === label,
+        py_match:   py_emotion   === label,
+        both_match: ts.emotion   === py_emotion,
+      });
+      batchProgress = i + 1;
+    }
+
+    const total  = rows.length;
+    const ts_acc = rows.filter(r => r.ts_match).length  / total;
+    const py_acc = rows.filter(r => r.py_match).length  / total;
+    const agree  = rows.filter(r => r.both_match).length / total;
+    const per_label: BatchResult['per_label'] = {};
+    for (const r of rows) {
+      if (!per_label[r.label]) per_label[r.label] = { ts_ok: 0, py_ok: 0, n: 0 };
+      per_label[r.label].n++;
+      if (r.ts_match) per_label[r.label].ts_ok++;
+      if (r.py_match) per_label[r.label].py_ok++;
+    }
+    batchResult  = { total, ts_acc, py_acc, agree, per_label, rows };
+    batchRunning = false;
+  }
+
+  function appendBatchToCompareLog() {
+    if (!batchResult) return;
+    const entries: CompareLogEntry[] = batchResult.rows.map(r => ({
+      timestamp:      new Date().toISOString(),
+      input:          r.text,
+      trust:          personality.trust,
+      ts_emotion:     r.ts_emotion,
+      ts_confidence:  0,
+      ts_detail:      `batch_label:${r.label}`,
+      py_emotion:     r.py_emotion,
+      py_confidence:  0,
+      py_delta_trust: 0,
+      py_reason:      'batch_test',
+      py_source:      'python',
+      match:          r.both_match,
+    }));
+    compareLog = [...compareLog, ...entries];
+  }
+
   // ============================================================
   // 自発会話タイマー
   // ============================================================
@@ -1550,6 +1667,12 @@ ${recent}
           onclick={() => { compareMode = !compareMode; }}
           title="感情エンジン比較モード (TS vs Python)"
         >COMPARE</button>
+        <button
+          class="batch-toggle-btn"
+          class:active={batchMode}
+          onclick={() => { batchMode = !batchMode; }}
+          title="CSV一括テストモード (text,label)"
+        >BATCH</button>
         {#if isThinking}
           <span class="thinking-tag">PROCESSING…</span>
         {:else}
@@ -1728,6 +1851,101 @@ ${recent}
               title="ログをクリア"
             >CLEAR</button>
           </div>
+        </div>
+      {/if}
+
+      <!-- Batch Test Panel -->
+      {#if batchMode}
+        <div class="batch-panel">
+          <div class="batch-hd">
+            <span class="batch-diamond">◆</span>
+            <span class="batch-title">CSV BATCH TEST</span>
+            <span class="cmp-badge ts">TS</span>
+            <span class="cmp-vs">+</span>
+            <span class="cmp-badge py">PY</span>
+            <span class="cmp-flex"></span>
+            <span class="cmp-sub">text,label CSV · 最大100件</span>
+          </div>
+
+          <div class="batch-file-row">
+            <label class="batch-file-label">
+              <input
+                type="file"
+                accept=".csv"
+                class="batch-file-input"
+                disabled={batchRunning}
+                onchange={(e) => {
+                  const f = (e.target as HTMLInputElement).files?.[0];
+                  if (f) runBatchTest(f);
+                }}
+              />
+              {batchRunning ? '処理中…' : 'CSV を選択'}
+            </label>
+            {#if batchRunning}
+              <span class="batch-progress">{batchProgress} / {batchTotal} 処理中…</span>
+            {:else if batchResult}
+              <span class="batch-done">{batchResult.total} 件完了</span>
+            {/if}
+          </div>
+
+          {#if batchRunning}
+            <div class="batch-prog-bar">
+              <div
+                class="batch-prog-fill"
+                style="width: {batchTotal > 0 ? (batchProgress / batchTotal * 100).toFixed(0) : 0}%"
+              ></div>
+            </div>
+          {/if}
+
+          {#if batchError}
+            <div class="cmp-error">{batchError}</div>
+          {/if}
+
+          {#if batchResult}
+            <div class="batch-stats">
+              <div class="batch-stat-item">
+                <span class="bsi-label">TS 正答率</span>
+                <span class="bsi-val ts">{(batchResult.ts_acc * 100).toFixed(1)}%</span>
+              </div>
+              <div class="batch-stat-item">
+                <span class="bsi-label">PY 正答率</span>
+                <span class="bsi-val py">{(batchResult.py_acc * 100).toFixed(1)}%</span>
+              </div>
+              <div class="batch-stat-item">
+                <span class="bsi-label">TS/PY 一致率</span>
+                <span class="bsi-val">{(batchResult.agree * 100).toFixed(1)}%</span>
+              </div>
+              <div class="batch-stat-item">
+                <span class="bsi-label">件数</span>
+                <span class="bsi-val">{batchResult.total}</span>
+              </div>
+            </div>
+
+            <div class="batch-label-table">
+              <div class="blt-hd">
+                <span>ラベル</span><span>件数</span><span>TS</span><span>PY</span>
+              </div>
+              {#each Object.entries(batchResult.per_label) as [lbl, s]}
+                <div class="blt-row">
+                  <span class="blt-label">{lbl}</span>
+                  <span class="blt-n">{s.n}</span>
+                  <span class="blt-acc ts">{(s.ts_ok / s.n * 100).toFixed(0)}%</span>
+                  <span class="blt-acc py">{(s.py_ok / s.n * 100).toFixed(0)}%</span>
+                </div>
+              {/each}
+            </div>
+
+            <div class="batch-footer">
+              <button
+                class="cmp-log-btn"
+                onclick={appendBatchToCompareLog}
+                title="Compare Log に全行追記"
+              >+ Compare Log に追記</button>
+              <span class="cmp-sub" style="margin-left:auto">
+                TS/PY 一致: {batchResult.rows.filter(r => r.both_match).length} 件
+              </span>
+            </div>
+          {/if}
         </div>
       {/if}
 
@@ -4385,5 +4603,151 @@ ${recent}
   color: var(--red);
   border-color: var(--red);
   background: rgba(244,63,94,0.08);
+}
+
+/* ============================================================
+   BATCH TEST TOGGLE
+   ============================================================ */
+.batch-toggle-btn {
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  font-family: inherit;
+  color: var(--muted);
+  border: 1px solid var(--muted);
+  background: transparent;
+  padding: 2px 8px;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s, background 0.2s, box-shadow 0.2s;
+  flex-shrink: 0;
+}
+.batch-toggle-btn:hover {
+  color: var(--green);
+  border-color: var(--green);
+  background: rgba(52,211,153,0.08);
+}
+.batch-toggle-btn.active {
+  color: var(--green);
+  border-color: var(--green);
+  background: rgba(52,211,153,0.12);
+  box-shadow: 0 0 6px rgba(52,211,153,0.3);
+}
+
+/* ============================================================
+   BATCH TEST PANEL
+   ============================================================ */
+.batch-panel {
+  flex-shrink: 0;
+  border: 1px solid rgba(52,211,153,0.2);
+  border-radius: 4px;
+  background: rgba(52,211,153,0.03);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.batch-hd {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(52,211,153,0.12);
+}
+.batch-diamond { color: var(--green); font-size: 10px; }
+.batch-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: var(--green);
+  text-shadow: 0 0 8px rgba(52,211,153,0.4);
+}
+.batch-file-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.batch-file-label {
+  font-size: 9px;
+  letter-spacing: 1px;
+  font-family: inherit;
+  padding: 4px 10px;
+  border-radius: 3px;
+  border: 1px solid var(--green);
+  background: rgba(52,211,153,0.08);
+  color: var(--green);
+  cursor: pointer;
+  transition: background 0.2s, box-shadow 0.2s;
+  flex-shrink: 0;
+}
+.batch-file-label:hover { background: rgba(52,211,153,0.15); box-shadow: 0 0 6px rgba(52,211,153,0.2); }
+.batch-file-input { display: none; }
+.batch-progress { font-size: 9px; color: var(--muted); letter-spacing: 0.5px; }
+.batch-done { font-size: 9px; color: var(--green); letter-spacing: 0.5px; }
+.batch-prog-bar {
+  height: 3px;
+  background: rgba(52,211,153,0.15);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.batch-prog-fill {
+  height: 100%;
+  background: var(--green);
+  border-radius: 2px;
+  transition: width 0.1s;
+}
+.batch-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+.batch-stat-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border-radius: 3px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border);
+}
+.bsi-label { font-size: 8px; letter-spacing: 0.5px; color: var(--muted); }
+.bsi-val { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--text); }
+.bsi-val.ts { color: var(--cy); }
+.bsi-val.py { color: #a78bfa; }
+.batch-label-table {
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.blt-hd {
+  display: grid;
+  grid-template-columns: 1fr 40px 50px 50px;
+  gap: 6px;
+  padding: 4px 8px;
+  background: rgba(255,255,255,0.04);
+  font-size: 8px;
+  letter-spacing: 1px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+.blt-row {
+  display: grid;
+  grid-template-columns: 1fr 40px 50px 50px;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 9px;
+  border-bottom: 1px solid var(--border);
+}
+.blt-row:last-child { border-bottom: none; }
+.blt-label { color: var(--text2); letter-spacing: 0.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.blt-n { color: var(--muted); text-align: right; }
+.blt-acc { text-align: right; font-variant-numeric: tabular-nums; }
+.blt-acc.ts { color: var(--cy); }
+.blt-acc.py { color: #a78bfa; }
+.batch-footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
 }
 </style>
