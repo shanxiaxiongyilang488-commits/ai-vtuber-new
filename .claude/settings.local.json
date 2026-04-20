@@ -13,7 +13,9 @@
       "WebFetch(domain:pixiv.github.io)",
       "WebFetch(domain:discourse.threejs.org)",
       "WebFetch(domain:vrm.dev)",
-      "Bash(powershell *)"
+      "Bash(powershell *)",
+      "Bash(mkdir -p E:/Dev/ai-vtuber/server)",
+      "Bash(mkdir -p E:/Dev/ai-vtuber/src/lib/ws)"
     ]
   }
 }

@@ -9,15 +9,25 @@
   // ──────────────────────────────────────────────────────────────
   // Props
   // ──────────────────────────────────────────────────────────────
+  export type VrmEmotion = 'neutral' | 'happy' | 'angry' | 'thinking' | 'sad';
+  export type VrmGaze    = 'center'  | 'left'  | 'right' | 'down';
+
   let {
-    vrmUrl    = '',
-    isThinking = false,
-    isSpeaking = false,
+    vrmUrl     = '',
+    isThinking  = false,
+    isSpeaking  = false,
+    emotion     = 'neutral' as VrmEmotion,
+    /** Python サーバーからの呼吸値 0.0〜1.0。-1 = 内部サイン波フォールバック */
+    breathing   = -1,
+    gaze        = 'center' as VrmGaze,
     class: className = '',
   }: {
     vrmUrl?:     string;
     isThinking?: boolean;
     isSpeaking?: boolean;
+    emotion?:    VrmEmotion;
+    breathing?:  number;
+    gaze?:       VrmGaze;
     class?:      string;
   } = $props();
 
@@ -107,38 +117,35 @@
   let blinkValue = 0;
 
   // ──────────────────────────────────────────────────────────────
-  // 腕仕草システム用ステート（非リアクティブ）
+  // 感情表情 lerp ステート（非リアクティブ）
   // ──────────────────────────────────────────────────────────────
-  /** 腕ボーンキャッシュ */
-  let rightUpperArmNode: THREE.Object3D | null = null;
-  let rightLowerArmNode: THREE.Object3D | null = null;
-  let rightHandNode:     THREE.Object3D | null = null;
-  let leftUpperArmNode:  THREE.Object3D | null = null;
-  let leftLowerArmNode:  THREE.Object3D | null = null;
-  let leftHandNode:      THREE.Object3D | null = null;
+  /** happy / Joy blendshape の現在値 */
+  let emoHappy   = 0;
+  /** angry / Angry blendshape の現在値 */
+  let emoAngry   = 0;
+  /** sad / Sorrow blendshape の現在値（thinking 困り顔用） */
+  let emoSad = 0;
 
-  /**
-   * 仕草 ID: 0=なし 1=前髪を触る 2=口元に手 3=小さく手を振る 4=胸元で手を整える
-   */
-  let gestureId      = 0;
-  /** 波振動スケール用ブレンド (0→1→0) */
-  let gestureBlend   = 0;
-  let gestureHolding = false;
-  let gestureEndT    = 0;
-  /** 最初の仕草は 8〜15 秒後 */
-  let gestureNextT   = 8 + Math.random() * 7;
+  /** 外部 breathing prop (0〜1) の 60fps スムージング用 */
+  let breathSmooth = 0.5;
 
-  /**
-   * 右腕現在回転（lerp ベース、applyIdlePose と同値で初期化）
-   * tick 内で毎フレーム目標へ lerp → ボーンへ適用する
-   */
-  let armRuax = 0.08, armRuaz =  1.25; // rightUpperArm x/z
-  let armRlaz = -0.20;                   // rightLowerArm z
-  let armRhz  = -0.10;                   // rightHand z
-  /** 左腕現在回転 */
-  let armLuax = 0.08, armLuaz = -1.25; // leftUpperArm x/z
-  let armLlaz =  0.20;                   // leftLowerArm z
-  let armLhz  =  0.10;                   // leftHand z
+  // ──────────────────────────────────────────────────────────────
+  // Tポーズ解除: ロード直後の自然な腕姿勢
+  // ──────────────────────────────────────────────────────────────
+  function applyIdlePose() {
+    if (!vrm) return;
+    const h = vrm.humanoid;
+    const rUA = h?.getNormalizedBoneNode('rightUpperArm');
+    const lUA = h?.getNormalizedBoneNode('leftUpperArm');
+    const rLA = h?.getNormalizedBoneNode('rightLowerArm');
+    const lLA = h?.getNormalizedBoneNode('leftLowerArm');
+    // 上腕: Z で腕を下げる / X で少し前へ（肩内側）
+    if (rUA) { rUA.rotation.z =  1.2; rUA.rotation.x = 0.1; }
+    if (lUA) { lUA.rotation.z = -1.2; lUA.rotation.x = 0.1; }
+    // 前腕: わずかに曲げる
+    if (rLA) { rLA.rotation.z =  0.15; }
+    if (lLA) { lLA.rotation.z = -0.15; }
+  }
 
   // ──────────────────────────────────────────────────────────────
   // カメラ自動フレーミング（胸上・会話向け）
@@ -187,41 +194,6 @@
     controls!.target.set(center.x + rightShift, targetY, center.z);
     camera!.position.set(center.x + rightShift, targetY, dist);
     controls!.update();
-  }
-
-  // ──────────────────────────────────────────────────────────────
-  // 自然な待機ポーズ（ロード時一度だけ適用）
-  // ──────────────────────────────────────────────────────────────
-  /**
-   * Tポーズになっている腕ボーンを自然な下ろし姿勢に補正する。
-   * three-vrm の Normalized Bone（Y-up, T-pose = 回転ゼロ）に対して
-   * 直接 Euler 回転を設定するだけなので vrm.update() で上書きされない。
-   * 顔・首・カメラ・speaking/thinking 演出には一切触れない。
-   */
-  function applyIdlePose(loadedVrm: VRM) {
-    const h = loadedVrm.humanoid;
-    if (!h) return;
-
-    // [ボーン名, { x?, y?, z? }] — Euler 角度 (rad)
-    // 右腕系は Z 負方向で下へ、左腕系は Z 正方向で下へ（Y-up 右手系）
-    const poseTable: Array<[string, { x?: number; y?: number; z?: number }]> = [
-      ['rightShoulder',  { z: -0.08 }],          // 肩の力を抜く
-      ['leftShoulder',   { z:  0.08 }],
-      ['rightUpperArm',  { z:  1.25, x: 0.08 }], // 腕を体側へ下ろす + 少し前傾
-      ['leftUpperArm',   { z: -1.25, x: 0.08 }],
-      ['rightLowerArm',  { z: -0.2  }],           // 肘を自然に曲げる
-      ['leftLowerArm',   { z:  0.2  }],
-      ['rightHand',      { z: -0.1  }],           // 手首の自然な角度
-      ['leftHand',       { z:  0.1  }],
-    ];
-
-    for (const [name, rot] of poseTable) {
-      const bone = h.getNormalizedBoneNode(name as any);
-      if (!bone) continue;
-      if (rot.x !== undefined) bone.rotation.x = rot.x;
-      if (rot.y !== undefined) bone.rotation.y = rot.y;
-      if (rot.z !== undefined) bone.rotation.z = rot.z;
-    }
   }
 
   // ──────────────────────────────────────────────────────────────
@@ -277,10 +249,16 @@
       if (vrm) {
         // ── 呼吸 ──────────────────────────────────────────────────
         const t = clock!.getElapsedTime();
-        // 主波 (4s) + 副波 (3.6s) の合成で有機的なリズムに
-        const breathMain = Math.sin(t * (Math.PI / 2));
-        const breathSub  = Math.sin(t * (Math.PI / 1.8)) * 0.3;
-        const breath     = (breathMain + breathSub) / 1.3;
+        // 外部 breathing prop(0〜1) があれば 60fps lerp で補間、なければ内部サイン波
+        let breath: number;
+        if (breathing >= 0) {
+          breathSmooth = THREE.MathUtils.lerp(breathSmooth, breathing, 0.12);
+          breath = breathSmooth * 2 - 1;   // 0〜1 → -1〜1
+        } else {
+          const breathMain = Math.sin(t * (Math.PI / 2));
+          const breathSub  = Math.sin(t * (Math.PI / 1.8)) * 0.3;
+          breath = (breathMain + breathSub) / 1.3;
+        }
 
         // thinking 時の前傾をなめらかに lerp
         thinkLean = THREE.MathUtils.lerp(thinkLean, isThinking ? 0.045 : 0, 0.04);
@@ -299,26 +277,29 @@
 
         // 脊椎・胸: 呼吸揺れ + thinking 前傾 + 姿勢調整
         if (spineBoneNode) {
-          spineBoneNode.rotation.x = breath * 0.012 + thinkLean + idlePosture;
+          spineBoneNode.rotation.x = breath * 0.030 + thinkLean + idlePosture;
         }
         if (chestBoneNode) {
-          chestBoneNode.rotation.x = breath * 0.008 + thinkLean * 0.55;
+          chestBoneNode.rotation.x = breath * 0.020 + thinkLean * 0.55;
         }
 
         // 肩: 呼吸で微かに上下 (applyIdlePose のベース値に重ねる)
         if (rightShoulderBoneNode) {
-          rightShoulderBoneNode.rotation.z = -0.08 + breath * 0.018;
+          rightShoulderBoneNode.rotation.z = -0.08 + breath * 0.040;
         }
         if (leftShoulderBoneNode) {
-          leftShoulderBoneNode.rotation.z  =  0.08 - breath * 0.018;
+          leftShoulderBoneNode.rotation.z  =  0.08 - breath * 0.040;
         }
 
         // ① 頭部ボーン回転 (thinking 時に視線が斜め上へ + speaking 時うなずき)
         //    vrm.update() より前に設定してスプリングボーンに反映させる
         if (headBoneNode) {
           breathHead = THREE.MathUtils.lerp(breathHead, breath, 0.04); // 呼吸の遅延追従
-          const tX = isThinking ? -0.16 : 0;  // 上を向く (負 = look up)
-          const tY = isThinking ?  0.22 : 0;  // 横を向く
+          // gaze prop による基本向き
+          const gazeY = gaze === 'left'  ? -0.20 : gaze === 'right' ? 0.20 : 0;
+          const gazeX = gaze === 'down'  ?  0.12 : 0;
+          const tX = (isThinking ? -0.16 : 0) + gazeX;
+          const tY = (isThinking ?  0.22 : 0) + gazeY;
           headRotX = THREE.MathUtils.lerp(headRotX, tX, 0.05);
           headRotY = THREE.MathUtils.lerp(headRotY, tY, 0.05);
           const speakNod = isSpeaking ? Math.sin(t * (Math.PI * 2 / 0.9)) * 0.025 : 0;
@@ -335,8 +316,8 @@
         }
         if (blinking) {
           blinkT += delta;
-          const CLOSE = 0.08; // 閉じるのに 80ms
-          const OPEN  = 0.12; // 開くのに 120ms
+          const CLOSE = 0.12; // 閉じるのに 120ms
+          const OPEN  = 0.18; // 開くのに 180ms
           if (blinkT < CLOSE) {
             blinkValue = blinkT / CLOSE;
           } else if (blinkT < CLOSE + OPEN) {
@@ -354,7 +335,7 @@
         // ── 口パク (isSpeaking 時のみ) ────────────────────────────
         if (isSpeaking) {
           if (t >= mouthNextT) {
-            mouthTarget = Math.random() * 0.8;
+            mouthTarget = 0.4 + Math.random() * 0.6;
             // 6〜8 回/秒 → 0.125〜0.167 秒間隔
             mouthNextT  = t + 0.125 + Math.random() * 0.042;
           }
@@ -367,61 +348,22 @@
           vrm.expressionManager.setValue('A',  mouthValue); // VRM 0.x
         }
 
-        // ── 腕仕草（10〜25 秒間隔） ───────────────────────────────
-        if (t >= gestureNextT && !gestureHolding) {
-          const roll = Math.random();
-          if (isSpeaking) {
-            gestureId = 0;                                       // speaking中は仕草なし
-          } else if (isThinking) {
-            gestureId = roll < 0.55 ? 2 : roll < 0.80 ? 4 : 1; // 口元を優先
-          } else {
-            gestureId = Math.floor(roll * 4) + 1;               // 1〜4 均等
-          }
-          if (gestureId > 0) {
-            gestureHolding = true;
-            gestureEndT    = t + 2.5 + Math.random() * 2.5;    // 2.5〜5 秒保持
-          }
-          gestureNextT = t + 10 + Math.random() * 15;          // 次は 10〜25 秒後
+        // ── 感情表情 (emotion prop) ──────────────────────────────────
+        // happy=0.60 / angry=0.55 / thinking(困り)=0.35 / neutral=0
+        const EL = 0.04;
+        emoHappy = THREE.MathUtils.lerp(emoHappy, emotion === 'happy'    ? 0.60 : 0, EL);
+        emoAngry = THREE.MathUtils.lerp(emoAngry, emotion === 'angry'    ? 0.55 : 0, EL);
+        emoSad   = THREE.MathUtils.lerp(emoSad,   emotion === 'thinking' ? 0.35 : 0, EL);
+        if (vrm.expressionManager) {
+          // VRM 1.0 expression names
+          vrm.expressionManager.setValue('happy',   emoHappy);
+          vrm.expressionManager.setValue('angry',   emoAngry);
+          vrm.expressionManager.setValue('sad',     emoSad);
+          // VRM 0.x (Pre-VRM 1.0) expression names
+          vrm.expressionManager.setValue('Joy',     emoHappy);
+          vrm.expressionManager.setValue('Angry',   emoAngry);
+          vrm.expressionManager.setValue('Sorrow',  emoSad);
         }
-        if (gestureHolding && t >= gestureEndT) gestureHolding = false;
-        gestureBlend = THREE.MathUtils.lerp(gestureBlend, gestureHolding ? 1.0 : 0.0, 0.022);
-
-        // 右腕目標値（gestureHolding でない場合はアイドル値 = 自動復帰）
-        let tRuax = 0.08, tRuaz =  1.25, tRlaz = -0.20, tRhz = -0.10;
-        if (gestureHolding) {
-          if      (gestureId === 1) { tRuax = 0.85; tRuaz = 0.10; tRlaz = -0.75; tRhz = -0.35; }
-          else if (gestureId === 2) { tRuax = 0.72; tRuaz = 0.45; tRlaz = -1.00; tRhz = -0.20; }
-          else if (gestureId === 3) { tRuax = 0.42; tRuaz = 0.28; tRlaz = -0.50; tRhz =  0.00; }
-          else if (gestureId === 4) { tRuax = 0.58; tRuaz = 0.62; tRlaz = -0.82; tRhz = -0.20; }
-        }
-        // 左腕目標値（胸元調整のみ）
-        let tLuax = 0.08, tLuaz = -1.25, tLlaz =  0.20, tLhz = 0.10;
-        if (gestureHolding && gestureId === 4) {
-          tLuax = 0.58; tLuaz = -0.62; tLlaz = 0.82; tLhz = 0.20;
-        }
-
-        // lerp: ゆっくり自然に動かす
-        const AL = 0.022;
-        armRuax = THREE.MathUtils.lerp(armRuax, tRuax, AL);
-        armRuaz = THREE.MathUtils.lerp(armRuaz, tRuaz, AL);
-        armRlaz = THREE.MathUtils.lerp(armRlaz, tRlaz, AL);
-        armRhz  = THREE.MathUtils.lerp(armRhz,  tRhz,  AL);
-        armLuax = THREE.MathUtils.lerp(armLuax, tLuax, AL);
-        armLuaz = THREE.MathUtils.lerp(armLuaz, tLuaz, AL);
-        armLlaz = THREE.MathUtils.lerp(armLlaz, tLlaz, AL);
-        armLhz  = THREE.MathUtils.lerp(armLhz,  tLhz,  AL);
-
-        // ボーンへ適用
-        if (rightUpperArmNode) { rightUpperArmNode.rotation.x = armRuax; rightUpperArmNode.rotation.z = armRuaz; }
-        if (rightLowerArmNode) { rightLowerArmNode.rotation.z = armRlaz; }
-        if (rightHandNode) {
-          rightHandNode.rotation.z = armRhz;
-          // 手振りジェスチャー: 手首に正弦波を重ねる
-          if (gestureId === 3) rightHandNode.rotation.z += Math.sin(t * 8.0) * 0.28 * gestureBlend;
-        }
-        if (leftUpperArmNode) { leftUpperArmNode.rotation.x = armLuax; leftUpperArmNode.rotation.z = armLuaz; }
-        if (leftLowerArmNode) { leftLowerArmNode.rotation.z = armLlaz; }
-        if (leftHandNode)     { leftHandNode.rotation.z     = armLhz; }
 
         // ② VRM 更新 (スプリングボーン・表情など)
         vrm.update(delta);
@@ -489,19 +431,10 @@
     blinking   = false;
     blinkT     = 0;
     blinkValue = 0;
-    rightUpperArmNode = null;
-    rightLowerArmNode = null;
-    rightHandNode     = null;
-    leftUpperArmNode  = null;
-    leftLowerArmNode  = null;
-    leftHandNode      = null;
-    gestureId      = 0;
-    gestureBlend   = 0;
-    gestureHolding = false;
-    gestureEndT    = 0;
-    gestureNextT   = 8 + Math.random() * 7;
-    armRuax = 0.08; armRuaz =  1.25; armRlaz = -0.20; armRhz = -0.10;
-    armLuax = 0.08; armLuaz = -1.25; armLlaz =  0.20; armLhz =  0.10;
+    emoHappy     = 0;
+    emoAngry     = 0;
+    emoSad       = 0;
+    breathSmooth = 0.5;
 
     const loader = new GLTFLoader();
     loader.register(parser => new VRMLoaderPlugin(parser));
@@ -529,17 +462,11 @@
       chestBoneNode         = vrm.humanoid?.getNormalizedBoneNode('chest')         ?? null;
       rightShoulderBoneNode = vrm.humanoid?.getNormalizedBoneNode('rightShoulder') ?? null;
       leftShoulderBoneNode  = vrm.humanoid?.getNormalizedBoneNode('leftShoulder')  ?? null;
-      rightUpperArmNode     = vrm.humanoid?.getNormalizedBoneNode('rightUpperArm') ?? null;
-      rightLowerArmNode     = vrm.humanoid?.getNormalizedBoneNode('rightLowerArm') ?? null;
-      rightHandNode         = vrm.humanoid?.getNormalizedBoneNode('rightHand')     ?? null;
-      leftUpperArmNode      = vrm.humanoid?.getNormalizedBoneNode('leftUpperArm')  ?? null;
-      leftLowerArmNode      = vrm.humanoid?.getNormalizedBoneNode('leftLowerArm')  ?? null;
-      leftHandNode          = vrm.humanoid?.getNormalizedBoneNode('leftHand')      ?? null;
 
-      // Tポーズを自然な待機姿勢へ補正（ロード時一度だけ）
-      applyIdlePose(vrm);
+      // Tポーズ解除: ロード直後に自然な腕の姿勢を適用
+      applyIdlePose();
 
-      // カメラを胸上フレーミングに自動調整（ポーズ適用後に bbox を取る）
+      // カメラを胸上フレーミングに自動調整
       frameForConversation(vrm);
 
       loaded = true;

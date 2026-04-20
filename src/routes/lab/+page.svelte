@@ -3,8 +3,10 @@
   import { createVoiceEngine } from '$lib/api/voiceEngine';
   import { PROVIDER_MODELS, type AIProvider } from '$lib/config/models';
   import { sessionStore } from '$lib/stores/sessionStore';
-  import AvatarViewer    from '$lib/components/AvatarViewer.svelte';
-  import PNGTuberViewer  from '$lib/components/PNGTuberViewer.svelte';
+  import AvatarViewer          from '$lib/components/AvatarViewer.svelte';
+  import PNGTuberViewer        from '$lib/components/PNGTuberViewer.svelte';
+  import MotionPNGTuberViewer  from '$lib/components/MotionPNGTuberViewer.svelte';
+  import { avatarState, initAvatarWs, sendAvatarPatch } from '$lib/ws/avatarSocket';
 
   // ============================================================
   // Types
@@ -113,6 +115,29 @@
 
   // pin が空 = AI自動検出、pin が設定済み = 固定感情
   const pngEmotion = $derived(emotionPin || currentEmotion);
+
+  // PNG-Tuber 感情 → VRM 表情マッピング
+  const vrmEmotion = $derived((): 'neutral' | 'happy' | 'angry' | 'thinking' => {
+    if (isThinking) return 'thinking';
+    const e = emotionPin || currentEmotion;
+    if (e === 'smile' || e === 'laugh' || e === 'blush' || e === 'heart' || e === 'wink') return 'happy';
+    if (e === 'angry') return 'angry';
+    return 'neutral';
+  });
+
+  // ── Avatar WS 同期 ────────────────────────────────────────────
+  // speaking / emotion が変わるたびに Python サーバーへ通知
+  $effect(() => {
+    sendAvatarPatch({ speaking: isSpeaking });
+  });
+  $effect(() => {
+    const e = vrmEmotion();
+    // AvatarEmotion 型へ変換（happy/angry/thinking/neutral → そのまま渡せる）
+    sendAvatarPatch({ emotion: e === 'angry' ? 'angry'
+                             : e === 'happy' ? 'happy'
+                             : e === 'thinking' ? 'thinking'
+                             : 'neutral' });
+  });
 
   // ── Compare Mode ─────────────────────────────────────────────
   type TSEmotionResult = { emotion: string; confidence: number; detail: string };
@@ -833,6 +858,10 @@
     // AI 応答テキストから感情を検出 → PNG-TUBER に反映（pin が空のときのみ上書き）
     if (!emotionPin) currentEmotion = EMOTION_IMAGE[analyzeEmotionTS(aiText).emotion] ?? 'neutral';
     setTimeout(() => chatEl?.scrollTo({ top: chatEl.scrollHeight, behavior: 'smooth' }), 50);
+
+    // 口パク開始（音声エンジン種別に関わらず即時 ON）
+    isSpeaking = true;
+
     if (voiceEngine !== 'none') {
       try {
         const engine = createVoiceEngine({
@@ -846,8 +875,14 @@
         });
       } catch (e) {
         console.error('❌ Lab音声失敗', e);
-        isSpeaking = false; // エラー時のフォールバック
+      } finally {
+        isSpeaking = false; // onEnd 未発火（サイレント失敗）時も確実にリセット
       }
+    } else {
+      // voiceEngine=none: テキスト長に応じた簡易口パク（1文字≒50ms、最短1.5秒・最長8秒）
+      const ms = Math.min(Math.max(aiText.length * 50, 1500), 8000);
+      await new Promise<void>(r => setTimeout(r, ms));
+      isSpeaking = false;
     }
     // ユーザー入力 → AI応答完了後にアイドルタイマーをリセット
     resetIdleTimer();
@@ -927,7 +962,17 @@
     viewerTab = t;
     localStorage.setItem(LS_VIEWER_TAB, t);
   }
-  let vrmFileUrl = $state('');          // blob URL（ファイル選択後に設定）
+  let vrmFileUrl = $state('');
+
+  // ── PNG-TUBER 設定パネル ──────────────────────────────────────
+  let showPngSettings  = $state(false);
+  type MotionMouthState = 'closed' | 'half' | 'open' | 'u' | 'e';
+  let motionMouthState = $derived<MotionMouthState>(isSpeaking ? 'open' : 'closed');
+  let pngScale         = $state(1.0);
+  let pngOffsetY       = $state(0);
+  let pngShake         = $state(1.0);
+  let pngEnableBlink   = $state(true);
+  let pngEnableLipsync = $state(true);          // blob URL（ファイル選択後に設定）
 
   function handleVrmFile(e: Event) {
     const file = (e.target as HTMLInputElement).files?.[0];
@@ -1454,6 +1499,23 @@ ${recent}
           localStorage.setItem(LS_RECENT_PROGRESS, aiText.length > 50 ? aiText.slice(0, 50) + '…' : aiText);
           setTimeout(() => chatEl?.scrollTo({ top: chatEl.scrollHeight, behavior: 'smooth' }), 50);
           saveChatHistory();
+          // 自発発話でも口パク（voiceEngine 有無に関わらずテキスト長ベース）
+          isSpeaking = true;
+          if (voiceEngine !== 'none') {
+            try {
+              const eng = createVoiceEngine({ voiceEngine, voiceId: voiceId || undefined, speakerId });
+              await eng.speak(aiText, {
+                onStart: () => { isSpeaking = true; },
+                onEnd:   () => { isSpeaking = false; },
+              });
+            } catch { /* ignore */ } finally {
+              isSpeaking = false;
+            }
+          } else {
+            const ms = Math.min(Math.max(aiText.length * 50, 1500), 8000);
+            await new Promise<void>(r => setTimeout(r, ms));
+            isSpeaking = false;
+          }
         }
       }
     } catch (e) {
@@ -1593,6 +1655,10 @@ ${recent}
     // PNGTuber 瞬きスケジューラー起動
     pngtuberActive = true;
     scheduleNextBlink();
+
+    // Avatar WebSocket 接続（Python サーバーが起動していない場合は自動リトライ）
+    const stopWs = initAvatarWs();
+    return stopWs;
   });
   onDestroy(() => {
     clearInterval(clockId);
@@ -2392,6 +2458,14 @@ ${recent}
             class:active={viewerTab === 'vrm'}
             onclick={() => setViewerTab('vrm')}
           >VRM</button>
+          {#if viewerTab === 'png'}
+            <button
+              class="cv-tab cv-tab-settings"
+              class:active={showPngSettings}
+              onclick={() => showPngSettings = !showPngSettings}
+              title="PNG-TUBER 設定"
+            >⚙ 設定</button>
+          {/if}
         </div>
       </div>
 
@@ -2427,11 +2501,9 @@ ${recent}
       {:else if viewerTab === 'png'}
         <!-- PNG-TUBER モード: 口パク・まばたき・感情切替 -->
         <div class="cvl-stage cvl-png-stage">
-          <PNGTuberViewer
-            src={selectedAvatar.replace('.png', '')}
-            {isSpeaking}
-            {isThinking}
-            emotion={pngEmotion}
+          <!-- キャラ本体 — 常時表示 -->
+          <MotionPNGTuberViewer
+            mouthState={motionMouthState}
           />
           {#if isThinking}
             <div class="cvl-thinking-overlay">
@@ -2440,6 +2512,97 @@ ${recent}
               <span class="dot-bounce" style="animation-delay:0.36s"></span>
             </div>
           {/if}
+
+          <!-- 設定パネル — ⚙ 押下時にビューア上に重ねて表示 -->
+          {#if showPngSettings}
+            <div class="png-settings-panel">
+              <div class="psp-title">◆ PNG-TUBER SETTINGS</div>
+
+              <!-- キャラ画像変更 -->
+              <div class="psp-row">
+                <span class="psp-label">キャラ画像</span>
+                <div class="psp-avatars">
+                  {#each AVATARS as av}
+                    <button
+                      class="psp-av-btn"
+                      class:active={selectedAvatar === av.file}
+                      onclick={() => selectAvatar(av.file)}
+                      title={av.name}
+                    >
+                      <img src={av.file} alt={av.name} class="psp-av-img"
+                        onerror={(e) => { (e.target as HTMLImageElement).src = '/avatars/default.png'; }} />
+                    </button>
+                  {/each}
+                </div>
+              </div>
+
+              <!-- 拡大率 -->
+              <div class="psp-row">
+                <span class="psp-label">拡大率</span>
+                <input type="range" class="psp-slider" min="0.5" max="2.0" step="0.05"
+                  bind:value={pngScale} />
+                <span class="psp-val">{pngScale.toFixed(2)}x</span>
+              </div>
+
+              <!-- 上下位置調整 -->
+              <div class="psp-row">
+                <span class="psp-label">上下位置</span>
+                <input type="range" class="psp-slider" min="-120" max="120" step="4"
+                  bind:value={pngOffsetY} />
+                <span class="psp-val">{pngOffsetY}px</span>
+              </div>
+
+              <!-- 揺れ強度 -->
+              <div class="psp-row">
+                <span class="psp-label">揺れ強度</span>
+                <input type="range" class="psp-slider" min="0.0" max="3.0" step="0.1"
+                  bind:value={pngShake} />
+                <span class="psp-val">{pngShake.toFixed(1)}</span>
+              </div>
+
+              <!-- 瞬き / 口パク / 表情AUTO -->
+              <div class="psp-row psp-toggles">
+                <label class="psp-toggle">
+                  <input type="checkbox" bind:checked={pngEnableBlink} />
+                  <span>瞬き</span>
+                </label>
+                <label class="psp-toggle">
+                  <input type="checkbox" bind:checked={pngEnableLipsync} />
+                  <span>口パク</span>
+                </label>
+                <label class="psp-toggle">
+                  <input type="checkbox"
+                    checked={emotionPin === ''}
+                    onchange={(e) => { emotionPin = (e.target as HTMLInputElement).checked ? '' : 'neutral'; }}
+                  />
+                  <span>表情AUTO</span>
+                </label>
+              </div>
+
+              <!-- 表情固定セレクト -->
+              <div class="psp-row">
+                <span class="psp-label">表情固定</span>
+                <select class="vc-select psp-select"
+                  value={emotionPin}
+                  onchange={(e) => { emotionPin = (e.target as HTMLSelectElement).value; }}
+                >
+                  <option value="">AUTO</option>
+                  <option value="neutral">neutral</option>
+                  <option value="smile">smile</option>
+                  <option value="angry">angry</option>
+                  <option value="sad">sad</option>
+                  <option value="blush">blush</option>
+                  <option value="laugh">laugh</option>
+                  <option value="smug">smug</option>
+                  <option value="sleepy">sleepy</option>
+                  <option value="panic">panic</option>
+                  <option value="heart">heart</option>
+                  <option value="wink">wink</option>
+                </select>
+              </div>
+            </div>
+          {/if}
+
           <!-- 感情オーバーライド行 -->
           <div class="vrm-load-row">
             <span class="vrm-loaded-badge" style="opacity:0.7">
@@ -2469,7 +2632,14 @@ ${recent}
       {:else}
         <!-- VRM モード -->
         <div class="cvl-stage cvl-vrm-stage">
-          <AvatarViewer vrmUrl={vrmFileUrl} isThinking={isThinking} isSpeaking={isSpeaking} />
+          <AvatarViewer
+            vrmUrl={vrmFileUrl}
+            isThinking={isThinking}
+            isSpeaking={isSpeaking}
+            emotion={vrmEmotion()}
+            breathing={$avatarState.breathing}
+            gaze={$avatarState.gaze}
+          />
           <div class="vrm-load-row">
             <label class="vrm-file-btn">
               ◈ VRM を読み込む
@@ -4097,6 +4267,138 @@ ${recent}
 .cv-tab[disabled]:not(.active) {
   opacity: 0.35;
   cursor: not-allowed;
+}
+
+/* ⚙ 設定ボタン — PNG選択中のみ表示される区切り付きタブ */
+.cv-tab-settings {
+  margin-left: 6px;
+  padding-left: 8px;
+  border-left: 1px solid rgba(0,229,255,0.20);
+  color: rgba(0,229,255,0.55);
+}
+.cv-tab-settings.active {
+  color: rgba(251,191,36,0.90);
+  border-color: rgba(251,191,36,0.45);
+  background: rgba(251,191,36,0.07);
+  text-shadow: 0 0 6px rgba(251,191,36,0.50);
+}
+
+/* ============================================================
+   PNG-TUBER 設定パネル — ビューア上に重なるオーバーレイ
+   ============================================================ */
+.png-settings-panel {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  right: 8px;
+  max-height: calc(100% - 16px);
+  overflow-y: auto;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 20;
+  background: rgba(4, 8, 18, 0.88);
+  border: 1px solid rgba(0,229,255,0.22);
+  border-radius: 4px;
+  backdrop-filter: blur(6px);
+}
+
+.psp-title {
+  font-size: 9px;
+  letter-spacing: 1.8px;
+  color: var(--cy);
+  text-shadow: 0 0 6px var(--cy-glow);
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(0,229,255,0.15);
+  flex-shrink: 0;
+}
+
+.psp-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+}
+
+.psp-label {
+  font-size: 9px;
+  letter-spacing: 1.2px;
+  color: var(--muted);
+  width: 52px;
+  flex-shrink: 0;
+}
+
+.psp-slider {
+  flex: 1;
+  height: 3px;
+  accent-color: var(--cy);
+  cursor: pointer;
+}
+
+.psp-val {
+  font-size: 9px;
+  color: var(--text2);
+  width: 36px;
+  text-align: right;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.psp-avatars {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.psp-av-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid var(--pborder);
+  background: var(--bg2);
+  cursor: pointer;
+  padding: 1px;
+  transition: border-color 0.15s;
+  overflow: hidden;
+}
+.psp-av-btn:hover   { border-color: var(--cy); }
+.psp-av-btn.active  { border-color: var(--cy); box-shadow: 0 0 6px var(--cy-glow); }
+
+.psp-av-img {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+  object-position: top;
+}
+
+.psp-toggles {
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.psp-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  font-size: 9px;
+  letter-spacing: 1.2px;
+  color: var(--muted);
+}
+.psp-toggle input[type="checkbox"] {
+  accent-color: var(--cy);
+  width: 13px;
+  height: 13px;
+  cursor: pointer;
+}
+.psp-toggle:has(input:checked) span {
+  color: var(--cy);
+}
+
+.psp-select {
+  flex: 1;
 }
 
 /* Large stage area */

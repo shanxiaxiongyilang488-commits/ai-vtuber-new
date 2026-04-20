@@ -26,3 +26,4 @@ vite.config.ts.timestamp-*
 python/.venv
 python/__pycache__
 python/*.pyc
+.claude/

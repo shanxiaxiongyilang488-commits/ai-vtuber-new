@@ -3,17 +3,27 @@
 
   // ── Props ───────────────────────────────────────────────────────
   let {
-    src        = '',      // 拡張子なしのベースパス例: /avatars/muryi
-    isSpeaking = false,
-    isThinking = false,
-    emotion    = 'neutral',   // 感情名: 'smile' | 'angry' | 'sad' | 'blush' | ... | 'neutral'
-    audioEl    = null as HTMLAudioElement | null,
+    src             = '',
+    isSpeaking      = false,
+    isThinking      = false,
+    emotion         = 'neutral',
+    audioEl         = null as HTMLAudioElement | null,
+    enableBlink     = true,
+    enableLipsync   = true,
+    scale           = 1.0,
+    offsetY         = 0,
+    shakeIntensity  = 1.0,
   }: {
-    src?:        string;
-    isSpeaking?: boolean;
-    isThinking?: boolean;
-    emotion?:    string;
-    audioEl?:    HTMLAudioElement | null;
+    src?:            string;
+    isSpeaking?:     boolean;
+    isThinking?:     boolean;
+    emotion?:        string;
+    audioEl?:        HTMLAudioElement | null;
+    enableBlink?:    boolean;
+    enableLipsync?:  boolean;
+    scale?:          number;
+    offsetY?:        number;
+    shakeIntensity?: number;
   } = $props();
 
   // ── フォールバックレベル ─────────────────────────────────────────
@@ -21,7 +31,7 @@
   // 1 = 単体 PNG (src + '.png')
   // 2 = /avatars/default.png
   let fallbackLevel    = $state(0);
-  let emotionImgFailed = $state(false);   // 感情画像が存在しない場合のフラグ
+  let emotionImgFailed = $state(false);
 
   // src が切り替わったらフォールバックを全リセット
   $effect(() => { void src; fallbackLevel = 0; emotionImgFailed = false; });
@@ -29,33 +39,48 @@
   $effect(() => { void emotion; emotionImgFailed = false; });
 
   // ── まばたきスケジューラー ─────────────────────────────────────
+  // 2〜5秒ごとに blink.png を 100ms だけ表示。
+  // speaking / thinking 中はスキップして次の周期へ。
   let blinking = $state(false);
   let _active  = false;
-  let _bTimer: ReturnType<typeof setTimeout> | null = null;
+  let _blinkOpenTimer:  ReturnType<typeof setTimeout> | null = null;
+  let _blinkCloseTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function cancelBlinkTimers() {
+    if (_blinkOpenTimer  !== null) { clearTimeout(_blinkOpenTimer);  _blinkOpenTimer  = null; }
+    if (_blinkCloseTimer !== null) { clearTimeout(_blinkCloseTimer); _blinkCloseTimer = null; }
+  }
 
   function scheduleBlink() {
-    _bTimer = setTimeout(() => {
+    cancelBlinkTimers();
+    const delay = 2000 + Math.random() * 3000;   // 2〜5秒間隔
+    _blinkOpenTimer = setTimeout(() => {
+      _blinkOpenTimer = null;
       if (!_active) return;
-      // speaking / thinking 中はまばたきしない
-      if (!isThinking && !isSpeaking) {
-        blinking = true;
-        _bTimer = setTimeout(() => {
-          if (!_active) return;
-          blinking = false;
-          scheduleBlink();
-        }, 130);                            // 目を閉じる時間 130ms
-      } else {
+      if (!enableBlink || isThinking || isSpeaking) {
         scheduleBlink();
+        return;
       }
-    }, 2500 + Math.random() * 3500);        // 2.5〜6秒間隔
+      blinking = true;
+      _blinkCloseTimer = setTimeout(() => {
+        _blinkCloseTimer = null;
+        if (!_active) return;
+        blinking = false;
+        scheduleBlink();
+      }, 100);   // 100ms だけ目を閉じる
+    }, delay);
   }
 
   // ── 口パクフレーム交互切替（talk_a ↔ talk_i） ─────────────────
-  // isSpeaking 中に 150ms 間隔で talk_a / talk_i を交互に切り替える
+  // isSpeaking=true の間だけ 150ms 間隔で talk_a / talk_i を交互に切り替える。
+  // isSpeaking=false になった瞬間インターバルを破棄して talk_a に戻す。
   let talkFrame = $state(false);   // false=talk_a, true=talk_i
 
   $effect(() => {
-    if (!isSpeaking) { talkFrame = false; return; }
+    if (!isSpeaking || !enableLipsync) {
+      talkFrame = false;
+      return;
+    }
     talkFrame = false;
     const t = setInterval(() => { talkFrame = !talkFrame; }, 150);
     return () => clearInterval(t);
@@ -94,18 +119,18 @@
   });
 
   // ── 表示画像決定 ─────────────────────────────────────────────────
-  // 優先順位: speak(talk_a/talk_i 交互) > blink > 感情表情 > idle
-  // fallback: level1=既存フラットPNG({src}.png) / level2=default.png
+  // 優先順位: フォールバック > speaking(talk_a/talk_i) > blink > 感情 > idle
+  // speaking=false かつ blinking=false かつ emotion=neutral → idle.png 固定
   const imgSrc = $derived(
     fallbackLevel === 2 ? '/avatars/default.png'
     : fallbackLevel === 1 ? `${src}.png`
-    : isSpeaking                                   ? `${src}/${talkFrame ? 'talk_i' : 'talk_a'}.png`
-    : (blinking && !isThinking)                    ? `${src}/blink.png`
+    : (isSpeaking && enableLipsync)                ? `${src}/${talkFrame ? 'talk_i' : 'talk_a'}.png`
+    : (blinking && enableBlink && !isThinking)     ? `${src}/blink.png`
     : (emotion !== 'neutral' && !emotionImgFailed) ? `${src}/${emotion}.png`
     : `${src}/idle.png`
   );
 
-  // 画像が存在しない場合にフォールバックレベルを上げる
+  // 画像が存在しない場合のフォールバック処理
   function onImgError() {
     // level 0 の感情画像失敗 → idle に戻すだけ（level は上げない）
     if (fallbackLevel === 0 && !isSpeaking && !blinking && emotion !== 'neutral' && !emotionImgFailed) {
@@ -122,20 +147,24 @@
 
   onDestroy(() => {
     _active = false;
-    if (_bTimer) clearTimeout(_bTimer);
+    cancelBlinkTimers();
     if (_rafId !== null) cancelAnimationFrame(_rafId);
     if (_audioCtx) _audioCtx.close().catch(() => {});
   });
 </script>
 
 <!-- ── Template ── -->
-<div class="png-tuber-wrap" class:speaking={isSpeaking} class:thinking={isThinking}>
+<div
+  class="png-tuber-wrap"
+  class:speaking={isSpeaking}
+  class:thinking={isThinking}
+  style="--png-scale:{scale};--png-offset-y:{offsetY}px;--png-shake:{shakeIntensity}"
+>
   <img
     src={imgSrc}
     alt=""
     class="png-tuber-img"
-    class:anim-speak={isSpeaking}
-    class:anim-blink={blinking && !isThinking && !isSpeaking}
+    class:anim-speak={isSpeaking && enableLipsync}
     onerror={onImgError}
   />
   {#if isThinking}
@@ -162,17 +191,14 @@
     object-fit: contain;
     user-select: none;
     pointer-events: none;
+    transform: scale(var(--png-scale, 1)) translateY(var(--png-offset-y, 0px));
+    transform-origin: center bottom;
+    transition: transform 0.1s ease;
   }
 
-  /* 発話中: 縦バウンス（口パクの視覚的代替） */
+  /* 発話中: 揺れ強度に応じたグロー */
   .png-tuber-img.anim-speak {
-    animation: pngtuber-speak 0.30s ease-in-out infinite;
-  }
-
-  /* まばたき: Y 方向に瞬間的に縮める */
-  .png-tuber-img.anim-blink {
-    animation: pngtuber-blink 0.13s ease-in-out;
-    transform-origin: 50% 28%;
+    animation: speak-glow calc(0.18s / max(var(--png-shake, 1), 0.1)) ease-in-out infinite;
   }
 
   /* ── thinking グロー ────────────────────────────────────────────── */
@@ -185,17 +211,9 @@
   }
 
   /* ── アニメーション定義 ─────────────────────────────────────────── */
-  @keyframes pngtuber-speak {
-    0%   { transform: translateY(0)    scaleY(1);    }
-    20%  { transform: translateY(-3px) scaleY(1.01); }
-    50%  { transform: translateY(0)    scaleY(0.99); }
-    80%  { transform: translateY(-2px) scaleY(1.01); }
-    100% { transform: translateY(0)    scaleY(1);    }
-  }
-
-  @keyframes pngtuber-blink {
-    0%, 100% { transform: scaleY(1);    }
-    40%, 60% { transform: scaleY(0.05); }
+  @keyframes speak-glow {
+    0%,100% { filter: brightness(1);    }
+    50%     { filter: brightness(1.06); }
   }
 
   @keyframes think-pulse {
