@@ -1,5 +1,10 @@
 <script lang="ts">
+  import { onMount, onDestroy } from 'svelte';
   import { createVoiceEngine } from '$lib/api/voiceEngine';
+  import PNGTuberStage from '$lib/components/pngtuber/PNGTuberStage.svelte';
+  import { muryi } from '$lib/data/pngtuber/characters';
+  import { characterStore } from '$lib/stores/characterStore.svelte';
+  import type { PNGTuberCharacter } from '$lib/types/pngtuber';
 
   type CharacterConfig = {
     name: string;
@@ -85,6 +90,78 @@
     closeSettings();
   }
 
+  // ===== PNGTuber =====
+  // imported character 優先、なければ muryi
+  const viewerCharacter = $derived<PNGTuberCharacter>(
+    characterStore.current
+      ? {
+          id: 'imported',
+          name: characterStore.current.name || 'Muryi',
+          assets: {
+            base:  characterStore.current.imageDataUrl,
+            mouth: {
+              close: characterStore.current.imageDataUrl,
+              mid:   characterStore.current.imageDataUrl,
+              open:  characterStore.current.imageDataUrl,
+            },
+            eyes: {
+              open:   characterStore.current.imageDataUrl,
+              closed: characterStore.current.imageDataUrl,
+            },
+          },
+          layout: { mouthX: 0, mouthY: 0, eyeX: 0, eyeY: 0 },
+          motion: { swayScale: 1.0, blinkHoldMs: 120, breathingScale: 1.008 },
+        }
+      : muryi
+  );
+
+  let pngSpeaking   = $state<boolean>(false);
+  let pngMouthLevel = $state<number>(0);
+  let pngBlink      = $state<0 | 1>(0);
+  let mouthTicker:  ReturnType<typeof setInterval> | null = null;
+  let speakTimer:   ReturnType<typeof setTimeout>  | null = null;
+  let blinkTimer:   ReturnType<typeof setInterval> | null = null;
+
+  // 口パク開始（AI返答 / 音声再生前に呼ぶ）
+  function startSpeaking(): void {
+    if (mouthTicker) clearInterval(mouthTicker);
+    if (speakTimer)  clearTimeout(speakTimer);
+    pngSpeaking = true;
+    let t = 0;
+    mouthTicker = setInterval(() => {
+      t += 0.12;
+      pngMouthLevel = +((Math.sin(t * 9) + 1) / 2).toFixed(2);
+    }, 50);
+  }
+
+  // 口パク停止（音声再生後に呼ぶ）
+  function stopSpeaking(): void {
+    if (mouthTicker) { clearInterval(mouthTicker); mouthTicker = null; }
+    if (speakTimer)  { clearTimeout(speakTimer);   speakTimer  = null; }
+    pngSpeaking   = false;
+    pngMouthLevel = 0;
+  }
+
+  // テスト用：3秒だけ喋る
+  function startSpeakTest(): void {
+    startSpeaking();
+    speakTimer = setTimeout(stopSpeaking, 3000);
+  }
+
+  // まばたきループ（待機中も継続）
+  onMount(() => {
+    blinkTimer = setInterval(() => {
+      pngBlink = 1;
+      setTimeout(() => { pngBlink = 0; }, 150);
+    }, 3500);
+  });
+
+  onDestroy(() => {
+    if (mouthTicker) clearInterval(mouthTicker);
+    if (speakTimer)  clearTimeout(speakTimer);
+    if (blinkTimer)  clearInterval(blinkTimer);
+  });
+
   // ===== 並走キャンセル用 runId =====
   // 新しい会話を開始するたびにインクリメント。
   // 各非同期ループはループ前後で runId が一致するか確認し、
@@ -128,8 +205,11 @@
             voiceId: char.voiceId,
             speakerId: char.speakerId
           });
+          startSpeaking();
           await engine.speak(msg.text);
+          stopSpeaking();
         } catch (e) {
+          stopSpeaking();
           console.error('❌ ダミー会話音声失敗', e);
         }
       }
@@ -200,9 +280,10 @@
             const url = URL.createObjectURL(await ttsRes.blob());
             await new Promise<void>((resolve) => {
               const audio = new Audio(url);
-              audio.onended = () => { URL.revokeObjectURL(url); resolve(); };
-              audio.onerror = () => { URL.revokeObjectURL(url); resolve(); };
-              audio.play().catch(() => { URL.revokeObjectURL(url); resolve(); });
+              startSpeaking();
+              audio.onended = () => { URL.revokeObjectURL(url); stopSpeaking(); resolve(); };
+              audio.onerror = () => { URL.revokeObjectURL(url); stopSpeaking(); resolve(); };
+              audio.play().catch(() => { URL.revokeObjectURL(url); stopSpeaking(); resolve(); });
             });
           } catch (e) {
             console.error('[radio TTS] Google TTS error:', e);
@@ -256,8 +337,11 @@
               voiceId: char.voiceId,
               speakerId: char.speakerId
             });
+            startSpeaking();
             await engine.speak(msg.text);
+            stopSpeaking();
           } catch (e) {
+            stopSpeaking();
             console.error('❌ API会話音声失敗', e);
           }
         }
@@ -392,6 +476,27 @@
         </div>
       {/if}
     </div>
+  </div>
+
+  <!-- ── PNGTuber Stage ── -->
+  <div class="stage-panel">
+    <p class="stage-label">◈ PNGTUBER</p>
+    <div class="stage-scaler">
+      <PNGTuberStage
+        character={viewerCharacter}
+        speaking={pngSpeaking}
+        mouthLevel={pngMouthLevel}
+        blink={pngBlink}
+      />
+    </div>
+    <button
+      class="speak-btn"
+      class:speak-btn-active={pngSpeaking}
+      disabled={pngSpeaking}
+      onclick={startSpeakTest}
+    >
+      {pngSpeaking ? '● 発話中...' : '▶ Speaking テスト'}
+    </button>
   </div>
 </div>
 
@@ -818,5 +923,64 @@
     background: rgba(34, 211, 238, 0.15);
     border-color: #22d3ee;
     color: #22d3ee;
+  }
+
+  /* ===================== PNGTuber Stage ===================== */
+  .stage-panel {
+    width: 420px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 20px 0 16px;
+    border-left: 1px solid rgba(99, 102, 241, 0.2);
+    background: rgba(0, 0, 0, 0.25);
+  }
+
+  .stage-label {
+    margin: 0;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    color: #4b5571;
+  }
+
+  .stage-scaler {
+    width: 400px;
+    overflow: hidden;
+    display: flex;
+    justify-content: center;
+  }
+
+  .speak-btn {
+    padding: 9px 22px;
+    border-radius: 8px;
+    border: 1px solid rgba(99, 102, 241, 0.4);
+    background: rgba(14, 18, 30, 0.8);
+    color: #818cf8;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    cursor: pointer;
+    transition: all 0.15s;
+    /* global button スタイルの上書き */
+    background-image: none;
+  }
+
+  .speak-btn:hover:not(:disabled) {
+    background: rgba(99, 102, 241, 0.15);
+    box-shadow: 0 0 12px rgba(99, 102, 241, 0.3);
+    transform: none;
+  }
+
+  .speak-btn-active,
+  .speak-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+    color: #a5b4fc;
+    border-color: rgba(99, 102, 241, 0.6);
   }
 </style>

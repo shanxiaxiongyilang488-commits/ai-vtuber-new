@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+  import type { MotionClip, MotionFrame } from '$lib/types/motion';
+  import { characterStore } from '$lib/stores/characterStore.svelte';
 
   // ─────────── State ───────────
   let videoFile = $state<File | null>(null);
@@ -21,7 +23,7 @@
   let fps         = $state<number>(30);
   let sensitivity = $state<number>(50);
 
-  type LipRow = { time: number; mouth_open: number; mouth_mid: number; mouth_close: number };
+  type LipRow = { time: number; mouth_open: number; mouth_mid: number; mouth_close: number; blink: 0 | 1 };
   let mouthOpen  = $state<number>(0);
   let mouthMid   = $state<number>(0);
   let mouthClose = $state<number>(1);
@@ -36,6 +38,158 @@
   const csvReady = $derived(csvLog.length > 0);
 
   const fpsOptions = [24, 30, 60];
+
+  // ─────────── Timeline ───────────
+  const TL_W = 1000;  // SVG 論理幅
+  const TL_H = 80;    // SVG 論理高さ
+  let tlSvg = $state<SVGSVGElement | null>(null);
+
+  // ─────────── Smoothing ───────────
+  let smoothOn     = $state<boolean>(false);
+  let smoothWindow = $state<number>(7); // 奇数推奨 (centered window)
+  let adaptiveOn   = $state<boolean>(false);
+
+  function applySmoothing(rows: LipRow[], win: number): LipRow[] {
+    const half = Math.floor(win / 2);
+    return rows.map((row, i) => {
+      const lo  = Math.max(0, i - half);
+      const hi  = Math.min(rows.length - 1, i + half);
+      let sum   = 0;
+      for (let j = lo; j <= hi; j++) sum += rows[j].mouth_open;
+      const avg = +(sum / (hi - lo + 1)).toFixed(2);
+      const c   = +(1 - avg).toFixed(2);
+      const m   = +(Math.min(avg, c) * 0.6).toFixed(2);
+      return { ...row, mouth_open: avg, mouth_mid: m, mouth_close: c };
+    });
+  }
+
+  // mouth_open > 0.6 → WEAK_WIN (ピーク保持) / ≤ 0.6 → strongWin (強平滑化)
+  function applyAdaptiveSmoothing(rows: LipRow[], strongWin: number): LipRow[] {
+    const WEAK_WIN   = 3;
+    const halfStrong = Math.floor(strongWin / 2);
+    const halfWeak   = Math.floor(WEAK_WIN  / 2);
+    return rows.map((row, i) => {
+      const half = row.mouth_open > 0.6 ? halfWeak : halfStrong;
+      const lo   = Math.max(0, i - half);
+      const hi   = Math.min(rows.length - 1, i + half);
+      let sum    = 0;
+      for (let j = lo; j <= hi; j++) sum += rows[j].mouth_open;
+      const avg  = +(sum / (hi - lo + 1)).toFixed(2);
+      const c    = +(1 - avg).toFixed(2);
+      const m    = +(Math.min(avg, c) * 0.6).toFixed(2);
+      return { ...row, mouth_open: avg, mouth_mid: m, mouth_close: c };
+    });
+  }
+
+  // uniform → adaptive の順で適用（両 ON 時は重ねがけ）
+  // ─────────── Attack / Release ───────────
+  let arOn       = $state<boolean>(false);
+  let attackVal  = $state<number>(80);  // 1-100 → alpha = val/100  (高 = 速い)
+  let releaseVal = $state<number>(20);  // 1-100 → alpha = val/100  (低 = 遅い)
+
+  // 上昇(attack)は速く、下降(release)は遅く追従する非対称 1-pole フィルタ
+  function applyAttackRelease(rows: LipRow[], attack: number, release: number): LipRow[] {
+    if (rows.length === 0) return rows;
+    const aA = attack  / 100;  // alpha for rising
+    const rA = release / 100;  // alpha for falling
+    const out: LipRow[] = [rows[0]];
+    for (let i = 1; i < rows.length; i++) {
+      const prev  = out[i - 1].mouth_open;
+      const curr  = rows[i].mouth_open;
+      const alpha = curr > prev ? aA : rA;
+      const avg   = +(prev + alpha * (curr - prev)).toFixed(2);
+      const c     = +(1 - avg).toFixed(2);
+      const m     = +(Math.min(avg, c) * 0.6).toFixed(2);
+      out.push({ ...rows[i], mouth_open: avg, mouth_mid: m, mouth_close: c });
+    }
+    return out;
+  }
+
+  function buildSmoothedLog(
+    rows: LipRow[],
+    smooth: boolean, win: number,
+    adaptive: boolean,
+    ar: boolean, atk: number, rel: number
+  ): LipRow[] {
+    let r = rows;
+    if (smooth   && r.length > 0) r = applySmoothing(r, win);
+    if (adaptive && r.length > 0) r = applyAdaptiveSmoothing(r, win);
+    if (ar       && r.length > 0) r = applyAttackRelease(r, atk, rel);
+    return r;
+  }
+
+  // 平滑化済みログ（raw csvLog は不変）
+  const smoothedLog = $derived<LipRow[]>(
+    buildSmoothedLog(csvLog, smoothOn, smoothWindow, adaptiveOn, arOn, attackVal, releaseVal)
+  );
+
+  // mouthLevel ポリライン座標文字列
+  const timelinePoints = $derived(
+    smoothedLog.length === 0 || duration <= 0
+      ? ''
+      : smoothedLog
+          .map(r => {
+            const x = ((r.time / duration) * TL_W).toFixed(1);
+            const y = ((1 - r.mouth_open) * TL_H).toFixed(1);
+            return `${x},${y}`;
+          })
+          .join(' ')
+  );
+
+  // Compare Preview 用 — 常に raw csvLog を参照
+  const rawPoints = $derived(
+    csvLog.length === 0 || duration <= 0
+      ? ''
+      : csvLog
+          .map(r => {
+            const x = ((r.time / duration) * TL_W).toFixed(1);
+            const y = ((1 - r.mouth_open) * TL_H).toFixed(1);
+            return `${x},${y}`;
+          })
+          .join(' ')
+  );
+
+  // blink=1 フレームの X 座標リスト（blink は平滑化しないが参照元を smoothedLog に統一）
+  const blinkXList = $derived(
+    duration <= 0
+      ? ([] as number[])
+      : smoothedLog.filter(r => r.blink === 1).map(r => (r.time / duration) * TL_W)
+  );
+
+  // 現在時刻カーソル X
+  const tlCursor = $derived(duration > 0 ? (currentTime / duration) * TL_W : 0);
+
+  // 'seek' = 再生位置移動 / 'blink' = blink toggle 編集
+  let tlMode = $state<'seek' | 'blink'>('seek');
+
+  function nearestFrameIndex(t: number): number {
+    if (csvLog.length === 0) return -1;
+    let best = 0;
+    let bestDist = Math.abs(csvLog[0].time - t);
+    for (let i = 1; i < csvLog.length; i++) {
+      const d = Math.abs(csvLog[i].time - t);
+      if (d < bestDist) { bestDist = d; best = i; }
+    }
+    return best;
+  }
+
+  function onTimelineClick(e: MouseEvent): void {
+    if (duration <= 0 || !tlSvg) return;
+    const rect  = tlSvg.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const t     = ratio * duration;
+
+    if (tlMode === 'blink') {
+      const idx = nearestFrameIndex(t);
+      if (idx === -1) return;
+      const row  = csvLog[idx];
+      csvLog[idx] = { ...row, blink: row.blink === 1 ? 0 : 1 };
+      csvLog = [...csvLog]; // Svelte 5 reactivity trigger
+    } else {
+      if (!videoEl) return;
+      videoEl.currentTime = t;
+    }
+  }
 
   // ─────────── Helpers ───────────
   function fmtTime(t: number): string {
@@ -71,12 +225,23 @@
     csvLog    = [];
   }
 
-  function loadImage(file: File): void {
+  function fileToDataUrl(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload  = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function loadImage(file: File): Promise<void> {
     clearVideo();
     clearImage();
     imageFile = file;
     imageName = file.name;
     imageURL  = URL.createObjectURL(file);
+    const dataUrl = await fileToDataUrl(file);
+    characterStore.set(dataUrl, file.name);
   }
 
   function onVideoChange(e: Event): void {
@@ -89,7 +254,7 @@
   function onImageChange(e: Event): void {
     const input = e.currentTarget as HTMLInputElement;
     const file = input.files?.[0];
-    if (file) loadImage(file);
+    if (file) void loadImage(file);
     input.value = '';
   }
 
@@ -139,6 +304,42 @@
     URL.revokeObjectURL(url);
   }
 
+  function exportMotionJSON(): void {
+    if (csvLog.length === 0) return;
+
+    function toMouthShape(open: number): 'close' | 'mid' | 'open' {
+      if (open < 0.25) return 'close';
+      if (open < 0.6)  return 'mid';
+      return 'open';
+    }
+
+    const shared = characterStore.current;
+    const clip: MotionClip = {
+      meta: {
+        fps,
+        duration,
+        source: videoName,
+        ...(shared ? { characterImage: shared.imageDataUrl, characterName: shared.name } : {}),
+      },
+      frames: smoothedLog.map((r): MotionFrame => ({
+        t:          r.time,
+        mouth:      r.mouth_open,
+        mouthShape: toMouthShape(r.mouth_open),
+        blink:      r.blink,
+        headX:      0,
+        headY:      0,
+      })),
+    };
+
+    const blob = new Blob([JSON.stringify(clip, null, 2)], { type: 'application/json' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = `motion_${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   // ─────────── Lifecycle ───────────
   onMount(() => {
     ticker = setInterval(() => {
@@ -152,7 +353,7 @@
       mouthClose = c;
       csvLog = [
         ...csvLog,
-        { time: +currentTime.toFixed(3), mouth_open: o, mouth_mid: m, mouth_close: c },
+        { time: +currentTime.toFixed(3), mouth_open: o, mouth_mid: m, mouth_close: c, blink: 0 },
       ];
     }, 1000 / fps);
   });
@@ -202,6 +403,13 @@
         <span>◈</span> Load Image
       </button>
       <p class="hint">mp4 / webm &nbsp;·&nbsp; png / jpg</p>
+      {#if characterStore.current}
+        <div class="char-badge">
+          <img src={characterStore.current.imageDataUrl} alt="char" class="char-thumb">
+          <span class="char-name">{characterStore.current.name}</span>
+          <button class="char-clear" onclick={() => characterStore.clear()} title="Remove">✕</button>
+        </div>
+      {/if}
     </section>
 
     <div class="hr"></div>
@@ -233,6 +441,67 @@
     <div class="hr"></div>
 
     <section class="sec">
+      <p class="label">Smooth</p>
+      <div class="seg">
+        <button class="seg-btn" class:on={!smoothOn} onclick={() => { smoothOn = false; }}>OFF</button>
+        <button class="seg-btn" class:on={smoothOn}  onclick={() => { smoothOn = true;  }}>ON</button>
+      </div>
+      {#if smoothOn}
+        <p class="label" style="margin-top:14px">
+          Window <span class="badge">{smoothWindow}</span>
+        </p>
+        <input class="slider" type="range" min="3" max="21" step="2" bind:value={smoothWindow}>
+        <div class="slider-ends"><span>3</span><span>21</span></div>
+      {/if}
+      <p class="hint">
+        {smoothOn ? `移動平均 ±${Math.floor(smoothWindow / 2)} frames` : 'raw data'}
+      </p>
+    </section>
+
+    <div class="hr"></div>
+
+    <section class="sec">
+      <p class="label">Adaptive Smooth</p>
+      <div class="seg">
+        <button class="seg-btn" class:on={!adaptiveOn} onclick={() => { adaptiveOn = false; }}>OFF</button>
+        <button class="seg-btn" class:on={adaptiveOn}  onclick={() => { adaptiveOn = true;  }}>ON</button>
+      </div>
+      <p class="hint">
+        {adaptiveOn
+          ? `open>0.6 → weak(3) / ≤0.6 → strong(${smoothWindow})`
+          : 'disabled'}
+      </p>
+    </section>
+
+    <div class="hr"></div>
+
+    <section class="sec">
+      <p class="label">Attack / Release</p>
+      <div class="seg">
+        <button class="seg-btn" class:on={!arOn} onclick={() => { arOn = false; }}>OFF</button>
+        <button class="seg-btn" class:on={arOn}  onclick={() => { arOn = true;  }}>ON</button>
+      </div>
+      {#if arOn}
+        <p class="label" style="margin-top:14px">
+          Attack <span class="badge">{attackVal}</span>
+        </p>
+        <input class="slider" type="range" min="1" max="100" bind:value={attackVal}>
+        <div class="slider-ends"><span>slow</span><span>fast</span></div>
+
+        <p class="label" style="margin-top:12px">
+          Release <span class="badge">{releaseVal}</span>
+        </p>
+        <input class="slider" type="range" min="1" max="100" bind:value={releaseVal}>
+        <div class="slider-ends"><span>slow</span><span>fast</span></div>
+      {/if}
+      <p class="hint">
+        {arOn ? `↑ α=${(attackVal/100).toFixed(2)} / ↓ α=${(releaseVal/100).toFixed(2)}` : 'disabled'}
+      </p>
+    </section>
+
+    <div class="hr"></div>
+
+    <section class="sec">
       <p class="label">Export</p>
       <button
         class="btn accent"
@@ -241,6 +510,15 @@
         onclick={exportCSV}
       >
         <span>⬇</span> Export CSV
+        {#if csvReady}<span class="count">{csvLog.length}</span>{/if}
+      </button>
+      <button
+        class="btn accent"
+        class:disabled-btn={!csvReady}
+        disabled={!csvReady}
+        onclick={exportMotionJSON}
+      >
+        <span>⬇</span> Export Motion JSON
         {#if csvReady}<span class="count">{csvLog.length}</span>{/if}
       </button>
       <p class="hint">再生中データを出力</p>
@@ -368,6 +646,161 @@
       <div class="info-row"><span>Logged</span><b>{csvLog.length}</b></div>
     </section>
   </aside>
+
+  <!-- ═══ TIMELINE PANEL ═══ -->
+  <div class="timeline-panel">
+    <div class="tl-header">
+      <span class="tl-label">◆ Timeline</span>
+      <span class="tl-count">{csvLog.length} frames &nbsp;·&nbsp; {fmtTime(duration)}</span>
+
+      <!-- モード切替 -->
+      <div class="tl-mode-seg">
+        <button
+          class="tl-mode-btn"
+          class:tl-mode-on={tlMode === 'seek'}
+          onclick={() => { tlMode = 'seek'; }}
+        >▶ Seek</button>
+        <button
+          class="tl-mode-btn"
+          class:tl-mode-on={tlMode === 'blink'}
+          onclick={() => { tlMode = 'blink'; }}
+        >◉ Blink</button>
+      </div>
+
+      <button
+        class="tl-save-btn"
+        class:tl-disabled={!csvReady}
+        disabled={!csvReady}
+        onclick={exportMotionJSON}
+      >⬇ Save Motion JSON</button>
+    </div>
+
+    <div class="tl-wrap">
+      <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions -->
+      <svg
+        bind:this={tlSvg}
+        class="tl-svg"
+        viewBox="0 0 {TL_W} {TL_H}"
+        preserveAspectRatio="none"
+        role="img"
+        aria-label="Motion timeline"
+        onclick={onTimelineClick}
+      >
+        <!-- 水平グリッド線 -->
+        {#each [0.25, 0.5, 0.75] as v}
+          <line
+            x1="0"   y1={v * TL_H}
+            x2={TL_W} y2={v * TL_H}
+            stroke="rgba(56,189,248,0.1)"
+            stroke-width="1"
+            vector-effect="non-scaling-stroke"
+          />
+        {/each}
+
+        <!-- mouthLevel フィルエリア -->
+        {#if timelinePoints}
+          <polygon
+            points="0,{TL_H} {timelinePoints} {TL_W},{TL_H}"
+            fill="rgba(56,189,248,0.07)"
+          />
+          <!-- mouthLevel ポリライン -->
+          <polyline
+            points={timelinePoints}
+            fill="none"
+            stroke="#38bdf8"
+            stroke-width="1.5"
+            stroke-linejoin="round"
+            vector-effect="non-scaling-stroke"
+          />
+        {/if}
+
+        <!-- blink マーカー（縦線）-->
+        {#each blinkXList as bx}
+          <line
+            x1={bx} y1="0"
+            x2={bx} y2={TL_H}
+            stroke="rgba(244,114,182,0.85)"
+            stroke-width="1"
+            vector-effect="non-scaling-stroke"
+          />
+        {/each}
+
+        <!-- 現在時刻カーソル -->
+        {#if hasVideo}
+          <line
+            x1={tlCursor} y1="0"
+            x2={tlCursor} y2={TL_H}
+            stroke="rgba(255,255,255,0.9)"
+            stroke-width="1.5"
+            stroke-dasharray="4 3"
+            vector-effect="non-scaling-stroke"
+          />
+        {/if}
+      </svg>
+
+      <!-- 時間ラベル -->
+      <div class="tl-times">
+        <span>0:00</span>
+        {#if duration > 0}
+          <span>{fmtTime(duration / 2)}</span>
+          <span>{fmtTime(duration)}</span>
+        {/if}
+      </div>
+    </div>
+
+    <!-- ── Compare Preview ── -->
+    {#if csvReady}
+      <div class="cmp-header">
+        <span class="tl-label">◈ Compare Preview</span>
+        <span class="tl-count">RAW vs PROCESSED</span>
+      </div>
+      <div class="cmp-row">
+
+        <!-- 左：RAW -->
+        <div class="cmp-half">
+          <p class="cmp-label">RAW</p>
+          <svg class="cmp-svg" viewBox="0 0 {TL_W} {TL_H}" preserveAspectRatio="none">
+            {#each [0.25, 0.5, 0.75] as v}
+              <line x1="0" y1={v*TL_H} x2={TL_W} y2={v*TL_H}
+                stroke="rgba(255,255,255,0.05)" stroke-width="1" vector-effect="non-scaling-stroke"/>
+            {/each}
+            {#if rawPoints}
+              <polygon points="0,{TL_H} {rawPoints} {TL_W},{TL_H}" fill="rgba(148,163,192,0.08)"/>
+              <polyline points={rawPoints} fill="none"
+                stroke="#64748b" stroke-width="1.5" stroke-linejoin="round"
+                vector-effect="non-scaling-stroke"/>
+            {/if}
+            <line x1={tlCursor} y1="0" x2={tlCursor} y2={TL_H}
+              stroke="rgba(255,255,255,0.55)" stroke-width="1.5" stroke-dasharray="4 3"
+              vector-effect="non-scaling-stroke"/>
+          </svg>
+        </div>
+
+        <div class="cmp-divider"></div>
+
+        <!-- 右：PROCESSED -->
+        <div class="cmp-half">
+          <p class="cmp-label">PROCESSED</p>
+          <svg class="cmp-svg" viewBox="0 0 {TL_W} {TL_H}" preserveAspectRatio="none">
+            {#each [0.25, 0.5, 0.75] as v}
+              <line x1="0" y1={v*TL_H} x2={TL_W} y2={v*TL_H}
+                stroke="rgba(56,189,248,0.08)" stroke-width="1" vector-effect="non-scaling-stroke"/>
+            {/each}
+            {#if timelinePoints}
+              <polygon points="0,{TL_H} {timelinePoints} {TL_W},{TL_H}" fill="rgba(56,189,248,0.07)"/>
+              <polyline points={timelinePoints} fill="none"
+                stroke="#38bdf8" stroke-width="1.5" stroke-linejoin="round"
+                vector-effect="non-scaling-stroke"/>
+            {/if}
+            <line x1={tlCursor} y1="0" x2={tlCursor} y2={TL_H}
+              stroke="rgba(255,255,255,0.55)" stroke-width="1.5" stroke-dasharray="4 3"
+              vector-effect="non-scaling-stroke"/>
+          </svg>
+        </div>
+
+      </div>
+    {/if}
+  </div>
 </div>
 
 <style>
@@ -471,6 +904,45 @@
     margin: 10px 0 0;
     letter-spacing: 0.04em;
   }
+
+  .char-badge {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    padding: 6px 10px;
+    background: rgba(99, 102, 241, 0.08);
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    border-radius: 8px;
+  }
+  .char-thumb {
+    width: 32px;
+    height: 32px;
+    object-fit: cover;
+    border-radius: 4px;
+    border: 1px solid rgba(99, 102, 241, 0.25);
+    flex-shrink: 0;
+  }
+  .char-name {
+    flex: 1;
+    font-size: 11px;
+    color: #818cf8;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .char-clear {
+    background: none;
+    border: none;
+    color: #4a5875;
+    cursor: pointer;
+    font-size: 11px;
+    padding: 2px 4px;
+    flex-shrink: 0;
+    border-radius: 3px;
+    transition: color 0.15s;
+  }
+  .char-clear:hover { color: #f87171; }
 
   .badge {
     display: inline-block;
@@ -810,5 +1282,171 @@
     font-weight: 600;
     font-variant-numeric: tabular-nums;
     font-family: 'Consolas', monospace;
+  }
+
+  /* ═══ Timeline Panel ═══ */
+  .timeline-panel {
+    grid-column: 1 / -1;
+    background: linear-gradient(180deg, rgba(18, 24, 38, 0.7), rgba(10, 14, 22, 0.7));
+    border: 1px solid rgba(56, 189, 248, 0.15);
+    border-radius: 14px;
+    padding: 18px 24px 16px;
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+  }
+
+  .tl-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+
+  .tl-label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: #38bdf8;
+    text-shadow: 0 0 8px rgba(56, 189, 248, 0.5);
+  }
+
+  .tl-count {
+    font-size: 11px;
+    color: #4a5875;
+    font-family: 'Consolas', monospace;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ── モード切替セグメント ── */
+  .tl-mode-seg {
+    display: flex;
+    gap: 4px;
+    margin-left: 8px;
+  }
+
+  .tl-mode-btn {
+    padding: 5px 12px;
+    border-radius: 5px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    cursor: pointer;
+    border: 1px solid rgba(56, 189, 248, 0.2);
+    background: rgba(14, 18, 30, 0.7);
+    color: #4a5875;
+    transition: all 0.12s;
+  }
+  .tl-mode-btn:hover:not(.tl-mode-on) {
+    border-color: rgba(56, 189, 248, 0.4);
+    color: #94a9cc;
+  }
+  .tl-mode-btn.tl-mode-on {
+    background: rgba(244, 114, 182, 0.12);
+    border-color: rgba(244, 114, 182, 0.5);
+    color: #f472b6;
+    box-shadow: 0 0 10px rgba(244, 114, 182, 0.2);
+  }
+  /* Seek モードのアクティブ色はシアン */
+  .tl-mode-btn:first-child.tl-mode-on {
+    background: rgba(56, 189, 248, 0.1);
+    border-color: rgba(56, 189, 248, 0.5);
+    color: #38bdf8;
+    box-shadow: 0 0 10px rgba(56, 189, 248, 0.2);
+  }
+
+  .tl-save-btn {
+    margin-left: auto;
+    padding: 7px 16px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    background: rgba(22, 101, 52, 0.15);
+    color: #4ade80;
+    border: 1px solid rgba(74, 222, 128, 0.3);
+    transition: all 0.15s;
+  }
+  .tl-save-btn:hover:not(.tl-disabled) {
+    background: rgba(22, 101, 52, 0.3);
+    box-shadow: 0 0 14px rgba(74, 222, 128, 0.2);
+  }
+  .tl-save-btn.tl-disabled,
+  .tl-save-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+
+  .tl-wrap {
+    position: relative;
+  }
+
+  .tl-svg {
+    width: 100%;
+    height: 100px;
+    display: block;
+    cursor: crosshair;
+    background: rgba(5, 8, 14, 0.7);
+    border-radius: 6px;
+    border: 1px solid rgba(56, 189, 248, 0.08);
+  }
+
+  .tl-times {
+    display: flex;
+    justify-content: space-between;
+    font-size: 10px;
+    color: #3a4a62;
+    font-family: 'Consolas', monospace;
+    font-variant-numeric: tabular-nums;
+    margin-top: 4px;
+    padding: 0 2px;
+  }
+
+  /* ═══ Compare Preview ═══ */
+  .cmp-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 18px;
+    padding-top: 14px;
+    border-top: 1px solid rgba(56, 189, 248, 0.1);
+    margin-bottom: 10px;
+  }
+
+  .cmp-row {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: start;
+  }
+
+  .cmp-divider {
+    width: 1px;
+    background: linear-gradient(to bottom, transparent, rgba(56, 189, 248, 0.2), transparent);
+    margin: 0 14px;
+    align-self: stretch;
+  }
+
+  .cmp-half {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .cmp-label {
+    margin: 0 0 4px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    color: #4a5875;
+  }
+
+  .cmp-svg {
+    width: 100%;
+    height: 72px;
+    display: block;
+    background: rgba(5, 8, 14, 0.55);
+    border-radius: 4px;
+    border: 1px solid rgba(56, 189, 248, 0.06);
   }
 </style>

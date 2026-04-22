@@ -10,6 +10,10 @@
 
   let { open, character, onclose, onsave }: Props = $props();
 
+ 
+
+
+
   // ===== ローカル state =====
   let name = $state('');
   let aiEngine = $state<AIEngine>('openai');
@@ -29,8 +33,7 @@
       name = character.name;
       aiEngine = character.aiEngine;
       voiceEngine = character.voiceEngine;
-      voiceId = character.voiceId ?? '';
-      speakerId = character.speakerId ?? 1;
+      voiceId = character.voiceId != null? String(character.voiceId): '4';
       systemPrompt = character.systemPrompt;
       avatarPreview = character.avatar ?? null;
       ollamaModel = character.ollamaModel ?? '';
@@ -54,8 +57,11 @@
       name,
       aiEngine,
       voiceEngine,
-      voiceId,
-      speakerId,
+      voiceId:
+      voiceEngine === 'voicevox'
+    ? Number(voiceId || 4)
+    : voiceId,
+      
       systemPrompt,
       ollamaModel,
       avatar: avatarPreview ?? character.avatar
