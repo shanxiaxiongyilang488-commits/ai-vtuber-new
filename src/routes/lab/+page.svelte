@@ -7,7 +7,8 @@
   import PNGTuberViewer        from '$lib/components/PNGTuberViewer.svelte';
   import MotionPNGTuberViewer  from '$lib/components/MotionPNGTuberViewer.svelte';
   import { avatarState, initAvatarWs, sendAvatarPatch } from '$lib/ws/avatarSocket';
-  import { addMemory, getRecentMemoryText } from '$lib/ai/memory/rootMemory';
+  import { addMemory, getRecentMemoryText, getMemoryEntries } from '$lib/ai/memory/rootMemory';
+  import { buildToneHints } from '$lib/ai/conversationCore/toneHints';
 
   // ============================================================
   // Types
@@ -70,7 +71,7 @@
 
   let avatarEffects = $state<AvatarEffects>({ rotate: true, glowPulse: true });
 
-  let emotion = $state({ mood: 70, trust: 50, affection: 40, focus: 60 });
+  let emotion = $state({ mood: 70, trust: 50, affection: 40, focus: 60, anger: 0 });
   const clamp = (v: number) => Math.max(0, Math.min(100, v));
 
   // ── PNGTuber (2COL only) ──────────────────────────────────────
@@ -373,6 +374,12 @@
     if (/嫌い|最悪/.test(text)) {
       emotion.trust = clamp(emotion.trust - 10);
     }
+    if (/どうせ|嘘だ|信じない|ふざけんな|ムカつく|うるさい|黙って|違う|嫌だ/.test(text)) {
+      emotion.anger = clamp(emotion.anger + 8);
+    }
+    if (/ありがとう|ごめん|好き|会えて嬉しい/.test(text)) {
+      emotion.anger = clamp(emotion.anger - 10);
+    }
   }
 
   function updateEmotionFromReply(text: string): void {
@@ -471,21 +478,10 @@
 
     // 感情パラメータを注入
     lines.push('');
-    lines.push(`【現在感情値】\nMood:${emotion.mood}\nTrust:${emotion.trust}\nAffection:${emotion.affection}\nFocus:${emotion.focus}`);
+    lines.push(`【現在感情値】\nMood:${emotion.mood}\nTrust:${emotion.trust}\nAffection:${emotion.affection}\nFocus:${emotion.focus}\nAnger:${emotion.anger}`);
 
-    // 感情値に基づく口調ガイド
-    const toneHints: string[] = [];
-    if (emotion.mood     >= 80) toneHints.push('明るく元気で前向きな口調で話してください。');
-    if (emotion.mood     <= 35) toneHints.push('静かで落ち着いた口調で話してください。');
-    if (emotion.trust    >= 75) toneHints.push('親しみある自然な距離感で接してください。');
-    if (emotion.trust    <= 30) toneHints.push('やや慎重で控えめな口調にしてください。');
-    if (emotion.affection >= 75) toneHints.push('少し甘め・嬉しそうな表現を使ってください。');
-    if (emotion.focus    >= 75) toneHints.push('論理的に要点を整理した返答にしてください。');
-    if (toneHints.length > 0) {
-      lines.push('');
-      lines.push('【口調ガイド】');
-      toneHints.forEach(h => lines.push(h));
-    }
+    // 口調・人格ガイド（外部モジュール）
+    lines.push(...buildToneHints({ emotion, memoryEntries: getMemoryEntries(), now: new Date() }));
 
     return lines.join('\n');
   }
@@ -2368,6 +2364,11 @@ ${recent}
           <span class="stat-lbl">Focus</span>
           <div class="bar-wrap"><div class="bar trust-bar" style="width:{emotion.focus}%"></div></div>
           <span class="stat-num">{emotion.focus}</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-lbl">Anger</span>
+          <div class="bar-wrap"><div class="bar" style="width:{emotion.anger}%; background:#f43f5e"></div></div>
+          <span class="stat-num">{emotion.anger}</span>
         </div>
       </div>
 
