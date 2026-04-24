@@ -7,6 +7,7 @@
   import PNGTuberViewer        from '$lib/components/PNGTuberViewer.svelte';
   import MotionPNGTuberViewer  from '$lib/components/MotionPNGTuberViewer.svelte';
   import { avatarState, initAvatarWs, sendAvatarPatch } from '$lib/ws/avatarSocket';
+  import { addMemory, getRecentMemoryText } from '$lib/ai/memory/rootMemory';
 
   // ============================================================
   // Types
@@ -68,6 +69,9 @@
   });
 
   let avatarEffects = $state<AvatarEffects>({ rotate: true, glowPulse: true });
+
+  let emotion = $state({ mood: 70, trust: 50, affection: 40, focus: 60 });
+  const clamp = (v: number) => Math.max(0, Math.min(100, v));
 
   // ── PNGTuber (2COL only) ──────────────────────────────────────
   let pngBlinking    = $state(false);
@@ -355,6 +359,38 @@
 
   // ============================================================
   // System Prompt Builder — パラメータをAIへの指示に変換
+  function updateEmotion(text: string): void {
+    if (/ありがとう|助かった/.test(text)) {
+      emotion.trust     = clamp(emotion.trust     + 5);
+      emotion.affection = clamp(emotion.affection + 5);
+    }
+    if (/つらい|疲れた|しんどい/.test(text)) {
+      emotion.mood = clamp(emotion.mood - 8);
+    }
+    if (/漫画|制作|創作/.test(text)) {
+      emotion.focus = clamp(emotion.focus + 8);
+    }
+    if (/嫌い|最悪/.test(text)) {
+      emotion.trust = clamp(emotion.trust - 10);
+    }
+  }
+
+  function updateEmotionFromReply(text: string): void {
+    if (/うれしい|ありがとう|楽しい/.test(text)) {
+      emotion.mood      = clamp(emotion.mood      + 4);
+      emotion.affection = clamp(emotion.affection + 3);
+    }
+    if (/一緒に考え|整理しましょう|解決/.test(text)) {
+      emotion.focus = clamp(emotion.focus + 4);
+    }
+    if (/ごめん|つらい|悲しい/.test(text)) {
+      emotion.mood = clamp(emotion.mood - 3);
+    }
+    if (/RootS|あなた/.test(text)) {
+      emotion.trust = clamp(emotion.trust + 2);
+    }
+  }
+
   // ============================================================
   function buildLabSystemPrompt(): string {
     const p = personality;
@@ -423,6 +459,32 @@
       lines.push('');
       lines.push('【ユーザー長期記憶】以下を踏まえて自然に会話してください。');
       lines.push(mem);
+    }
+
+    // 短期記憶（直近20件）を注入
+    const recentMem = getRecentMemoryText();
+    if (recentMem) {
+      lines.push('');
+      lines.push('【直近の会話履歴】この流れを踏まえて自然に返答してください。');
+      lines.push(recentMem);
+    }
+
+    // 感情パラメータを注入
+    lines.push('');
+    lines.push(`【現在感情値】\nMood:${emotion.mood}\nTrust:${emotion.trust}\nAffection:${emotion.affection}\nFocus:${emotion.focus}`);
+
+    // 感情値に基づく口調ガイド
+    const toneHints: string[] = [];
+    if (emotion.mood     >= 80) toneHints.push('明るく元気で前向きな口調で話してください。');
+    if (emotion.mood     <= 35) toneHints.push('静かで落ち着いた口調で話してください。');
+    if (emotion.trust    >= 75) toneHints.push('親しみある自然な距離感で接してください。');
+    if (emotion.trust    <= 30) toneHints.push('やや慎重で控えめな口調にしてください。');
+    if (emotion.affection >= 75) toneHints.push('少し甘め・嬉しそうな表現を使ってください。');
+    if (emotion.focus    >= 75) toneHints.push('論理的に要点を整理した返答にしてください。');
+    if (toneHints.length > 0) {
+      lines.push('');
+      lines.push('【口調ガイド】');
+      toneHints.forEach(h => lines.push(h));
     }
 
     return lines.join('\n');
@@ -791,6 +853,8 @@
     if (!text || isThinking) return;
     inputText = '';
     messages = [...messages, { role: 'user', text, time: getTime() }];
+    addMemory('user', text);
+    updateEmotion(text);
     isThinking = true;
 
     console.log('[Lab] provider:', $sessionStore.provider);
@@ -799,17 +863,26 @@
 
     let aiText: string;
     try {
-      console.log('[Lab] system prompt:', buildLabSystemPrompt());
-      const res = await fetch('/api/lab-chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          provider: $sessionStore.provider,
-          model: $sessionStore.model || undefined,
-          systemPrompt: buildLabSystemPrompt(),
-          userMessage: text,
-        }),
-      });
+      let res: Response;
+      if ($sessionStore.provider === 'onair') {
+        res = await fetch('/api/onair', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: text }),
+        });
+      } else {
+        console.log('[Lab] system prompt:', buildLabSystemPrompt());
+        res = await fetch('/api/lab-chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            provider: $sessionStore.provider,
+            model: $sessionStore.model || undefined,
+            systemPrompt: buildLabSystemPrompt(),
+            userMessage: text,
+          }),
+        });
+      }
       if (!res.ok) {
         let userMsg = 'APIエラーが発生しました。しばらく後に再試行してください。';
         if (res.status === 429) {
@@ -827,7 +900,7 @@
         return;
       }
       const data = await res.json();
-      aiText = data.text;
+      aiText = $sessionStore.provider === 'onair' ? data.reply : data.text;
       console.log('[Lab] response success');
     } catch (err) {
       console.error('[Lab] response fail:', err);
@@ -845,6 +918,8 @@
     }
 
     messages = [...messages, { role: 'ai', text: aiText, time: getTime() }];
+    addMemory('assistant', aiText);
+    updateEmotionFromReply(aiText);
     // 会話記憶を保存（次回起動時の初回メッセージに使用）
     localStorage.setItem(LS_LAST_TOPIC,      text);
     localStorage.setItem(LS_LAST_TALK_AT,    new Date().toISOString());
@@ -2230,6 +2305,7 @@ ${recent}
               <option value="openai">OpenAI</option>
               <option value="gemini">Gemini</option>
               <option value="claude">Claude</option>
+              <option value="onair">OnAir</option>
             </select>
           </div>
           <div class="vc-row">
@@ -2271,6 +2347,7 @@ ${recent}
         <div class="stat-row mood-row">
           <span class="stat-lbl">Mood</span>
           <span class="mood-val" style="color:{moodColor}; text-shadow: 0 0 10px {moodColor}60">{mood}</span>
+          <span class="stat-num">{emotion.mood}</span>
         </div>
         <div class="stat-row">
           <span class="stat-lbl">Battery</span>
@@ -2279,13 +2356,18 @@ ${recent}
         </div>
         <div class="stat-row">
           <span class="stat-lbl">Trust</span>
-          <div class="bar-wrap"><div class="bar trust-bar" style="width:{personality.trust}%"></div></div>
-          <span class="stat-num">{personality.trust}</span>
+          <div class="bar-wrap"><div class="bar trust-bar" style="width:{emotion.trust}%"></div></div>
+          <span class="stat-num">{emotion.trust}</span>
         </div>
         <div class="stat-row">
           <span class="stat-lbl">Affection</span>
-          <div class="bar-wrap"><div class="bar affection-bar" style="width:{personality.affection}%"></div></div>
-          <span class="stat-num">{personality.affection}</span>
+          <div class="bar-wrap"><div class="bar affection-bar" style="width:{emotion.affection}%"></div></div>
+          <span class="stat-num">{emotion.affection}</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-lbl">Focus</span>
+          <div class="bar-wrap"><div class="bar trust-bar" style="width:{emotion.focus}%"></div></div>
+          <span class="stat-num">{emotion.focus}</span>
         </div>
       </div>
 
