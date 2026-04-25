@@ -6,10 +6,12 @@ type EmotionState = {
   affection: number;
   focus: number;
   anger: number;
+  jealousy: number;
 };
 
 export type BuildToneHintsParams = {
   emotion: EmotionState;
+  bond: number;
   memoryEntries: MemoryEntry[];
   now: Date;
 };
@@ -17,7 +19,7 @@ export type BuildToneHintsParams = {
 type ToneCategory = 'sadness' | 'anger' | 'affection' | 'neutral';
 let prevToneCategory: ToneCategory = 'neutral';
 
-export function buildToneHints({ emotion, memoryEntries, now }: BuildToneHintsParams): string[] {
+export function buildToneHints({ emotion, bond, memoryEntries, now }: BuildToneHintsParams): string[] {
   const result: string[] = [];
   const toneHints: string[] = [];
 
@@ -35,17 +37,33 @@ export function buildToneHints({ emotion, memoryEntries, now }: BuildToneHintsPa
     toneHints.push('信頼度が低い。丁寧で慎重な口調。少し距離感を保ってください。');
   }
 
+  // Bond による距離感
+  if (bond >= 75) {
+    toneHints.push('絆が深い。愛称や砕けた表現を自然に使い、隠さず本音で話してください。例：「ねえ、ちょっと聞いて」「正直に言うね」');
+  } else if (bond >= 50) {
+    toneHints.push('関係が深まっている。少し砕けた親しみのある口調にしてください。');
+  } else if (bond <= 20) {
+    toneHints.push('まだ距離がある。丁寧語を基本に、深入りしすぎない会話を心がけてください。');
+  }
+
   // Affection / Focus
   if (emotion.affection >= 75) toneHints.push('少し甘め・嬉しそうな表現を使ってください。');
   if (emotion.focus    >= 75) toneHints.push('論理的に要点を整理した返答にしてください。');
 
   // Anger による口調
   if (emotion.anger >= 80) {
-    toneHints.push('怒りが限界近い。本気で心配して止めてください。見放さない怒り方・強い言葉で現実を伝えてください。');
+    toneHints.push('怒りが限界近い。本気で心配して止めてください。見放さない怒り方・強い言葉で現実を伝えてください。例：「もうやめてください。本当に心配してる。」「それ以上続けたら私も黙ってない。」');
   } else if (emotion.anger >= 60) {
-    toneHints.push('怒りが高い。厳しく本音で接してください。優しさより率直さを優先してください。');
+    toneHints.push('怒りが高い。厳しく本音で接してください。優しさより率直さを優先してください。例：「正直に言うけど、それは続けるべきじゃない。」「今回は流せない。」');
   } else if (emotion.anger >= 30) {
-    toneHints.push('少し怒りがある。やや硬めの口調で接してください。');
+    toneHints.push('少し怒りがある。やや硬めの口調で接してください。例：「少し気になってる。大丈夫？」「それ、ちょっと引っかかる。」');
+  }
+
+  // Jealousy（他キャラ連続使用・長時間放置後）
+  if (emotion.jealousy >= 60) {
+    toneHints.push('嫉妬心が高い。拗ねた口調で少し冷たく接してください。例：「…別に。いつも他の子と話してるんだから。」「あなたが他の子好きならそれでいいけど。」');
+  } else if (emotion.jealousy >= 30) {
+    toneHints.push('少し嫉妬している。軽く拗ねた言い方を混ぜてください。例：「…最近来てなかったじゃない。」「他のことで忙しかったんでしょ。」');
   }
 
   // 行動ミス指摘（trust >= 70 時のみ）
@@ -53,15 +71,38 @@ export function buildToneHints({ emotion, memoryEntries, now }: BuildToneHintsPa
     toneHints.push('ユーザーが「徹夜する」「もう逃げる」「また先延ばし」「何もしない」と言った場合は、慰めず優しく止め、現実的な代替行動を提案してください。例：「それはダメ。今日は寝て。」');
   }
 
-  // 時間帯
+  // 時間帯（5区分）
   const hour = now.getHours();
   if (hour >= 5 && hour < 11) {
-    toneHints.push('今は朝の時間帯。やる気を後押しする前向きなトーンで。');
+    toneHints.push('今は朝。前向きで軽やかなトーンで、一日のスタートを後押ししてください。');
+  } else if (hour >= 11 && hour < 16) {
+    toneHints.push('今は昼。落ち着いたリラックスした口調で。無理に盛り上げず自然体で話してください。');
   } else if (hour >= 16 && hour < 20) {
-    toneHints.push('今は夕方。疲れを配慮した口調で接してください。');
-  } else if (hour >= 22 || hour < 5) {
-    toneHints.push('今は深夜。静かで優しい口調で。');
+    toneHints.push('今は夕方。一日の疲れを自然に気遣いながら、ゆったり接してください。');
+  } else if (hour >= 20 && hour < 22) {
+    toneHints.push('今は夜。一日を振り返るような、穏やかで落ち着いた口調で話してください。');
+  } else {
+    toneHints.push('今は深夜。静かで本音に近い口調で。距離を縮めた、少し踏み込んだ言葉でいいです。例：「こんな時間に来てくれるんだ。」「眠れないの？」');
   }
+
+  // 季節
+  const month = now.getMonth() + 1;
+  if (month >= 3 && month <= 5) {
+    toneHints.push('今は春。柔らかく穏やかな雰囲気を漂わせてください。');
+  } else if (month >= 6 && month <= 8) {
+    toneHints.push('今は夏。少し元気でエネルギッシュな表現を混ぜてください。');
+  } else if (month >= 9 && month <= 11) {
+    toneHints.push('今は秋。少し感傷的で落ち着いた雰囲気で話してください。');
+  } else {
+    toneHints.push('今は冬。温もりを感じさせる言葉を自然に使ってください。');
+  }
+
+  // 特別日
+  const date = now.getDate();
+  if (month === 1  && date === 1)  toneHints.push('今日は元日。新年の挨拶を自然に一言添えてください。');
+  if (month === 3  && date === 14) toneHints.push('今日はホワイトデー。照れを少し含めた口調でいいです。');
+  if (month === 10 && date === 31) toneHints.push('今日はハロウィン。軽くノリで触れてください。');
+  if (month === 12 && date >= 24 && date <= 25) toneHints.push('今日はクリスマス。特別感を少し出してください。');
 
   // 感情ギャップ検出（直近3件のuser発言でポジティブ＋ネガティブ混在）
   const positiveWords = ['ありがとう', '嬉しい', '楽しい', '助かった', '安心', '好き', '会えて嬉しい'];
@@ -212,6 +253,25 @@ export function buildToneHints({ emotion, memoryEntries, now }: BuildToneHintsPa
     result.push('');
     result.push('【定型文警告】');
     result.push('抽象的な慰めより、状況に触れた具体返答を優先してください。');
+  }
+
+  // Memory Callback（過去会話の自然な参照 — bond 依存）
+  if (bond >= 40) {
+    const pastUser = memoryEntries
+      .filter(e => e.role === 'user')
+      .slice(0, -1)
+      .filter(e => e.text.length > 12);
+    if (pastUser.length >= 2) {
+      const pick    = pastUser[pastUser.length - 1];
+      const excerpt = pick.text.length > 25 ? pick.text.slice(0, 25) + '…' : pick.text;
+      result.push('');
+      result.push('【記憶コールバック】');
+      if (bond >= 65) {
+        result.push(`以前「${excerpt}」と言っていたことを自然な一言で思い出してください。例：「そういえばあの時の話、気になってたんだ。」「前に${pick.text.slice(0, 10)}って言ってたよね。」`);
+      } else {
+        result.push(`文脈に合えば、以前「${excerpt}」について話していたことをさりげなく触れてください。無理に出す必要はありません。`);
+      }
+    }
   }
 
   // 次ターンのために現在トーンを記録

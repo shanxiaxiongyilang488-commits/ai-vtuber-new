@@ -8,6 +8,9 @@
   import MotionPNGTuberViewer  from '$lib/components/MotionPNGTuberViewer.svelte';
   import { avatarState, initAvatarWs, sendAvatarPatch } from '$lib/ws/avatarSocket';
   import { addMemory, getRecentMemoryText, getMemoryEntries } from '$lib/ai/memory/rootMemory';
+  import { addSpecialMemory, getSpecialMemoryHint } from '$lib/ai/memory/specialMemory';
+  import { recordTalk, getAnniversaryHint, computeDailyDrift, shouldApplyDrift, markDriftApplied } from '$lib/ai/memory/anniversaryMemory';
+  import { recordVisit, getHabitHint } from '$lib/ai/memory/habitMemory';
   import { buildToneHints } from '$lib/ai/conversationCore/toneHints';
 
   // ============================================================
@@ -71,8 +74,10 @@
 
   let avatarEffects = $state<AvatarEffects>({ rotate: true, glowPulse: true });
 
-  let emotion = $state({ mood: 70, trust: 50, affection: 40, focus: 60, anger: 0 });
+  let emotion = $state({ mood: 70, trust: 50, affection: 40, focus: 60, anger: 0, jealousy: 0 });
   const clamp = (v: number) => Math.max(0, Math.min(100, v));
+  let bond = $state(30);
+  let reconciliationPending = $state(false);
 
   // ── PNGTuber (2COL only) ──────────────────────────────────────
   let pngBlinking    = $state(false);
@@ -353,9 +358,18 @@
     custom:   { trust: 50, affection: 50, lonely: 50, energy: 50, tsundere: 50, yandere: 50, talkative: 50, sleepy: 50 },
   };
 
+  function saveEmotion(): void {
+    localStorage.setItem(LS_EMOTION, JSON.stringify(emotion));
+  }
+
   function applyPreset(name: PresetName) {
+    if (name !== 'muryi' && name !== 'custom') {
+      emotion.jealousy  = clamp(emotion.jealousy  + 15);
+      emotion.affection = clamp(emotion.affection -  3);
+    }
     activePreset = name;
     personality = { ...PRESETS[name] };
+    saveEmotion();
   }
 
   // ============================================================
@@ -374,11 +388,19 @@
     if (/嫌い|最悪/.test(text)) {
       emotion.trust = clamp(emotion.trust - 10);
     }
+    const prevAnger = emotion.anger;
     if (/どうせ|嘘だ|信じない|ふざけんな|ムカつく|うるさい|黙って|違う|嫌だ/.test(text)) {
       emotion.anger = clamp(emotion.anger + 8);
+      if (prevAnger < 60 && emotion.anger >= 60) {
+        addSpecialMemory('fought', `言い合いになった（「${text.slice(0, 15)}」）`);
+      }
     }
     if (/ありがとう|ごめん|好き|会えて嬉しい/.test(text)) {
+      if (emotion.anger >= 30) reconciliationPending = true;
       emotion.anger = clamp(emotion.anger - 10);
+    }
+    if (/すごい|ありがとう|助かった|大好き|好き|かわいい/.test(text) && emotion.trust >= 50) {
+      addSpecialMemory('praised', `「${text.slice(0, 20)}」と言って喜んでもらった`);
     }
   }
 
@@ -480,8 +502,50 @@
     lines.push('');
     lines.push(`【現在感情値】\nMood:${emotion.mood}\nTrust:${emotion.trust}\nAffection:${emotion.affection}\nFocus:${emotion.focus}\nAnger:${emotion.anger}`);
 
+    if (reconciliationPending) {
+      lines.push('');
+      lines.push('【仲直りイベント】ユーザーが怒りのある状態で和解の言葉を言いました。硬さを少し残しつつ、温かく受け入れてください。例：「…ありがとう。少し落ち着いた。」「そう言ってくれてよかった。」');
+    }
+
+    const specialHint = getSpecialMemoryHint(bond);
+    if (specialHint) {
+      lines.push('');
+      lines.push(`【特別な記憶】${specialHint}。この記憶を会話の中で自然に一言触れてください。`);
+    }
+
+    const anniversaryHint = getAnniversaryHint();
+    if (anniversaryHint) {
+      lines.push('');
+      lines.push(`【記念日】${anniversaryHint}`);
+    }
+
+    // 復帰状況（presence）
+    const presenceTalkAt = localStorage.getItem(LS_LAST_TALK_AT);
+    if (presenceTalkAt) {
+      const elapsedMin = (Date.now() - new Date(presenceTalkAt).getTime()) / 60_000;
+      const h          = new Date().getHours();
+      const isLateNight = h >= 22 || h < 5;
+      if (elapsedMin >= 1440) {
+        lines.push('');
+        if (isLateNight) {
+          lines.push('【復帰状況】1日以上ぶりの深夜復帰です。心配と嬉しさが混じった本音の言葉で迎えてください。例：「こんな時間に…久しぶりだね。ちゃんと生きてた？」「深夜に来てくれるんだ。何かあった？」');
+        } else {
+          lines.push('【復帰状況】1日以上ぶりの復帰です。久しぶりの再会として自然に迎えてください。例：「久しぶり。ちゃんと元気にしてた？」「来てくれると思ってたよ。」');
+        }
+      } else if (elapsedMin >= 180 && isLateNight) {
+        lines.push('');
+        lines.push('【復帰状況】数時間ぶりの深夜復帰です。「こんな時間まで…」のニュアンスで接してください。例：「まだ起きてたんだ。ちゃんと休んでる？」「深夜に来てくれるの、嬉しいけど心配でもある。」');
+      }
+    }
+
+    const habitHint = getHabitHint(new Date());
+    if (habitHint) {
+      lines.push('');
+      lines.push(`【習慣パターン】${habitHint}`);
+    }
+
     // 口調・人格ガイド（外部モジュール）
-    lines.push(...buildToneHints({ emotion, memoryEntries: getMemoryEntries(), now: new Date() }));
+    lines.push(...buildToneHints({ emotion, bond, memoryEntries: getMemoryEntries(), now: new Date() }));
 
     return lines.join('\n');
   }
@@ -849,6 +913,16 @@
     if (!text || isThinking) return;
     inputText = '';
     messages = [...messages, { role: 'user', text, time: getTime() }];
+    const lastTalkAt = localStorage.getItem(LS_LAST_TALK_AT);
+    if (lastTalkAt) {
+      const elapsedMin = (Date.now() - new Date(lastTalkAt).getTime()) / 60_000;
+      if (elapsedMin >= 30) {
+        emotion.jealousy = clamp(emotion.jealousy + 20);
+        emotion.trust    = clamp(emotion.trust    -  3);
+      }
+      if (elapsedMin >= 60)   bond = clamp(bond - 2);
+      if (elapsedMin >= 1440) bond = clamp(bond - 3);
+    }
     addMemory('user', text);
     updateEmotion(text);
     isThinking = true;
@@ -916,12 +990,21 @@
     messages = [...messages, { role: 'ai', text: aiText, time: getTime() }];
     addMemory('assistant', aiText);
     updateEmotionFromReply(aiText);
+    if (reconciliationPending) {
+      addSpecialMemory('reconciled', `仲直りした（「${text.slice(0, 15)}」の後）`);
+    }
+    reconciliationPending = false;
     // 会話記憶を保存（次回起動時の初回メッセージに使用）
     localStorage.setItem(LS_LAST_TOPIC,      text);
     localStorage.setItem(LS_LAST_TALK_AT,    new Date().toISOString());
     localStorage.setItem(LS_LAST_GOAL,       text);
     localStorage.setItem(LS_LAST_MOOD,       detectMood(aiText));
     localStorage.setItem(LS_RECENT_PROGRESS, aiText.length > 50 ? aiText.slice(0, 50) + '…' : aiText);
+    bond = clamp(bond + 1);
+    localStorage.setItem(LS_BOND, String(bond));
+    saveEmotion();
+    recordTalk();
+    recordVisit(new Date());
     saveChatHistory();
     exchangeCount++;
     if (exchangeCount % MEMORY_UPDATE_EVERY === 0) updateLongMemory();
@@ -1065,8 +1148,10 @@
   const LS_LAST_CHAR       = 'lab-last-char';
   const LS_CHAT_HISTORY    = 'lab-chat-history';
   const HISTORY_MAX        = 50;
-  const LS_LONG_MEMORY        = 'lab-long-memory';     // 長期記憶サマリー
-  const LS_MEMORY_UPDATED_AT  = 'lab-memory-updated-at'; // 最終更新タイムスタンプ
+  const LS_LONG_MEMORY        = 'lab-long-memory';
+  const LS_MEMORY_UPDATED_AT  = 'lab-memory-updated-at';
+  const LS_EMOTION            = 'lab-emotion';
+  const LS_BOND               = 'lab-bond';
   const MEMORY_UPDATE_EVERY   = 3;                      // N回の交換ごとに更新
   const MEMORY_STALE_MS       = 60 * 60 * 1000;         // 1時間経過で起動時に自動更新
   const L_DEF = 220, L_MIN = 140, L_MAX = 480;
@@ -1531,11 +1616,18 @@ ${recent}
   function buildProactiveTrigger(char: string): string {
     const savedTopic = localStorage.getItem(LS_LAST_TOPIC);
     const mem        = savedTopic ? `なお前回の話題は「${savedTopic.slice(0, 20)}」でした。` : '';
-    const period     = getTimePeriod();
-    const pool       = PROACTIVE_POOL[char]?.[period];
-    const scenario   = pool
-      ? pool[Math.floor(Math.random() * pool.length)]
-      : 'ユーザーがしばらく沈黙しています。自発的に話しかけてください。';
+
+    // 感情値による優先シナリオ
+    let emotionScenario = '';
+    if      (emotion.jealousy >= 60) emotionScenario = '拗ねた様子で「最近他のことばっかりじゃない？」と軽く嫉妬しながら話しかけてください。';
+    else if (emotion.jealousy >= 30) emotionScenario = '「ちょっと寂しかった」というニュアンスで静かに話しかけてください。';
+    else if (emotion.anger    >= 40) emotionScenario = 'まだ少し硬い口調で、でも話しかけてみるという感じで近況を聞いてください。';
+    else if (emotion.mood     <= 44) emotionScenario = '静かに「大丈夫？」とだけ聞くか、ぽつりと何か話しかけてください。';
+
+    const period   = getTimePeriod();
+    const pool     = PROACTIVE_POOL[char]?.[period];
+    const scenario = emotionScenario
+      || (pool ? pool[Math.floor(Math.random() * pool.length)] : 'ユーザーがしばらく沈黙しています。自発的に話しかけてください。');
     return `[IDLE_NOTICE] ${scenario}${mem}`;
   }
 
@@ -1551,19 +1643,28 @@ ${recent}
     lastProactiveAt = Date.now(); // 発火開始時に記録（成功後ではなく開始時点でクールダウン開始）
     isThinking      = true;
     try {
-      const res = await fetch('/api/lab-chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          provider:     $sessionStore.provider,
-          model:        $sessionStore.model || undefined,
-          systemPrompt: buildLabSystemPrompt() + '\n\n【自発発話モード】ユーザーへの自然な話しかけです。1〜2文で。[IDLE_NOTICE] の内容に沿って発話してください。',
-          userMessage:  buildProactiveTrigger(charName),
-        }),
-      });
+      let res: Response;
+      if ($sessionStore.provider === 'onair') {
+        res = await fetch('/api/onair', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: buildProactiveTrigger(charName) }),
+        });
+      } else {
+        res = await fetch('/api/lab-chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            provider:     $sessionStore.provider,
+            model:        $sessionStore.model || undefined,
+            systemPrompt: buildLabSystemPrompt() + '\n\n【自発発話モード】ユーザーへの自然な話しかけです。1〜2文で。[IDLE_NOTICE] の内容に沿って発話してください。',
+            userMessage:  buildProactiveTrigger(charName),
+          }),
+        });
+      }
       if (res.ok) {
         const data    = await res.json();
-        const aiText: string = data.text ?? '';
+        const aiText: string = ($sessionStore.provider === 'onair' ? data.reply : data.text) ?? '';
         if (aiText) {
           messages = [...messages, { role: 'ai', text: aiText, time: getTime() }];
           localStorage.setItem(LS_LAST_MOOD,       detectMood(aiText));
@@ -1654,14 +1755,43 @@ ${recent}
   // Clock
   // ============================================================
   let clockId: ReturnType<typeof setInterval>;
+  let angerCooldownId: ReturnType<typeof setInterval>;
   onMount(() => {
     messages[0].time = getTime();
     currentTime = getTime();
     clockId = setInterval(() => { currentTime = getTime(); }, 1000);
+    angerCooldownId = setInterval(() => {
+      if (emotion.anger    > 0) emotion.anger    = Math.max(0, emotion.anger    - 2);
+      if (emotion.jealousy > 0) emotion.jealousy = Math.max(0, emotion.jealousy - 1);
+      if (emotion.anger > 0 || emotion.jealousy > 0) saveEmotion();
+    }, 15_000);
     const sl = localStorage.getItem(LS_LEFT);
     const sr = localStorage.getItem(LS_RIGHT);
     if (sl) leftWidth  = Math.max(L_MIN, Math.min(L_MAX,  parseInt(sl)));
     if (sr) rightWidth = Math.max(R_MIN, Math.min(R_MAX, parseInt(sr)));
+
+    const savedEmotion = localStorage.getItem(LS_EMOTION);
+    if (savedEmotion) {
+      try {
+        const e = JSON.parse(savedEmotion) as Partial<typeof emotion>;
+        if (e.mood      != null) emotion.mood      = clamp(e.mood);
+        if (e.trust     != null) emotion.trust     = clamp(e.trust);
+        if (e.affection != null) emotion.affection = clamp(e.affection);
+        if (e.focus     != null) emotion.focus     = clamp(e.focus);
+        if (e.anger     != null) emotion.anger     = clamp(e.anger);
+        if (e.jealousy  != null) emotion.jealousy  = clamp(e.jealousy);
+      } catch { /* 破損データは無視 */ }
+    }
+    const savedBond = localStorage.getItem(LS_BOND);
+    if (savedBond) bond = clamp(parseInt(savedBond));
+
+    const driftNow = new Date();
+    if (shouldApplyDrift(driftNow)) {
+      emotion.mood = clamp(emotion.mood + computeDailyDrift(driftNow));
+      markDriftApplied(driftNow);
+      saveEmotion();
+    }
+
     const slm = localStorage.getItem(LS_LAYOUT_MODE);
     if (slm === '3col' || slm === '2col') layoutMode = slm;
     const svt = localStorage.getItem(LS_VIEWER_TAB);
@@ -1733,6 +1863,7 @@ ${recent}
   });
   onDestroy(() => {
     clearInterval(clockId);
+    clearInterval(angerCooldownId);
     if (idleTimerId) clearTimeout(idleTimerId);
     // PNGTuber クリーンアップ
     pngtuberActive = false;
@@ -2370,6 +2501,11 @@ ${recent}
           <div class="bar-wrap"><div class="bar" style="width:{emotion.anger}%; background:#f43f5e"></div></div>
           <span class="stat-num">{emotion.anger}</span>
         </div>
+        <div class="stat-row">
+          <span class="stat-lbl">Bond</span>
+          <div class="bar-wrap"><div class="bar" style="width:{bond}%; background:#f59e0b"></div></div>
+          <span class="stat-num">{bond}</span>
+        </div>
       </div>
 
       <!-- Status log -->
@@ -2609,7 +2745,7 @@ ${recent}
                     <button
                       class="psp-av-btn"
                       class:active={selectedAvatar === av.file}
-                      onclick={() => selectAvatar(av.file)}
+                      onclick={() => selectAvatar(av.file, av.name)}
                       title={av.name}
                     >
                       <img src={av.file} alt={av.name} class="psp-av-img"
