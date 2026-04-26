@@ -11,6 +11,8 @@
   import { addSpecialMemory, getSpecialMemoryHint } from '$lib/ai/memory/specialMemory';
   import { recordTalk, getAnniversaryHint, computeDailyDrift, shouldApplyDrift, markDriftApplied } from '$lib/ai/memory/anniversaryMemory';
   import { recordVisit, getHabitHint } from '$lib/ai/memory/habitMemory';
+  import { CHARACTER_PROFILES } from '$lib/ai/characters/characterProfiles';
+  import { buildEmotionStyleHint } from '$lib/ai/emotion/emotionStyleEngine';
   import { buildToneHints } from '$lib/ai/conversationCore/toneHints';
 
   // ============================================================
@@ -28,11 +30,14 @@
   };
 
   type Toggles = {
-    androidMode: boolean;
-    nightMode: boolean;
-    specialMode: boolean;
-    shortChat: boolean;
-    autoTalk: boolean;
+    androidMode:     boolean;
+    nightMode:       boolean;
+    specialMode:     boolean;
+    shortChat:       boolean;
+    autoTalk:        boolean;
+    imagePromptMode: boolean;
+    referenceMode:   boolean;
+    mangaMode:       boolean;
   };
 
   type AvatarEffects = {
@@ -44,13 +49,30 @@
     role: 'user' | 'ai' | 'error';
     text: string;
     time: string;
+    avatar?: string;
+    imagePrompt?: string;
     isGreeting?: true; // 起動挨拶フラグ（保存対象外）
+  };
+
+  type CustomProfile = {
+    name:           string;
+    firstPerson:    string;
+    secondPerson:   string;
+    thirdPerson:    string;
+    speechStyle:    string;
+    habits:         string;
+    sentenceEnding: string;
+    angerStyle:     string;
+    affectionStyle: string;
+    jealousyStyle:  string;
+    memo:           string;
   };
 
   type PresetName =
     | 'muryi' | 'tsundere' | 'yandere' | 'kuudere' | 'risea'
     | 'amaenbou' | 'imouto' | 'joousama' | 'shio' | 'mukanjo'
     | 'jealous' | 'hogo' | 'youkya' | 'menhera'
+    | 'ciel' | 'menoa' | 'piona'
     | 'custom';
 
   // ============================================================
@@ -69,7 +91,7 @@
 
   let toggles = $state<Toggles>({
     androidMode: true, nightMode: false, specialMode: false,
-    shortChat: false, autoTalk: false,
+    shortChat: false, autoTalk: false, imagePromptMode: false, referenceMode: false, mangaMode: false,
   });
 
   let avatarEffects = $state<AvatarEffects>({ rotate: true, glowPulse: true });
@@ -78,6 +100,15 @@
   const clamp = (v: number) => Math.max(0, Math.min(100, v));
   let bond = $state(30);
   let reconciliationPending = $state(false);
+
+  let customProfile = $state<CustomProfile>({
+    name: '', firstPerson: '', secondPerson: '', thirdPerson: '',
+    speechStyle: '', habits: '', sentenceEnding: '',
+    angerStyle: '', affectionStyle: '', jealousyStyle: '', memo: '',
+  });
+
+  type SlotKey = 'a' | 'b' | 'c';
+  let customSlots = $state<Record<SlotKey, CustomProfile | null>>({ a: null, b: null, c: null });
 
   // ── PNGTuber (2COL only) ──────────────────────────────────────
   let pngBlinking    = $state(false);
@@ -197,13 +228,13 @@
   // ============================================================
   // Avatar options
   // ============================================================
-  const AVATARS = [
-    { file: '/avatars/muryi.png',  name: 'ミュリィ', mode: 'ANDROID · TYPE-M' },
-    { file: '/avatars/risea.png',  name: 'リセア',   mode: 'ANALYST · TYPE-R' },
-    { file: '/avatars/ciel.png',   name: 'シエル',   mode: 'COLD · TYPE-C'    },
-    { file: '/avatars/menoa.png',  name: 'メノア',   mode: 'GENTLE · TYPE-MN' },
-    { file: '/avatars/piona.png',  name: 'ピオナ',   mode: 'BRIGHT · TYPE-P'  },
-    { file: '/avatars/default.png',name: 'Custom',   mode: 'CUSTOM UNIT'      },
+  const AVATARS: { file: string; name: string; mode: string; presetId?: PresetName }[] = [
+    { file: '/avatars/muryi.png',  name: 'ミュリィ', mode: 'ANDROID · TYPE-M', presetId: 'muryi'  },
+    { file: '/avatars/risea.png',  name: 'リセア',   mode: 'ANALYST · TYPE-R', presetId: 'risea'  },
+    { file: '/avatars/ciel.png',   name: 'シエル',   mode: 'COLD · TYPE-C',    presetId: 'ciel'  },
+    { file: '/avatars/menoa.png',  name: 'メノア',   mode: 'GENTLE · TYPE-MN', presetId: 'menoa' },
+    { file: '/avatars/piona.png',  name: 'ピオナ',   mode: 'BRIGHT · TYPE-P',  presetId: 'piona' },
+    { file: '/avatars/default.png',name: 'Custom',   mode: 'CUSTOM UNIT',      presetId: 'custom' },
   ];
 
   // 感情検出結果 → PNG ファイル名マッピング
@@ -263,10 +294,46 @@
     AVATARS.find(a => a.file === selectedAvatar)?.mode ?? 'CUSTOM UNIT'
   );
 
-  function selectAvatar(file: string, name: string) {
+  // Debug panel
+  let debugOpen        = $state(false);
+  let lastSystemPrompt = $state('');
+  let lastResponseMs   = $state<number | null>(null);
+
+  const activeEmotionLabels = $derived(
+    (() => {
+      const active: string[] = [];
+      if (emotion.trust     >= 60) active.push('trust');
+      if (emotion.affection >= 60) active.push('affc');
+      if (emotion.jealousy  >= 35) active.push('jeals');
+      if (emotion.anger     >= 35) active.push('anger');
+      if (personality.lonely  >= 60) active.push('lonely');
+      if (personality.energy  >= 60) active.push('energy');
+      return active.length > 0 ? active.join(' · ') : 'none';
+    })()
+  );
+
+  const currentTimeBucket = $derived(
+    (() => {
+      void currentTime;
+      const h = new Date().getHours();
+      if (h >= 5  && h < 11) return '朝 (5–10)';
+      if (h >= 11 && h < 16) return '昼 (11–15)';
+      if (h >= 16 && h < 20) return '夕方 (16–19)';
+      if (h >= 20 && h < 22) return '夜 (20–21)';
+      return '深夜 (22–4)';
+    })()
+  );
+
+  function selectAvatar(file: string, name: string, presetId?: PresetName) {
     selectedAvatar = file;
     charName = name;
     localStorage.setItem(LS_LAST_CHAR, name);
+    if (presetId) {
+      applyPreset(presetId);
+      setTimeout(() => {
+        document.getElementById('persona-editor')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 50);
+    }
   }
 
   // ============================================================
@@ -355,11 +422,40 @@
     hogo:     { trust: 92, affection: 72, lonely: 18, energy: 68, tsundere:  8, yandere:  5, talkative: 82, sleepy:  5 },
     youkya:   { trust: 68, affection: 78, lonely: 22, energy: 96, tsundere:  8, yandere:  5, talkative: 92, sleepy:  3 },
     menhera:  { trust: 72, affection: 92, lonely: 92, energy: 52, tsundere: 52, yandere: 88, talkative: 68, sleepy: 22 },
+    ciel:     { trust: 38, affection: 28, lonely: 18, energy: 52, tsundere: 38, yandere:  5, talkative: 22, sleepy: 45 },
+    menoa:    { trust: 72, affection: 78, lonely: 62, energy: 58, tsundere:  8, yandere: 12, talkative: 52, sleepy: 18 },
+    piona:    { trust: 82, affection: 72, lonely: 48, energy: 92, tsundere:  5, yandere:  5, talkative: 88, sleepy:  3 },
     custom:   { trust: 50, affection: 50, lonely: 50, energy: 50, tsundere: 50, yandere: 50, talkative: 50, sleepy: 50 },
   };
 
   function saveEmotion(): void {
     localStorage.setItem(LS_EMOTION, JSON.stringify(emotion));
+  }
+
+  function saveCustomProfile(): void {
+    localStorage.setItem(LS_CUSTOM_PROFILE, JSON.stringify(customProfile));
+  }
+
+  function saveSlot(k: SlotKey): void {
+    customSlots[k] = { ...customProfile };
+    localStorage.setItem(LS_SLOT[k], JSON.stringify(customSlots[k]));
+  }
+
+  function loadSlot(k: SlotKey): void {
+    const s = customSlots[k];
+    if (!s) return;
+    customProfile.name           = s.name;
+    customProfile.firstPerson    = s.firstPerson    ?? '';
+    customProfile.secondPerson   = s.secondPerson   ?? '';
+    customProfile.thirdPerson    = s.thirdPerson    ?? '';
+    customProfile.speechStyle    = s.speechStyle;
+    customProfile.habits         = s.habits;
+    customProfile.sentenceEnding = s.sentenceEnding;
+    customProfile.angerStyle     = s.angerStyle;
+    customProfile.affectionStyle = s.affectionStyle;
+    customProfile.jealousyStyle  = s.jealousyStyle;
+    customProfile.memo           = s.memo;
+    saveCustomProfile();
   }
 
   function applyPreset(name: PresetName) {
@@ -369,6 +465,64 @@
     }
     activePreset = name;
     personality = { ...PRESETS[name] };
+    if (voiceEngine === 'voicevox') {
+      const cp = CHARACTER_PROFILES[name];
+      if (cp) speakerId = cp.voicevoxSpeakerId;
+    }
+    saveEmotion();
+
+    // Custom Persona Editor へ自動反映
+    const profile = CHARACTER_PROFILES[name];
+    if (profile) {
+      const label = PRESET_LIST.find(p => p.id === name)?.label ?? name;
+      customProfile.name           = label;
+      // 呼称: プロファイルに定義があればそれを使用、なければ既存値を保持
+      if (profile.firstPerson  !== undefined) customProfile.firstPerson  = profile.firstPerson;
+      if (profile.secondPerson !== undefined) customProfile.secondPerson = profile.secondPerson;
+      if (profile.thirdPerson  !== undefined) customProfile.thirdPerson  = profile.thirdPerson;
+      customProfile.speechStyle    = profile.speechStyle;
+      customProfile.habits         = profile.habits;
+      customProfile.sentenceEnding = profile.sentenceEnding;
+      customProfile.angerStyle     = profile.angerStyle;
+      customProfile.affectionStyle = profile.affectionStyle;
+      customProfile.jealousyStyle  = profile.jealousyStyle;
+      customProfile.memo           = '';
+    } else {
+      // 'custom': 全フィールドクリア（task 4: 空欄初期化）
+      customProfile.name           = '';
+      customProfile.firstPerson    = '';
+      customProfile.secondPerson   = '';
+      customProfile.thirdPerson    = '';
+      customProfile.speechStyle    = '';
+      customProfile.habits         = '';
+      customProfile.sentenceEnding = '';
+      customProfile.angerStyle     = '';
+      customProfile.affectionStyle = '';
+      customProfile.jealousyStyle  = '';
+      customProfile.memo           = '';
+    }
+    saveCustomProfile();
+  }
+
+  function duplicateToCustom() {
+    const profile = CHARACTER_PROFILES[activePreset];
+    const label   = PRESET_LIST.find(p => p.id === activePreset)?.label ?? activePreset;
+    if (profile) {
+      customProfile.name           = label;
+      customProfile.firstPerson    = '';
+      customProfile.secondPerson   = '';
+      customProfile.thirdPerson    = '';
+      customProfile.speechStyle    = profile.speechStyle;
+      customProfile.habits         = profile.habits;
+      customProfile.sentenceEnding = profile.sentenceEnding;
+      customProfile.angerStyle     = profile.angerStyle;
+      customProfile.affectionStyle = profile.affectionStyle;
+      customProfile.jealousyStyle  = profile.jealousyStyle;
+      customProfile.memo           = '';
+    }
+    activePreset = 'custom';
+    personality  = { ...PRESETS['custom'] };
+    saveCustomProfile();
     saveEmotion();
   }
 
@@ -421,6 +575,301 @@
   }
 
   // ============================================================
+  // Image Prompt Mode / Reference Mode
+  // ============================================================
+  const REF_FILES = [
+    'appearance', 'personality', 'pose', 'expression', 'speech',
+    'expression_angry', 'expression_jealous', 'expression_happy', 'expression_lonely', 'expression_sleepy',
+  ] as const;
+  type RefKey = typeof REF_FILES[number];
+  const emptyRef = (): Record<RefKey, string> => ({
+    appearance: '', personality: '', pose: '', expression: '', speech: '',
+    expression_angry: '', expression_jealous: '', expression_happy: '', expression_lonely: '', expression_sleepy: '',
+  });
+  let referenceData = $state<Record<RefKey, string>>(emptyRef());
+
+  $effect(() => {
+    if (!toggles.referenceMode) { referenceData = emptyRef(); return; }
+    const charId = activePreset === 'custom' ? '' : activePreset;
+    if (!charId) { referenceData = emptyRef(); return; }
+    Promise.all(
+      REF_FILES.map(key =>
+        fetch(`/reference/${charId}/${key}.txt`)
+          .then(r => r.ok ? r.text() : '')
+          .then(txt => ({ key, val: txt.trim().slice(0, 300) }))
+          .catch(() => ({ key, val: '' }))
+      )
+    ).then(pairs => {
+      const next = emptyRef();
+      for (const { key, val } of pairs) next[key] = val;
+      referenceData = next;
+    });
+  });
+
+  const CHAR_VISUAL: Record<string, string> = {
+    muryi: 'short silver hair, cyan eyes, android girl, white cyberpunk uniform',
+    risea: 'long dark hair, glasses, sharp analytical eyes, white lab coat',
+    ciel:  'pale blue hair, cold expression, sleek dark outfit',
+    menoa: 'soft brown hair, gentle warm smile, casual clothes',
+    piona: 'bright orange twintails, energetic sparkling eyes, colorful outfit',
+  };
+
+  function buildImagePrompt(): string {
+    const visual = CHAR_VISUAL[activePreset] ?? '1girl, anime style';
+    const cp     = CHARACTER_PROFILES[activePreset];
+    const style  = cp?.style ? `${cp.style} character` : '';
+
+    const R = referenceData;
+    let expr: string;
+    if      (emotion.anger      >= 60) expr = R.expression_angry   || 'angry expression, furrowed brow';
+    else if (emotion.anger      >= 35) expr = R.expression_angry   || 'slightly annoyed expression';
+    else if (emotion.jealousy   >= 60) expr = R.expression_jealous || 'jealous pout, side glance';
+    else if (emotion.jealousy   >= 35) expr = R.expression_jealous || 'slightly jealous expression';
+    else if (emotion.affection  >= 70) expr = R.expression_happy   || 'blushing, happy smile, warm eyes';
+    else if (emotion.affection  >= 60) expr = R.expression_happy   || 'gentle smile, soft eyes';
+    else if (personality.lonely >= 60) expr = R.expression_lonely  || R.expression || 'lonely expression, distant gaze';
+    else if (personality.sleepy >= 60) expr = R.expression_sleepy  || R.expression || 'sleepy half-closed eyes, drowsy expression';
+    else                               expr = R.expression         || 'neutral expression';
+
+    return [
+      '1girl', charName, visual,
+      referenceData.appearance,
+      expr,
+      referenceData.pose,
+      referenceData.personality,
+      style,
+      referenceData.speech,
+      'manga panel, black and white, screentone',
+      'detailed lineart, professional manga style',
+    ].filter(Boolean).join(', ');
+  }
+
+  type MangaSection = { label: string; content: string };
+  function parseMangaResponse(text: string): MangaSection[] | null {
+    const parts = text.split(/\[(scene|panel|prompt)\]/i);
+    if (parts.length < 2) return null;
+    const sections: MangaSection[] = [];
+    for (let i = 1; i < parts.length; i += 2) {
+      sections.push({ label: parts[i].toLowerCase(), content: (parts[i + 1] ?? '').trim() });
+    }
+    return sections.length > 0 ? sections : null;
+  }
+
+  // ============================================================
+  // Chat to Manga Pipeline
+  // ============================================================
+  const MANGA_IMPORT_KEY = 'studio-manga-import';
+  let mangaConverting = $state<string | null>(null);
+
+  type MangaImportPanel = { prompt: string; scene: string };
+
+  function parseMangaImportResponse(text: string): MangaImportPanel[] {
+    const panels: MangaImportPanel[] = [];
+    const blocks = text.split(/\[panel\d+\]/i).slice(1);
+    for (const block of blocks) {
+      const promptM = block.match(/prompt:\s*(.+)/i);
+      const sceneM  = block.match(/scene:\s*(.+)/i);
+      if (promptM) {
+        panels.push({ prompt: promptM[1].trim(), scene: sceneM?.[1]?.trim() ?? '' });
+      }
+    }
+    return panels;
+  }
+
+  async function convertToManga(msg: ChatMessage): Promise<void> {
+    if (mangaConverting) return;
+    mangaConverting = msg.time;
+    try {
+      let panels: MangaImportPanel[];
+
+      // Fast path: already a manga-mode message — extract [prompt] directly
+      const parsed = parseMangaResponse(msg.text);
+      if (parsed) {
+        const promptSec = parsed.find(s => s.label === 'prompt');
+        const sceneSec  = parsed.find(s => s.label === 'scene');
+        panels = promptSec
+          ? [{ prompt: promptSec.content, scene: sceneSec?.content ?? '' }]
+          : [{ prompt: msg.text.slice(0, 300), scene: '' }];
+      } else {
+        // Slow path: call AI to convert conversation context into panels
+        const msgIdx     = messages.findIndex(m => m.time === msg.time && m.role === msg.role);
+        const ctxMsgs    = messages.slice(Math.max(0, (msgIdx >= 0 ? msgIdx : messages.length) - 5), (msgIdx >= 0 ? msgIdx : messages.length) + 1);
+        const contextText = ctxMsgs
+          .filter(m => m.role !== 'error')
+          .map(m => `${m.role === 'user' ? 'ユーザー' : 'AI'}: ${m.text}`)
+          .join('\n');
+
+        const convSystemPrompt = [
+          'あなたは漫画脚本変換AIです。',
+          '与えられた会話ログを4コマ漫画の各パネル用に変換してください。',
+          '必ず以下の形式のみで出力し、余計なテキストは一切出力しないこと:',
+          '[panel1]',
+          'scene: （このコマのシーン説明、日本語1文）',
+          'prompt: （英語画像生成タグ、カンマ区切り）',
+          '[panel2]',
+          'scene: ...',
+          'prompt: ...',
+          '[panel3]',
+          'scene: ...',
+          'prompt: ...',
+          '[panel4]',
+          'scene: ...',
+          'prompt: ...',
+        ].join('\n');
+
+        const provider = $sessionStore.provider === 'onair' ? 'claude' : $sessionStore.provider;
+        const model    = $sessionStore.provider === 'onair' ? 'claude-haiku-4-5-20251001' : ($sessionStore.model || undefined);
+
+        const res = await fetch('/api/lab-chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider, model, systemPrompt: convSystemPrompt, userMessage: contextText }),
+        });
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message ?? res.statusText);
+        const data = await res.json();
+        panels = parseMangaImportResponse(data.text ?? '');
+        if (panels.length === 0) panels = [{ prompt: msg.text.slice(0, 300), scene: '' }];
+      }
+
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(MANGA_IMPORT_KEY, JSON.stringify({
+          panels,
+          sourceText: msg.text.slice(0, 60),
+        }));
+      }
+      window.open('/studio', '_blank');
+    } catch (e) {
+      console.error('[Lab] convertToManga:', e);
+    } finally {
+      mangaConverting = null;
+    }
+  }
+
+  // ============================================================
+  // Best Scene Selector
+  // ============================================================
+  type ScoreTag = '面白さ' | '感情強度' | '掛け合い' | 'オチ感';
+  type BestScene = {
+    userMsg: ChatMessage;
+    aiMsg:   ChatMessage;
+    score:   number;
+    tags:    ScoreTag[];
+  };
+
+  let bestScenes    = $state<BestScene[]>([]);
+  let bestSceneOpen = $state(false);
+
+  function scoreScene(userMsg: ChatMessage, aiMsg: ChatMessage): { score: number; tags: ScoreTag[] } {
+    const combined = userMsg.text + ' ' + aiMsg.text;
+    const tags: ScoreTag[] = [];
+    let score = 0;
+
+    // 面白さ: text richness + laugh markers
+    score += Math.min(aiMsg.text.length / 40, 8);
+    const laughCount = (combined.match(/[wｗ笑草]+|wwww+/gi) ?? []).length;
+    if (laughCount >= 2) { score += laughCount * 1.5; tags.push('面白さ'); }
+
+    // 感情強度: strong emotion words / repeated exclamation
+    const emotionHits = (combined.match(/[！]{2,}|好き|嫌い|やば|ひどい|バカ|えっ|泣|怖|うれし|かなし|悔し|怒り|最悪|最高/g) ?? []).length;
+    if (emotionHits >= 1) { score += emotionHits * 3; tags.push('感情強度'); }
+
+    // 掛け合い: both messages are substantial
+    if (userMsg.text.length > 10 && aiMsg.text.length > 30) {
+      score += 4;
+      tags.push('掛け合い');
+    }
+
+    // オチ感: punchy / surprising ending in AI response
+    const tail = aiMsg.text.slice(-60);
+    const punchHits = (tail.match(/だろ[！!]|じゃん[！!]|なの[！!]|知ってた|バレ[たる]|見て[たた]|そういう|結局|やっぱり|[！!]{2,}$/g) ?? []).length;
+    if (punchHits >= 1) { score += punchHits * 4; tags.push('オチ感'); }
+
+    // Manga mode bonus (already structured for manga)
+    if (parseMangaResponse(aiMsg.text)) score += 8;
+
+    return { score: Math.round(score * 10) / 10, tags };
+  }
+
+  function computeBestScenes(): void {
+    const recent = messages.slice(-30).filter(m => m.role !== 'error' && !m.isGreeting);
+    const scenes: BestScene[] = [];
+    for (let i = 0; i < recent.length - 1; i++) {
+      if (recent[i].role === 'user' && recent[i + 1].role === 'ai') {
+        const { score, tags } = scoreScene(recent[i], recent[i + 1]);
+        scenes.push({ userMsg: recent[i], aiMsg: recent[i + 1], score, tags });
+      }
+    }
+    scenes.sort((a, b) => b.score - a.score);
+    bestScenes    = scenes.slice(0, 3);
+    bestSceneOpen = true;
+  }
+
+  // ============================================================
+  // Daily Diary Mode
+  // ============================================================
+  let diaryGenerating = $state(false);
+
+  function parseDiaryResponse(text: string): { diary: string; prompt: string } | null {
+    const diaryM  = text.match(/\[diary\]\s*([\s\S]*?)\[prompt\]/i);
+    const promptM = text.match(/\[prompt\]\s*([\s\S]*)$/i);
+    if (!diaryM || !promptM) return null;
+    const diary  = diaryM[1].trim();
+    const prompt = promptM[1].trim();
+    return diary && prompt ? { diary, prompt } : null;
+  }
+
+  async function generateDiary(): Promise<void> {
+    if (diaryGenerating) return;
+    const today = messages.filter(m => m.role !== 'error' && !m.isGreeting);
+    if (today.length === 0) return;
+    diaryGenerating = true;
+    try {
+      const logText = today
+        .map(m => `${m.role === 'user' ? 'ユーザー' : charName}: ${m.text}`)
+        .join('\n');
+
+      const sysPrompt = [
+        'あなたは絵日記AI作家です。',
+        '以下の会話ログから今日の印象的な出来事を抽出し、絵日記風の文章と1枚絵の画像生成プロンプトを作成してください。',
+        '必ず以下の形式のみで出力し、余計なテキストは一切出力しないこと:',
+        '[diary]',
+        '（日記本文、日本語3〜5文、温かみのある絵日記的な文体）',
+        '[prompt]',
+        '（英語の画像生成タグのみ、カンマ区切り、感情や雰囲気・情景が伝わる1枚絵として完結するもの）',
+      ].join('\n');
+
+      const provider = $sessionStore.provider === 'onair' ? 'claude' : $sessionStore.provider;
+      const model    = $sessionStore.provider === 'onair' ? 'claude-haiku-4-5-20251001' : ($sessionStore.model || undefined);
+
+      const res = await fetch('/api/lab-chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider, model, systemPrompt: sysPrompt, userMessage: logText }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message ?? res.statusText);
+
+      const data  = await res.json();
+      const raw   = (data.text ?? '') as string;
+      const parsed = parseDiaryResponse(raw);
+      const diaryText = parsed?.diary  ?? raw.slice(0, 300);
+      const prompt    = parsed?.prompt ?? raw.slice(0, 400);
+
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('studio-diary-import', JSON.stringify({
+          prompt,
+          diaryText,
+          date: new Date().toLocaleDateString('ja-JP'),
+        }));
+      }
+      window.open('/studio', '_blank');
+    } catch (e) {
+      console.error('[Lab] generateDiary:', e);
+    } finally {
+      diaryGenerating = false;
+    }
+  }
+
+  // ============================================================
   function buildLabSystemPrompt(): string {
     const p = personality;
     const t = toggles;
@@ -429,6 +878,62 @@
     lines.push(`あなたは「${charName}」というAIキャラクターです。`);
     lines.push('以下のパラメータと指示に従って、自然な日本語で短く返答してください。');
     lines.push('');
+
+    if (activePreset === 'custom') {
+      const ccp = customProfile;
+      if (ccp.name || ccp.speechStyle || ccp.habits || ccp.sentenceEnding || ccp.memo) {
+        lines.push('【キャラクター人格】');
+        if (ccp.name)           lines.push(`キャラクター名：${ccp.name}`);
+        if (ccp.speechStyle)    lines.push(`話し方：${ccp.speechStyle}`);
+        if (ccp.habits)         lines.push(`口癖・習慣表現：${ccp.habits}`);
+        if (ccp.sentenceEnding) lines.push(`語尾の特徴：${ccp.sentenceEnding}`);
+        if (emotion.anger >= 30     && ccp.angerStyle)     lines.push(`怒りの表現：${ccp.angerStyle}`);
+        if (emotion.affection >= 60 && ccp.affectionStyle) lines.push(`好意の表現：${ccp.affectionStyle}`);
+        if (emotion.jealousy >= 30  && ccp.jealousyStyle)  lines.push(`嫉妬の表現：${ccp.jealousyStyle}`);
+        if (ccp.memo)           lines.push(`性格メモ：${ccp.memo}`);
+        lines.push('');
+      }
+    } else {
+      const cp = CHARACTER_PROFILES[activePreset];
+      if (cp) {
+        lines.push('【キャラクター人格】');
+        lines.push(`話し方：${cp.speechStyle}`);
+        lines.push(`口癖・習慣表現：${cp.habits}`);
+        lines.push(`語尾の特徴：${cp.sentenceEnding}`);
+        if (emotion.anger >= 30)     lines.push(`怒りの表現：${cp.angerStyle}`);
+        if (emotion.affection >= 60) lines.push(`好意の表現：${cp.affectionStyle}`);
+        if (emotion.jealousy >= 30)  lines.push(`嫉妬の表現：${cp.jealousyStyle}`);
+        lines.push('');
+      }
+    }
+
+    // 【呼称ルール】 — 全プリセット共通で customProfile の呼称を反映
+    {
+      const ccp = customProfile;
+      if (ccp.firstPerson || ccp.secondPerson || ccp.thirdPerson) {
+        lines.push('【呼称ルール】');
+        if (ccp.firstPerson)  lines.push(`一人称：${ccp.firstPerson}`);
+        if (ccp.secondPerson) lines.push(`二人称：${ccp.secondPerson}`);
+        if (ccp.thirdPerson)  lines.push(`第三者：${ccp.thirdPerson}`);
+        lines.push('');
+      }
+    }
+
+    // 【感情表現スタイル】 — CHARACTER_PROFILES に style が定義されている場合のみ注入
+    {
+      const cp = CHARACTER_PROFILES[activePreset];
+      if (cp?.style) {
+        const hint = buildEmotionStyleHint(cp.style, {
+          trust:     emotion.trust,
+          affection: emotion.affection,
+          jealousy:  emotion.jealousy,
+          lonely:    p.lonely,
+          anger:     emotion.anger,
+          energy:    p.energy,
+        });
+        if (hint) lines.push(hint);
+      }
+    }
 
     // Trust tier
     const trustTier: 0 | 1 | 2 | 3 =
@@ -545,7 +1050,18 @@
     }
 
     // 口調・人格ガイド（外部モジュール）
-    lines.push(...buildToneHints({ emotion, bond, memoryEntries: getMemoryEntries(), now: new Date() }));
+    lines.push(...buildToneHints({ emotion, bond, characterKey: activePreset, memoryEntries: getMemoryEntries(), now: new Date() }));
+
+    if (t.mangaMode) {
+      lines.push('');
+      lines.push('【漫画モード】必ず以下の3セクション形式のみで返答してください。他のテキストは出力しないこと。');
+      lines.push('[scene]');
+      lines.push('（シーンの状況・背景・空気感を2〜3文で日本語）');
+      lines.push('[panel]');
+      lines.push('（このコマの構図・カメラワーク・キャラクターの動きや表情を1〜2文で日本語）');
+      lines.push('[prompt]');
+      lines.push(`（英語タグ形式の画像生成プロンプト。キャラクタービジュアル参考: ${buildImagePrompt()}）`);
+    }
 
     return lines.join('\n');
   }
@@ -931,6 +1447,7 @@
     console.log('[Lab] model   :', $sessionStore.model || '(default)');
     console.log('[Lab] request start');
 
+    const _reqStart = Date.now();
     let aiText: string;
     try {
       let res: Response;
@@ -941,14 +1458,16 @@
           body: JSON.stringify({ message: text }),
         });
       } else {
-        console.log('[Lab] system prompt:', buildLabSystemPrompt());
+        const _sysPrompt = buildLabSystemPrompt();
+        lastSystemPrompt = _sysPrompt;
+        console.log('[Lab] system prompt:', _sysPrompt);
         res = await fetch('/api/lab-chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             provider: $sessionStore.provider,
             model: $sessionStore.model || undefined,
-            systemPrompt: buildLabSystemPrompt(),
+            systemPrompt: _sysPrompt,
             userMessage: text,
           }),
         });
@@ -971,6 +1490,7 @@
       }
       const data = await res.json();
       aiText = $sessionStore.provider === 'onair' ? data.reply : data.text;
+      lastResponseMs = Date.now() - _reqStart;
       console.log('[Lab] response success');
     } catch (err) {
       console.error('[Lab] response fail:', err);
@@ -987,7 +1507,7 @@
       return;
     }
 
-    messages = [...messages, { role: 'ai', text: aiText, time: getTime() }];
+    messages = [...messages, { role: 'ai', text: aiText, time: getTime(), avatar: selectedAvatar, imagePrompt: toggles.imagePromptMode ? buildImagePrompt() : undefined }];
     addMemory('assistant', aiText);
     updateEmotionFromReply(aiText);
     if (reconciliationPending) {
@@ -1075,6 +1595,9 @@
     { id: 'hogo',     label: '保護者',    color: '#059669' },
     { id: 'youkya',   label: '陽キャ',    color: '#f97316' },
     { id: 'menhera',  label: 'メンヘラ',  color: '#e879f9' },
+    { id: 'ciel',     label: 'シエル',    color: '#93c5fd' },
+    { id: 'menoa',    label: 'メノア',    color: '#86efac' },
+    { id: 'piona',    label: 'ピオナ',    color: '#fbbf24' },
     { id: 'custom',   label: 'Custom',    color: '#a78bfa' },
   ];
 
@@ -1083,7 +1606,10 @@
     { key: 'nightMode'   as const, label: '深夜モード',       icon: '🌙' },
     { key: 'specialMode' as const, label: '特別対応 ON',     icon: '★' },
     { key: 'shortChat'   as const, label: '短文会話モード',   icon: '◻' },
-    { key: 'autoTalk'    as const, label: '自発会話モード',   icon: '◈' },
+    { key: 'autoTalk'        as const, label: '自発会話モード',        icon: '◈' },
+    { key: 'imagePromptMode' as const, label: 'Image Prompt Mode',    icon: '◼' },
+    { key: 'referenceMode'   as const, label: 'Reference Mode',        icon: '◧' },
+    { key: 'mangaMode'       as const, label: '漫画モード',              icon: '⬛' },
   ];
 
   const PARAM_CHIPS = [
@@ -1152,6 +1678,8 @@
   const LS_MEMORY_UPDATED_AT  = 'lab-memory-updated-at';
   const LS_EMOTION            = 'lab-emotion';
   const LS_BOND               = 'lab-bond';
+  const LS_CUSTOM_PROFILE     = 'lab-custom-profile';
+  const LS_SLOT: Record<SlotKey, string> = { a: 'lab-custom-slot-a', b: 'lab-custom-slot-b', c: 'lab-custom-slot-c' };
   const MEMORY_UPDATE_EVERY   = 3;                      // N回の交換ごとに更新
   const MEMORY_STALE_MS       = 60 * 60 * 1000;         // 1時間経過で起動時に自動更新
   const L_DEF = 220, L_MIN = 140, L_MAX = 480;
@@ -1666,7 +2194,7 @@ ${recent}
         const data    = await res.json();
         const aiText: string = ($sessionStore.provider === 'onair' ? data.reply : data.text) ?? '';
         if (aiText) {
-          messages = [...messages, { role: 'ai', text: aiText, time: getTime() }];
+          messages = [...messages, { role: 'ai', text: aiText, time: getTime(), avatar: selectedAvatar }];
           localStorage.setItem(LS_LAST_MOOD,       detectMood(aiText));
           localStorage.setItem(LS_RECENT_PROGRESS, aiText.length > 50 ? aiText.slice(0, 50) + '…' : aiText);
           setTimeout(() => chatEl?.scrollTo({ top: chatEl.scrollHeight, behavior: 'smooth' }), 50);
@@ -1784,6 +2312,29 @@ ${recent}
     }
     const savedBond = localStorage.getItem(LS_BOND);
     if (savedBond) bond = clamp(parseInt(savedBond));
+
+    const rawCustom = localStorage.getItem(LS_CUSTOM_PROFILE);
+    if (rawCustom) {
+      try {
+        const cp = JSON.parse(rawCustom) as Partial<CustomProfile>;
+        if (cp.name           != null) customProfile.name           = cp.name;
+        if (cp.firstPerson    != null) customProfile.firstPerson    = cp.firstPerson;
+        if (cp.secondPerson   != null) customProfile.secondPerson   = cp.secondPerson;
+        if (cp.thirdPerson    != null) customProfile.thirdPerson    = cp.thirdPerson;
+        if (cp.speechStyle    != null) customProfile.speechStyle    = cp.speechStyle;
+        if (cp.habits         != null) customProfile.habits         = cp.habits;
+        if (cp.sentenceEnding != null) customProfile.sentenceEnding = cp.sentenceEnding;
+        if (cp.angerStyle     != null) customProfile.angerStyle     = cp.angerStyle;
+        if (cp.affectionStyle != null) customProfile.affectionStyle = cp.affectionStyle;
+        if (cp.jealousyStyle  != null) customProfile.jealousyStyle  = cp.jealousyStyle;
+        if (cp.memo           != null) customProfile.memo           = cp.memo;
+      } catch { /* ignore */ }
+    }
+
+    for (const k of (['a', 'b', 'c'] as SlotKey[])) {
+      const raw = localStorage.getItem(LS_SLOT[k]);
+      if (raw) { try { customSlots[k] = JSON.parse(raw); } catch { /* ignore */ } }
+    }
 
     const driftNow = new Date();
     if (shouldApplyDrift(driftNow)) {
@@ -1957,6 +2508,19 @@ ${recent}
           onclick={() => { batchMode = !batchMode; }}
           title="CSV一括テストモード (text,label)"
         >BATCH</button>
+        <button
+          class="best-scene-btn"
+          class:active={bestSceneOpen}
+          onclick={computeBestScenes}
+          title="直近30件から最良シーンを抽出"
+        >★ BEST SCENE</button>
+        <button
+          class="diary-btn"
+          class:loading={diaryGenerating}
+          onclick={generateDiary}
+          disabled={diaryGenerating}
+          title="今日の会話から絵日記を生成"
+        >{diaryGenerating ? '⏳ …' : '📘 DIARY'}</button>
         {#if isThinking}
           <span class="thinking-tag">PROCESSING…</span>
         {:else}
@@ -1989,15 +2553,43 @@ ${recent}
               {#if msg.role === 'ai'}
                 <div class="msg-av ai-av">
                   <img
-                    src={selectedAvatar}
+                    src={msg.avatar ?? selectedAvatar}
                     alt={charName}
                     onerror={(e) => { (e.target as HTMLImageElement).src = '/avatars/default.png'; }}
                   />
                 </div>
               {/if}
               <div class="msg-bubble">
-                <div class="msg-text">{msg.text}</div>
+                {#if parseMangaResponse(msg.text)}
+                  {#each parseMangaResponse(msg.text)! as sec}
+                    <div class="manga-sec manga-sec-{sec.label}">
+                      <div class="manga-sec-hd">{sec.label.toUpperCase()}</div>
+                      <div class="manga-sec-body">{sec.content}</div>
+                      {#if sec.label === 'prompt'}
+                        <button class="img-prompt-copy" onclick={() => navigator.clipboard.writeText(sec.content)}>COPY</button>
+                      {/if}
+                    </div>
+                  {/each}
+                {:else}
+                  <div class="msg-text">{msg.text}</div>
+                {/if}
+                {#if msg.imagePrompt}
+                  <div class="img-prompt-box">
+                    <div class="img-prompt-hd">IMAGE PROMPT</div>
+                    <div class="img-prompt-text">{msg.imagePrompt}</div>
+                    <button class="img-prompt-copy" onclick={() => navigator.clipboard.writeText(msg.imagePrompt!)}>COPY</button>
+                  </div>
+                {/if}
                 <div class="msg-time">{msg.time}</div>
+                {#if msg.role === 'ai' && !msg.isGreeting}
+                  <button
+                    class="manga-send-btn"
+                    class:loading={mangaConverting === msg.time}
+                    onclick={() => convertToManga(msg)}
+                    disabled={mangaConverting !== null}
+                    title="会話をImage Studioで漫画化"
+                  >{mangaConverting === msg.time ? '⏳ 変換中…' : '⬛ MANGA化'}</button>
+                {/if}
               </div>
               {#if msg.role === 'user'}
                 <div class="msg-av user-av">
@@ -2233,6 +2825,45 @@ ${recent}
         </div>
       {/if}
 
+      <!-- Best Scene Panel -->
+      {#if bestSceneOpen}
+        <div class="bs-panel">
+          <div class="bs-hd">
+            <span class="bs-star">★</span>
+            <span class="bs-title">BEST SCENE</span>
+            <span class="bs-sub">直近30件 / 上位{bestScenes.length}シーン</span>
+            <span class="bs-flex"></span>
+            <button class="bs-close-btn" onclick={() => { bestSceneOpen = false; }}>✕</button>
+          </div>
+          {#if bestScenes.length === 0}
+            <div class="bs-empty">スコアリングできるシーンが見つかりませんでした</div>
+          {:else}
+            {#each bestScenes as scene, i}
+              <div class="bs-scene">
+                <div class="bs-scene-hd">
+                  <span class="bs-rank">★{i + 1}</span>
+                  <span class="bs-score-badge">score {scene.score}</span>
+                  {#each scene.tags as tag}
+                    <span class="bs-tag">{tag}</span>
+                  {/each}
+                  <span class="bs-flex"></span>
+                  <button
+                    class="manga-send-btn"
+                    class:loading={mangaConverting === scene.aiMsg.time}
+                    onclick={() => convertToManga(scene.aiMsg)}
+                    disabled={mangaConverting !== null}
+                  >{mangaConverting === scene.aiMsg.time ? '⏳ 変換中…' : '⬛ MANGA化'}</button>
+                </div>
+                <div class="bs-excerpt">
+                  <div class="bs-user">👤 {scene.userMsg.text.length > 80 ? scene.userMsg.text.slice(0, 80) + '…' : scene.userMsg.text}</div>
+                  <div class="bs-ai">🤖 {scene.aiMsg.text.length > 120 ? scene.aiMsg.text.slice(0, 120) + '…' : scene.aiMsg.text}</div>
+                </div>
+              </div>
+            {/each}
+          {/if}
+        </div>
+      {/if}
+
       <!-- Input -->
       <div class="chat-input-area">
         <textarea
@@ -2280,7 +2911,7 @@ ${recent}
     <!-- ===== RIGHT: Character Viewer + Controls ===== -->
     <section class="panel right-panel" style="width:{rightWidth}px">
 
-      <!-- ── CHARACTER VIEWER ── -->
+      <!-- 1. CHARACTER VIEWER -->
       <div class="panel-hd">
         <span class="ph-diamond">◆</span>
         <span class="ph-text">CHARACTER VIEWER</span>
@@ -2289,7 +2920,6 @@ ${recent}
       </div>
 
       <div class="char-viewer">
-        <!-- キャラクター画像表示エリア -->
         <div class="cv-avatar-wrap" class:glow-active={avatarEffects.glowPulse}>
           <div
             class="cv-avatar-ring"
@@ -2306,8 +2936,6 @@ ${recent}
             </div>
           </div>
         </div>
-
-        <!-- キャラ名 -->
         <div class="av-name-row">
           {#if editingName}
             <input
@@ -2322,8 +2950,6 @@ ${recent}
           {/if}
         </div>
         <div class="av-mode">{charMode}</div>
-
-        <!-- Speaking... 表示 -->
         <div class="cv-speaking" class:active={isThinking}>
           {#if isThinking}
             <span class="dot-bounce"></span>
@@ -2334,8 +2960,6 @@ ${recent}
             <span class="cv-standby">◉ STANDBY</span>
           {/if}
         </div>
-
-        <!-- 音声進行バー（ダミー） -->
         <div class="cv-voice-wrap">
           <div class="cv-voice-label">VOICE OUTPUT</div>
           <div class="cv-voice-track">
@@ -2344,7 +2968,7 @@ ${recent}
         </div>
       </div>
 
-      <!-- ── CHARACTER CORE ── -->
+      <!-- 2. CHARACTER SELECT -->
       <div class="panel-hd cv-sub-hd">
         <span class="ph-diamond">◆</span>
         <span class="ph-text">CHARACTER CORE</span>
@@ -2352,7 +2976,6 @@ ${recent}
         <span class="ph-id">CH-001</span>
       </div>
 
-      <!-- Avatar selector grid -->
       <div class="av-selector">
         <div class="section-lbl">CHARACTER SELECT</div>
         <div class="av-grid">
@@ -2360,7 +2983,7 @@ ${recent}
             <button
               class="av-thumb"
               class:active={selectedAvatar === av.file}
-              onclick={() => selectAvatar(av.file, av.name)}
+              onclick={() => selectAvatar(av.file, av.name, av.presetId)}
               title={av.name}
             >
               <img
@@ -2374,7 +2997,6 @@ ${recent}
         </div>
       </div>
 
-      <!-- Avatar Effects -->
       <div class="av-effects">
         <div class="section-lbl">AVATAR EFFECTS</div>
         <div class="toggle-list">
@@ -2391,7 +3013,226 @@ ${recent}
         </div>
       </div>
 
-      <!-- Voice Config -->
+      <!-- 3. PERSONA PRESETS + CUSTOM PERSONA EDITOR + SAVE SLOTS -->
+      <div class="ctrl-section">
+        <div class="section-lbl">PERSONA PRESETS</div>
+        <div class="preset-grid">
+          {#each PRESET_LIST as p}
+            <button
+              class="preset-btn"
+              class:active={activePreset === p.id}
+              style="--pc:{p.color}"
+              onclick={() => applyPreset(p.id)}
+            >
+              {p.label}
+            </button>
+          {/each}
+        </div>
+
+        {#if activePreset !== 'custom'}
+          <button class="cp-dup-btn cp-dup-standalone" onclick={duplicateToCustom}>
+            ◈ DUPLICATE CURRENT → CUSTOM
+          </button>
+        {/if}
+
+        <!-- Persona Editor: 全プリセット常時表示 / 人格フィールドはpreset時read-only -->
+        <div class="custom-profile-section" id="persona-editor">
+          <div class="cp-editor-hd">
+            {activePreset === 'custom' ? '◈ CUSTOM PERSONA EDITOR' : '◈ CURRENT PERSONA'}
+          </div>
+          <div class="cp-fields">
+            <div class="cp-row">
+              <span class="cp-lbl">NAME</span>
+              <input
+                class="cp-input"
+                type="text"
+                placeholder="キャラクター名"
+                bind:value={customProfile.name}
+                oninput={saveCustomProfile}
+                disabled={activePreset !== 'custom'}
+              />
+            </div>
+            <div class="cp-row">
+              <span class="cp-lbl">一人称</span>
+              <input
+                class="cp-input"
+                type="text"
+                placeholder="私、僕、俺 など"
+                bind:value={customProfile.firstPerson}
+                oninput={saveCustomProfile}
+              />
+            </div>
+            <div class="cp-row">
+              <span class="cp-lbl">二人称</span>
+              <input
+                class="cp-input"
+                type="text"
+                placeholder="あなた、君、お前 など"
+                bind:value={customProfile.secondPerson}
+                oninput={saveCustomProfile}
+              />
+            </div>
+            <div class="cp-row">
+              <span class="cp-lbl">他人</span>
+              <input
+                class="cp-input"
+                type="text"
+                placeholder="あの人、彼、彼女 など"
+                bind:value={customProfile.thirdPerson}
+                oninput={saveCustomProfile}
+              />
+            </div>
+            <div class="cp-row">
+              <span class="cp-lbl">口調</span>
+              <textarea
+                class="cp-input cp-textarea"
+                placeholder="話し方・性格の説明"
+                bind:value={customProfile.speechStyle}
+                oninput={saveCustomProfile}
+                disabled={activePreset !== 'custom'}
+              ></textarea>
+            </div>
+            <div class="cp-row">
+              <span class="cp-lbl">口癖</span>
+              <input
+                class="cp-input"
+                type="text"
+                placeholder="よく使う表現・口癖"
+                bind:value={customProfile.habits}
+                oninput={saveCustomProfile}
+                disabled={activePreset !== 'custom'}
+              />
+            </div>
+            <div class="cp-row">
+              <span class="cp-lbl">語尾</span>
+              <input
+                class="cp-input"
+                type="text"
+                placeholder="語尾の特徴"
+                bind:value={customProfile.sentenceEnding}
+                oninput={saveCustomProfile}
+                disabled={activePreset !== 'custom'}
+              />
+            </div>
+            <div class="cp-row">
+              <span class="cp-lbl">怒り方</span>
+              <input
+                class="cp-input"
+                type="text"
+                placeholder="怒った時の言い方"
+                bind:value={customProfile.angerStyle}
+                oninput={saveCustomProfile}
+                disabled={activePreset !== 'custom'}
+              />
+            </div>
+            <div class="cp-row">
+              <span class="cp-lbl">甘い時</span>
+              <input
+                class="cp-input"
+                type="text"
+                placeholder="好意・愛情表現"
+                bind:value={customProfile.affectionStyle}
+                oninput={saveCustomProfile}
+                disabled={activePreset !== 'custom'}
+              />
+            </div>
+            <div class="cp-row">
+              <span class="cp-lbl">嫉妬時</span>
+              <input
+                class="cp-input"
+                type="text"
+                placeholder="嫉妬した時の言い方"
+                bind:value={customProfile.jealousyStyle}
+                oninput={saveCustomProfile}
+                disabled={activePreset !== 'custom'}
+              />
+            </div>
+            <div class="cp-row">
+              <span class="cp-lbl">メモ</span>
+              <textarea
+                class="cp-input cp-textarea"
+                placeholder="その他の性格・設定メモ"
+                bind:value={customProfile.memo}
+                oninput={saveCustomProfile}
+                disabled={activePreset !== 'custom'}
+              ></textarea>
+            </div>
+          </div>
+
+          {#if activePreset === 'custom'}
+            <!-- Save Slots: Custom モード時のみ表示 -->
+            <div class="cp-slots">
+              <div class="cp-slots-hd">SAVE SLOTS</div>
+              {#each (['a', 'b', 'c'] as const) as k}
+                <div class="cp-slot-row">
+                  <span class="cp-slot-label">SLOT {k.toUpperCase()}</span>
+                  <span class="cp-slot-name">{customSlots[k]?.name || '— empty —'}</span>
+                  <button class="cp-slot-btn cp-save" onclick={() => saveSlot(k)}>SAVE</button>
+                  <button class="cp-slot-btn cp-load" onclick={() => loadSlot(k)} disabled={!customSlots[k]}>LOAD</button>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      </div>
+
+      <!-- 5. PARAMETER MATRIX -->
+      <div class="ctrl-section sliders-section">
+        <div class="section-lbl">PARAMETER MATRIX</div>
+        {#each SLIDERS as s}
+          <div
+            class="slider-row"
+            role="group"
+            onmouseenter={() => { tooltipKey = s.key; }}
+            onmouseleave={() => { tooltipKey = null; }}
+          >
+            <div class="slider-label-group">
+              <span class="slider-lbl" style="color:{s.color}">{s.label}</span>
+              <span class="slider-sub">{s.sub}</span>
+            </div>
+            <div class="slider-track-outer">
+              <input
+                type="range" min="0" max="100"
+                class="cyber-slider"
+                style="--sc:{s.color}; --pct:{personality[s.key]}%"
+                bind:value={personality[s.key]}
+                oninput={() => { activePreset = 'custom'; }}
+              />
+            </div>
+            <span class="slider-val" style="color:{s.color}; text-shadow: 0 0 8px {s.color}60">
+              {personality[s.key]}
+            </span>
+            {#if tooltipKey === s.key}
+              <div class="slider-tooltip">
+                <span class="tt-key">{s.label}</span>
+                <span class="tt-sep">—</span>
+                <span class="tt-desc">{s.desc}</span>
+              </div>
+            {/if}
+          </div>
+        {/each}
+      </div>
+
+      <!-- 6. BEHAVIOR FLAGS -->
+      <div class="ctrl-section">
+        <div class="section-lbl">BEHAVIOR FLAGS</div>
+        <div class="toggle-list">
+          {#each TOGGLE_LIST as item}
+            <label class="toggle-item">
+              <input type="checkbox" class="toggle-cb" bind:checked={toggles[item.key]} />
+              <span class="toggle-track"><span class="toggle-thumb"></span></span>
+              <span class="toggle-lbl">{item.label}</span>
+            </label>
+            {#if item.key === 'mangaMode'}
+              <button class="studio-btn" onclick={() => window.open('/studio', '_blank')}>
+                ◼ Open Image Studio
+              </button>
+            {/if}
+          {/each}
+        </div>
+      </div>
+
+      <!-- 7. VOICE CONFIG -->
       <div class="av-effects voice-cfg-block">
         <div class="section-lbl">VOICE CONFIG</div>
         <div class="vc-rows">
@@ -2418,7 +3259,7 @@ ${recent}
         </div>
       </div>
 
-      <!-- AI Config -->
+      <!-- 8. AI CONFIG -->
       <div class="av-effects ai-cfg-block">
         <div class="section-lbl">AI CONFIG</div>
         <div class="vc-rows">
@@ -2469,7 +3310,7 @@ ${recent}
         {/if}
       </div>
 
-      <!-- Stats -->
+      <!-- 9. STATS / LOG / MEMORY / RADAR (補助情報) -->
       <div class="char-stats">
         <div class="stat-row mood-row">
           <span class="stat-lbl">Mood</span>
@@ -2508,7 +3349,6 @@ ${recent}
         </div>
       </div>
 
-      <!-- Status log -->
       <div class="char-log">
         <div class="log-title">SYSTEM LOG</div>
         <div class="log-entry"><span class="ld ok"></span>Emotion Core Stable</div>
@@ -2527,7 +3367,6 @@ ${recent}
         </div>
       </div>
 
-      <!-- ── PERSONALITY CONTROL ── -->
       <div class="panel-hd cv-sub-hd">
         <span class="ph-diamond">◆</span>
         <span class="ph-text">PERSONALITY CONTROL</span>
@@ -2535,7 +3374,6 @@ ${recent}
         <span class="ph-id">PARAM-MATRIX</span>
       </div>
 
-      <!-- Long Memory -->
       <div class="lm-block">
         <div class="lm-header">
           <span class="lm-label">◈ LONG MEMORY</span>
@@ -2553,7 +3391,6 @@ ${recent}
         {/if}
       </div>
 
-      <!-- Radar Chart -->
       <div class="radar-wrap">
         <svg viewBox="0 0 250 250" class="radar-svg" aria-label="Personality radar chart">
           {#each [0.25, 0.5, 0.75, 1.0] as frac}
@@ -2585,73 +3422,80 @@ ${recent}
         </svg>
       </div>
 
-      <!-- Sliders -->
-      <div class="ctrl-section sliders-section">
-        <div class="section-lbl">PARAMETER MATRIX</div>
-        {#each SLIDERS as s}
-          <div
-            class="slider-row"
-            role="group"
-            onmouseenter={() => { tooltipKey = s.key; }}
-            onmouseleave={() => { tooltipKey = null; }}
-          >
-            <div class="slider-label-group">
-              <span class="slider-lbl" style="color:{s.color}">{s.label}</span>
-              <span class="slider-sub">{s.sub}</span>
+      <!-- DEBUG PANEL -->
+      <div class="dbg-panel">
+        <button class="dbg-toggle" onclick={() => debugOpen = !debugOpen}>
+          <span>◈ DEBUG</span>
+          <span class="dbg-chevron">{debugOpen ? '▲' : '▼'}</span>
+        </button>
+        {#if debugOpen}
+          <div class="dbg-body">
+            <div class="dbg-row">
+              <span class="dbg-lbl">CHAR</span>
+              <span class="dbg-val">{charName}</span>
             </div>
-            <div class="slider-track-outer">
-              <input
-                type="range" min="0" max="100"
-                class="cyber-slider"
-                style="--sc:{s.color}; --pct:{personality[s.key]}%"
-                bind:value={personality[s.key]}
-                oninput={() => { activePreset = 'custom'; }}
-              />
+            <div class="dbg-row">
+              <span class="dbg-lbl">一人称</span>
+              <span class="dbg-val">{customProfile.firstPerson  || '—'}</span>
             </div>
-            <span class="slider-val" style="color:{s.color}; text-shadow: 0 0 8px {s.color}60">
-              {personality[s.key]}
-            </span>
-            {#if tooltipKey === s.key}
-              <div class="slider-tooltip">
-                <span class="tt-key">{s.label}</span>
-                <span class="tt-sep">—</span>
-                <span class="tt-desc">{s.desc}</span>
-              </div>
-            {/if}
+            <div class="dbg-row">
+              <span class="dbg-lbl">二人称</span>
+              <span class="dbg-val">{customProfile.secondPerson || '—'}</span>
+            </div>
+            <div class="dbg-row">
+              <span class="dbg-lbl">性格</span>
+              <span class="dbg-val">{activePreset}{CHARACTER_PROFILES[activePreset]?.style ? ' / ' + CHARACTER_PROFILES[activePreset].style : ''}</span>
+            </div>
+            <div class="dbg-row">
+              <span class="dbg-lbl">EMOTION</span>
+              <span class="dbg-val dbg-em">mood:{emotion.mood} trust:{emotion.trust} affc:{emotion.affection} focus:{emotion.focus} anger:{emotion.anger} jeals:{emotion.jealousy}</span>
+            </div>
+            <div class="dbg-row">
+              <span class="dbg-lbl">TIME</span>
+              <span class="dbg-val">{currentTimeBucket}</span>
+            </div>
+            <div class="dbg-row">
+              <span class="dbg-lbl">PROMPT</span>
+              <span class="dbg-val dbg-prompt">{lastSystemPrompt ? lastSystemPrompt.slice(0, 300) + (lastSystemPrompt.length > 300 ? '…' : '') : '— 未送信 —'}</span>
+            </div>
+            <div class="dbg-row">
+              <span class="dbg-lbl">MODEL</span>
+              <span class="dbg-val">{$sessionStore.provider}{$sessionStore.model ? ' / ' + $sessionStore.model : ''}</span>
+            </div>
+            <div class="dbg-row">
+              <span class="dbg-lbl">LATENCY</span>
+              <span class="dbg-val">{lastResponseMs != null ? lastResponseMs + ' ms' : '—'}</span>
+            </div>
+
+            <div class="dbg-section-hd">◈ EMOTION STATUS</div>
+            <div class="dbg-row">
+              <span class="dbg-lbl">STYLE</span>
+              <span class="dbg-val dbg-style">{CHARACTER_PROFILES[activePreset]?.style ?? '—'}</span>
+            </div>
+            <div class="dbg-row">
+              <span class="dbg-lbl">ACTIVE</span>
+              <span class="dbg-val dbg-em">{activeEmotionLabels}</span>
+            </div>
+            <div class="dbg-row">
+              <span class="dbg-lbl">TRUST</span>
+              <span class="dbg-val {emotion.trust >= 60 ? 'dbg-hi' : ''}">{emotion.trust}</span>
+            </div>
+            <div class="dbg-row">
+              <span class="dbg-lbl">AFFECTION</span>
+              <span class="dbg-val {emotion.affection >= 60 ? 'dbg-hi' : ''}">{emotion.affection}</span>
+            </div>
+            <div class="dbg-row">
+              <span class="dbg-lbl">JEALOUSY</span>
+              <span class="dbg-val {emotion.jealousy >= 35 ? 'dbg-hi' : ''}">{emotion.jealousy}</span>
+            </div>
+            <div class="dbg-row">
+              <span class="dbg-lbl">NIGHT</span>
+              <span class="dbg-val {toggles.nightMode ? 'dbg-hi' : ''}">{toggles.nightMode ? 'ON' : 'OFF'}</span>
+            </div>
           </div>
-        {/each}
+        {/if}
       </div>
 
-      <!-- Toggles -->
-      <div class="ctrl-section">
-        <div class="section-lbl">BEHAVIOR FLAGS</div>
-        <div class="toggle-list">
-          {#each TOGGLE_LIST as item}
-            <label class="toggle-item">
-              <input type="checkbox" class="toggle-cb" bind:checked={toggles[item.key]} />
-              <span class="toggle-track"><span class="toggle-thumb"></span></span>
-              <span class="toggle-lbl">{item.label}</span>
-            </label>
-          {/each}
-        </div>
-      </div>
-
-      <!-- Presets -->
-      <div class="ctrl-section">
-        <div class="section-lbl">PERSONA PRESETS</div>
-        <div class="preset-grid">
-          {#each PRESET_LIST as p}
-            <button
-              class="preset-btn"
-              class:active={activePreset === p.id}
-              style="--pc:{p.color}"
-              onclick={() => applyPreset(p.id)}
-            >
-              {p.label}
-            </button>
-          {/each}
-        </div>
-      </div>
     </section>
 
   {:else}
@@ -2745,7 +3589,7 @@ ${recent}
                     <button
                       class="psp-av-btn"
                       class:active={selectedAvatar === av.file}
-                      onclick={() => selectAvatar(av.file, av.name)}
+                      onclick={() => selectAvatar(av.file, av.name, av.presetId)}
                       title={av.name}
                     >
                       <img src={av.file} alt={av.name} class="psp-av-img"
@@ -3879,6 +4723,177 @@ ${recent}
   font-weight: 700;
 }
 
+/* Custom Profile Editor */
+.custom-profile-section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(167,139,250,0.18);
+}
+
+.cp-editor-hd {
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: #a78bfa;
+  margin-bottom: 12px;
+}
+
+.cp-dup-btn {
+  font-family: inherit;
+  font-size: 9px;
+  letter-spacing: 1px;
+  padding: 5px 10px;
+  background: rgba(167,139,250,0.08);
+  border: 1px solid rgba(167,139,250,0.3);
+  border-radius: 3px;
+  color: #a78bfa;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s;
+}
+.cp-dup-btn:hover {
+  background: rgba(167,139,250,0.18);
+  border-color: rgba(167,139,250,0.6);
+}
+.cp-dup-standalone {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  text-align: center;
+}
+
+/* Save Slots */
+.cp-slots {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(167,139,250,0.12);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cp-slots-hd {
+  font-size: 9px;
+  letter-spacing: 2px;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+
+.cp-slot-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.cp-slot-label {
+  font-size: 9px;
+  letter-spacing: 1px;
+  color: #a78bfa;
+  width: 42px;
+  flex-shrink: 0;
+}
+
+.cp-slot-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cp-slot-btn {
+  font-family: inherit;
+  font-size: 9px;
+  letter-spacing: 1px;
+  padding: 3px 9px;
+  border-radius: 3px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.cp-save {
+  background: rgba(167,139,250,0.08);
+  border: 1px solid rgba(167,139,250,0.28);
+  color: #a78bfa;
+}
+.cp-save:hover {
+  background: rgba(167,139,250,0.18);
+  border-color: rgba(167,139,250,0.55);
+}
+
+.cp-load {
+  background: rgba(0,229,255,0.07);
+  border: 1px solid rgba(0,229,255,0.22);
+  color: var(--cy);
+}
+.cp-load:hover:not(:disabled) {
+  background: rgba(0,229,255,0.15);
+  border-color: rgba(0,229,255,0.45);
+}
+.cp-slot-btn:disabled {
+  opacity: 0.28;
+  cursor: default;
+}
+
+.cp-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cp-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.cp-lbl {
+  font-size: 12px;
+  letter-spacing: 0.5px;
+  color: #a78bfa;
+  width: 44px;
+  flex-shrink: 0;
+  padding-top: 7px;
+  text-align: right;
+}
+
+.cp-input {
+  flex: 1;
+  min-width: 0;
+  background: rgba(0,0,20,0.5);
+  border: 1px solid rgba(167,139,250,0.3);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 14px;
+  letter-spacing: 0;
+  padding: 6px 10px;
+  line-height: 1.5;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.cp-input:focus {
+  border-color: rgba(167,139,250,0.7);
+  box-shadow: 0 0 8px rgba(167,139,250,0.25);
+}
+
+.cp-input:disabled {
+  opacity: 0.45;
+  cursor: default;
+  border-color: rgba(167,139,250,0.12);
+}
+
+.cp-input::placeholder { color: var(--muted); font-size: 13px; }
+
+.cp-textarea {
+  resize: vertical;
+  min-height: 64px;
+  line-height: 1.6;
+}
+
 /* ============================================================
    RIGHT: CHAT PANEL
    ============================================================ */
@@ -4075,6 +5090,287 @@ ${recent}
   animation: bounce 0.9s ease-in-out infinite;
 }
 
+/* Image Prompt Box */
+.img-prompt-box {
+  margin-top: 10px;
+  padding: 8px 10px;
+  background: rgba(168,85,247,0.07);
+  border: 1px solid rgba(168,85,247,0.3);
+  border-radius: 8px;
+}
+.img-prompt-hd {
+  font-size: 8px;
+  letter-spacing: 1.5px;
+  color: rgba(168,85,247,0.7);
+  margin-bottom: 5px;
+}
+.img-prompt-text {
+  font-size: 10px;
+  color: rgba(200,180,255,0.85);
+  line-height: 1.5;
+  word-break: break-all;
+}
+.img-prompt-copy {
+  margin-top: 6px;
+  font-size: 9px;
+  letter-spacing: 1px;
+  color: rgba(168,85,247,0.8);
+  background: transparent;
+  border: 1px solid rgba(168,85,247,0.3);
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.img-prompt-copy:hover {
+  background: rgba(168,85,247,0.15);
+}
+
+/* Manga Mode sections */
+.manga-sec {
+  margin-top: 8px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  border-left: 2px solid;
+}
+.manga-sec-hd {
+  font-size: 8px;
+  letter-spacing: 1.8px;
+  margin-bottom: 4px;
+  opacity: 0.6;
+}
+.manga-sec-body {
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+.manga-sec-scene  { background: rgba(0,229,255,0.05); border-color: rgba(0,229,255,0.3); }
+.manga-sec-scene  .manga-sec-hd { color: var(--cy); }
+.manga-sec-panel  { background: rgba(168,85,247,0.05); border-color: rgba(168,85,247,0.3); }
+.manga-sec-panel  .manga-sec-hd { color: rgba(168,85,247,0.8); }
+.manga-sec-prompt { background: rgba(251,191,36,0.05); border-color: rgba(251,191,36,0.3); }
+.manga-sec-prompt .manga-sec-hd { color: rgba(251,191,36,0.8); }
+.manga-sec-prompt .manga-sec-body { font-size: 10px; color: rgba(200,180,255,0.8); word-break: break-all; }
+
+.studio-btn {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 6px 10px;
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: rgba(251,191,36,0.85);
+  background: rgba(251,191,36,0.05);
+  border: 1px solid rgba(251,191,36,0.3);
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: center;
+  transition: background 0.15s, border-color 0.15s;
+}
+.studio-btn:hover {
+  background: rgba(251,191,36,0.12);
+  border-color: rgba(251,191,36,0.5);
+}
+
+.manga-send-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 3px 10px;
+  font-size: 10px;
+  font-family: inherit;
+  letter-spacing: 1px;
+  font-weight: 600;
+  color: var(--pu);
+  background: rgba(168,85,247,0.05);
+  border: 1px solid rgba(168,85,247,0.25);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.manga-send-btn:hover:not(:disabled) {
+  background: rgba(168,85,247,0.12);
+  border-color: rgba(168,85,247,0.5);
+}
+.manga-send-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.manga-send-btn.loading {
+  color: var(--cy);
+  border-color: rgba(0,229,255,0.3);
+}
+
+/* ============================================================
+   BEST SCENE SELECTOR
+   ============================================================ */
+.best-scene-btn {
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  font-family: inherit;
+  color: var(--muted);
+  border: 1px solid var(--muted);
+  background: transparent;
+  padding: 2px 8px;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s, background 0.2s, box-shadow 0.2s;
+  flex-shrink: 0;
+}
+.best-scene-btn:hover {
+  color: rgba(251,191,36,0.9);
+  border-color: rgba(251,191,36,0.6);
+  background: rgba(251,191,36,0.06);
+}
+.best-scene-btn.active {
+  color: rgba(251,191,36,1);
+  border-color: rgba(251,191,36,0.7);
+  background: rgba(251,191,36,0.1);
+  box-shadow: 0 0 6px rgba(251,191,36,0.25);
+}
+
+.diary-btn {
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  font-family: inherit;
+  color: var(--muted);
+  border: 1px solid var(--muted);
+  background: transparent;
+  padding: 2px 8px;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s, background 0.2s;
+  flex-shrink: 0;
+}
+.diary-btn:hover:not(:disabled) {
+  color: #34d399;
+  border-color: #34d399;
+  background: rgba(52,211,153,0.07);
+}
+.diary-btn:disabled,
+.diary-btn.loading {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.bs-panel {
+  flex-shrink: 0;
+  border: 1px solid rgba(251,191,36,0.3);
+  border-radius: 4px;
+  background: rgba(251,191,36,0.04);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bs-hd {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(251,191,36,0.15);
+}
+.bs-star  { color: rgba(251,191,36,0.9); font-size: 11px; }
+.bs-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: rgba(251,191,36,0.95);
+  text-shadow: 0 0 8px rgba(251,191,36,0.35);
+}
+.bs-sub {
+  font-size: 8.5px;
+  color: var(--muted);
+  letter-spacing: 0.8px;
+}
+.bs-flex  { flex: 1; }
+.bs-close-btn {
+  font-size: 10px;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+  transition: color 0.15s;
+}
+.bs-close-btn:hover { color: rgba(244,63,94,0.8); }
+
+.bs-empty {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 8px 4px;
+  letter-spacing: 0.5px;
+}
+
+.bs-scene {
+  border: 1px solid rgba(251,191,36,0.15);
+  border-radius: 4px;
+  background: rgba(0,5,18,0.4);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bs-scene-hd {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.bs-rank {
+  font-size: 10px;
+  font-weight: 700;
+  color: rgba(251,191,36,0.9);
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+}
+
+.bs-score-badge {
+  font-size: 9px;
+  padding: 1px 6px;
+  border-radius: 2px;
+  background: rgba(251,191,36,0.08);
+  border: 1px solid rgba(251,191,36,0.25);
+  color: rgba(251,191,36,0.7);
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+}
+
+.bs-tag {
+  font-size: 8px;
+  padding: 1px 5px;
+  border-radius: 2px;
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+}
+.bs-tag:nth-child(1) { background: rgba(0,229,255,0.08);  border: 1px solid rgba(0,229,255,0.2);  color: var(--cy); }
+.bs-tag:nth-child(2) { background: rgba(168,85,247,0.08); border: 1px solid rgba(168,85,247,0.2); color: var(--pu); }
+.bs-tag:nth-child(3) { background: rgba(52,211,153,0.08); border: 1px solid rgba(52,211,153,0.2); color: #34d399; }
+.bs-tag:nth-child(4) { background: rgba(251,191,36,0.08); border: 1px solid rgba(251,191,36,0.2); color: rgba(251,191,36,0.85); }
+
+.bs-excerpt {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bs-user,
+.bs-ai {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text2);
+  padding: 4px 8px;
+  border-radius: 3px;
+  word-break: break-all;
+}
+.bs-user { background: rgba(0,229,255,0.04);  border-left: 2px solid rgba(0,229,255,0.2); }
+.bs-ai   { background: rgba(168,85,247,0.04); border-left: 2px solid rgba(168,85,247,0.2); }
+
 /* Input area */
 .chat-input-area {
   display: flex;
@@ -4092,11 +5388,12 @@ ${recent}
   border-radius: 4px;
   color: var(--text);
   font-family: inherit;
-  font-size: 12px;
-  padding: 8px 12px;
+  font-size: 15px;
+  padding: 10px 12px;
   resize: none;
   outline: none;
   line-height: 1.5;
+  min-height: 46px;
   transition: border-color 0.15s;
 }
 
@@ -4105,19 +5402,20 @@ ${recent}
   box-shadow: 0 0 8px rgba(0,229,255,0.1);
 }
 
-.chat-input::placeholder { color: var(--muted); font-size: 11px; }
+.chat-input::placeholder { color: var(--muted); font-size: 14px; }
 
 .reset-chat-btn {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 0 10px;
-  height: 36px;
+  padding: 0 12px;
+  height: auto;
+  align-self: stretch;
   background: rgba(255,80,80,0.06);
   border: 1px solid rgba(255,80,80,0.22);
   border-radius: 4px;
   color: rgba(255,110,110,0.6);
-  font-size: 10px;
+  font-size: 12px;
   font-family: inherit;
   letter-spacing: 0.08em;
   cursor: pointer;
@@ -4136,13 +5434,15 @@ ${recent}
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 0 14px;
+  padding: 0 16px;
+  height: auto;
+  align-self: stretch;
   background: rgba(0,229,255,0.1);
   border: 1px solid rgba(0,229,255,0.3);
   border-radius: 4px;
   color: var(--cy);
   font-family: inherit;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 700;
   letter-spacing: 1.5px;
   cursor: pointer;
@@ -5311,5 +6611,96 @@ ${recent}
   gap: 6px;
   padding-top: 4px;
   border-top: 1px solid var(--border);
+}
+
+/* ============================================================
+   DEBUG PANEL
+   ============================================================ */
+.dbg-panel {
+  margin-top: 18px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(167,139,250,0.15);
+}
+
+.dbg-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-family: Consolas, monospace;
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: rgba(167,139,250,0.45);
+  padding: 2px 0 4px;
+  transition: color 0.15s;
+}
+.dbg-toggle:hover { color: #a78bfa; }
+
+.dbg-chevron { font-size: 8px; }
+
+.dbg-body {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.dbg-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-family: Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.dbg-lbl {
+  flex-shrink: 0;
+  width: 56px;
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  color: rgba(167,139,250,0.45);
+  padding-top: 1px;
+}
+
+.dbg-val {
+  flex: 1;
+  min-width: 0;
+  color: rgba(200,220,255,0.7);
+  word-break: break-all;
+}
+
+.dbg-em {
+  color: rgba(0,229,255,0.65);
+  font-size: 10px;
+}
+
+.dbg-prompt {
+  font-size: 10px;
+  color: rgba(134,239,172,0.7);
+  white-space: pre-wrap;
+  line-height: 1.6;
+}
+
+.dbg-section-hd {
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(167,139,250,0.1);
+  font-size: 9px;
+  letter-spacing: 2px;
+  color: rgba(167,139,250,0.35);
+}
+
+.dbg-style {
+  color: rgba(251,191,36,0.8);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.dbg-hi {
+  color: rgba(0,229,255,0.9);
 }
 </style>

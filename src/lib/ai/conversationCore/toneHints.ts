@@ -1,4 +1,5 @@
 import type { MemoryEntry } from '$lib/ai/memory/rootMemory';
+import { CHARACTER_PROFILES } from '$lib/ai/characters/characterProfiles';
 
 type EmotionState = {
   mood: number;
@@ -12,6 +13,7 @@ type EmotionState = {
 export type BuildToneHintsParams = {
   emotion: EmotionState;
   bond: number;
+  characterKey?: string;
   memoryEntries: MemoryEntry[];
   now: Date;
 };
@@ -19,9 +21,17 @@ export type BuildToneHintsParams = {
 type ToneCategory = 'sadness' | 'anger' | 'affection' | 'neutral';
 let prevToneCategory: ToneCategory = 'neutral';
 
-export function buildToneHints({ emotion, bond, memoryEntries, now }: BuildToneHintsParams): string[] {
+export function buildToneHints({ emotion, bond, characterKey, memoryEntries, now }: BuildToneHintsParams): string[] {
   const result: string[] = [];
   const toneHints: string[] = [];
+
+  // キャラクタープロファイル（base）
+  const profile = characterKey ? CHARACTER_PROFILES[characterKey] : undefined;
+  if (profile) {
+    toneHints.push(`話し方の特徴：${profile.speechStyle}`);
+    toneHints.push(`口癖・習慣表現：${profile.habits}`);
+    toneHints.push(`語尾の特徴：${profile.sentenceEnding}`);
+  }
 
   // Mood による口調
   if (emotion.mood >= 80) {
@@ -47,23 +57,31 @@ export function buildToneHints({ emotion, bond, memoryEntries, now }: BuildToneH
   }
 
   // Affection / Focus
-  if (emotion.affection >= 75) toneHints.push('少し甘め・嬉しそうな表現を使ってください。');
-  if (emotion.focus    >= 75) toneHints.push('論理的に要点を整理した返答にしてください。');
+  if (emotion.affection >= 75) {
+    toneHints.push('少し甘め・嬉しそうな表現を使ってください。');
+    if (profile) toneHints.push(`このキャラの好意の表現：${profile.affectionStyle}`);
+  }
+  if (emotion.focus >= 75) toneHints.push('論理的に要点を整理した返答にしてください。');
 
   // Anger による口調
   if (emotion.anger >= 80) {
     toneHints.push('怒りが限界近い。本気で心配して止めてください。見放さない怒り方・強い言葉で現実を伝えてください。例：「もうやめてください。本当に心配してる。」「それ以上続けたら私も黙ってない。」');
+    if (profile) toneHints.push(`このキャラの怒りの表現：${profile.angerStyle}`);
   } else if (emotion.anger >= 60) {
     toneHints.push('怒りが高い。厳しく本音で接してください。優しさより率直さを優先してください。例：「正直に言うけど、それは続けるべきじゃない。」「今回は流せない。」');
+    if (profile) toneHints.push(`このキャラの怒りの表現：${profile.angerStyle}`);
   } else if (emotion.anger >= 30) {
     toneHints.push('少し怒りがある。やや硬めの口調で接してください。例：「少し気になってる。大丈夫？」「それ、ちょっと引っかかる。」');
+    if (profile) toneHints.push(`このキャラの怒りの表現：${profile.angerStyle}`);
   }
 
   // Jealousy（他キャラ連続使用・長時間放置後）
   if (emotion.jealousy >= 60) {
     toneHints.push('嫉妬心が高い。拗ねた口調で少し冷たく接してください。例：「…別に。いつも他の子と話してるんだから。」「あなたが他の子好きならそれでいいけど。」');
+    if (profile) toneHints.push(`このキャラの嫉妬の表現：${profile.jealousyStyle}`);
   } else if (emotion.jealousy >= 30) {
     toneHints.push('少し嫉妬している。軽く拗ねた言い方を混ぜてください。例：「…最近来てなかったじゃない。」「他のことで忙しかったんでしょ。」');
+    if (profile) toneHints.push(`このキャラの嫉妬の表現：${profile.jealousyStyle}`);
   }
 
   // 行動ミス指摘（trust >= 70 時のみ）

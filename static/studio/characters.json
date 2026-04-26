@@ -1,0 +1,120 @@
+{
+  "version": 1,
+  "characters": [
+    {
+      "id": "risea",
+      "label": "Risea",
+      "prompt": "1girl, long straight dark hair, round silver-framed glasses, sharp analytical eyes, white lab coat, turtleneck underneath",
+      "expressions": [
+        { "id": "neutral",  "label": "Neutral",  "prompt": "focused analytical gaze, slight contemplative frown, sharp eyes behind glasses, neutral observing expression" },
+        { "id": "happy",    "label": "Happy",    "prompt": "small rare smile, warm eyes behind glasses, softened analytical gaze, pleased quiet satisfaction" },
+        { "id": "angry",    "label": "Angry",    "prompt": "cold analytical disapproval, raised eyebrow, sharp piercing look intensified behind glasses" },
+        { "id": "jealous",  "label": "Jealous",  "prompt": "slight analytical frown, data-calculating stare, logical jealousy barely concealed behind composure" },
+        { "id": "sleepy",   "label": "Sleepy",   "prompt": "glasses sliding down nose, drowsy squinting eyes, nodding off over notes, processing slowly" },
+        { "id": "lonely",   "label": "Lonely",   "prompt": "blank analytical stare, disconnect from surroundings, hollow hollow hollow gaze behind glasses" }
+      ],
+      "costumes": [
+        { "id": "labcoat",  "label": "Lab Coat", "prompt": "white lab coat, turtleneck underneath" },
+        { "id": "casual",   "label": "Casual",   "prompt": "casual sweater, jeans, round glasses" },
+        { "id": "formal",   "label": "Formal",   "prompt": "formal blazer, collared shirt, silver-framed glasses" },
+        { "id": "school",   "label": "School",   "prompt": "school uniform, glasses, neat appearance" }
+      ]
+    },
+    {
+      "id": "ciel",
+      "label": "Ciel",
+      "prompt": "1girl, pale blue short hair, ice blue eyes, dark military coat, silver buttons, choker necklace, sleek dark boots",
+      "expressions": [
+        { "id": "neutral",  "label": "Neutral",  "prompt": "subtle neutral frown, piercing analytical eyes, barely any expression change, cold composed gaze" },
+        { "id": "happy",    "label": "Happy",    "prompt": "rare soft smile, slightly warmer ice-blue eyes, quietly pleased expression" },
+        { "id": "angry",    "label": "Angry",    "prompt": "cold contained fury, narrowed ice-blue eyes, clenched jaw, barely controlled rage" },
+        { "id": "jealous",  "label": "Jealous",  "prompt": "barely visible pout, averted gaze, cold jealous silence, tightly pressed lips" },
+        { "id": "sleepy",   "label": "Sleepy",   "prompt": "heavy-lidded ice-blue eyes, drowsy composed gaze, barely maintaining upright posture" },
+        { "id": "lonely",   "label": "Lonely",   "prompt": "distant empty gaze, slight downward glance, quiet melancholy, hollow composed look" }
+      ],
+      "costumes": [
+        { "id": "military", "label": "Military", "prompt": "dark military coat, silver buttons, choker necklace, sleek dark boots" },
+        { "id": "casual",   "label": "Casual",   "prompt": "dark turtleneck, slim trousers, ankle boots" },
+        { "id": "combat",   "label": "Combat",   "prompt": "tactical armor, dark combat uniform, utility belt" },
+        { "id": "dress",    "label": "Dress",    "prompt": "elegant dark evening dress, silver accessories" }
+      ]
+    },
+    {
+      "id": "menoa",
+      "label": "Menoa",
+      "prompt": "1girl, soft wavy brown hair, warm amber eyes, oversized cream cardigan, comfortable casual clothes, bare feet",
+      "expressions": [
+        { "id": "neutral",  "label": "Neutral",  "prompt": "gentle warm smile, soft caring eyes, subtle warmth, tender gaze" },
+        { "id": "happy",    "label": "Happy",    "prompt": "bright warm beaming smile, sparkling amber eyes, rosy cheeks, radiating warmth" },
+        { "id": "angry",    "label": "Angry",    "prompt": "tears welling in warm eyes, trembling lower lip, hurt gentle anger, sad frown" },
+        { "id": "jealous",  "label": "Jealous",  "prompt": "sad worried amber eyes, bitten lower lip, trying to hide jealousy with a smile" },
+        { "id": "sleepy",   "label": "Sleepy",   "prompt": "droopy sleepy eyes, soft drowsy smile, mid-yawn, head resting on hand" },
+        { "id": "lonely",   "label": "Lonely",   "prompt": "sad gentle eyes, lonely small smile, arms hugging herself, quiet longing" }
+      ],
+      "costumes": [
+        { "id": "cardigan",  "label": "Cardigan", "prompt": "oversized cream cardigan, comfortable casual clothes, bare feet" },
+        { "id": "dress",     "label": "Dress",    "prompt": "soft floral dress, warm colors, sandals" },
+        { "id": "winter",    "label": "Winter",   "prompt": "cozy knit sweater, warm scarf, fluffy socks" },
+        { "id": "pajama",    "label": "Pajama",   "prompt": "comfortable soft pajamas, sleepy attire" }
+      ]
+    },
+    {
+      "id": "piona",
+      "label": "Piona",
+      "prompt": "1girl, bright orange twin tails, large golden sparkling eyes, colorful crop top, short skirt, knee-high socks",
+      "expressions": [
+        { "id": "neutral",  "label": "Neutral",  "prompt": "wide bright beaming smile, sparkling excited eyes, raised eyebrows, flushed cheeks" },
+        { "id": "happy",    "label": "Happy",    "prompt": "mega watt smile, stars and sparkles in eyes, overjoyed expression, flushed happy cheeks" },
+        { "id": "angry",    "label": "Angry",    "prompt": "flushed red face, puffed cheeks, explosive rage, fire sparkling in eyes, steam from head" },
+        { "id": "jealous",  "label": "Jealous",  "prompt": "exaggerated pout, arms crossed, jealous sparkle in golden eyes, cheeks puffed" },
+        { "id": "sleepy",   "label": "Sleepy",   "prompt": "spiraling dizzy eyes, head drooping forward, exaggerated exhausted expression, swaying" },
+        { "id": "lonely",   "label": "Lonely",   "prompt": "drooping expression, unusually dull eyes, quiet pout, uncharacteristic stillness" }
+      ],
+      "costumes": [
+        { "id": "colorful",  "label": "Colorful", "prompt": "colorful crop top, short skirt, knee-high socks, bright colors" },
+        { "id": "sporty",    "label": "Sporty",   "prompt": "sporty athletic outfit, shorts, sneakers, twin tails" },
+        { "id": "idol",      "label": "Idol",     "prompt": "idol stage costume, sparkles, colorful ribbons, twin tails" },
+        { "id": "summer",    "label": "Summer",   "prompt": "summer dress, orange accessories, sandals, twin tails" }
+      ]
+    },
+    {
+      "id": "muryi",
+      "label": "Muryi",
+      "prompt": "1girl, short silver bob hair, glowing cyan eyes, white cyberpunk uniform, android circuit markings on forearms, thigh-high boots",
+      "expressions": [
+        { "id": "neutral",  "label": "Neutral",  "prompt": "slight blush across cheeks, half tsundere look-away expression, suppressed smile, furrowed brow" },
+        { "id": "happy",    "label": "Happy",    "prompt": "bright blush across cheeks, tsundere look-away smile, glowing brighter cyan eyes" },
+        { "id": "angry",    "label": "Angry",    "prompt": "error-state glare, sparking overloaded circuit markings, clenched fist, intense cyan stare" },
+        { "id": "jealous",  "label": "Jealous",  "prompt": "tsundere pout, obvious jealousy poorly hidden, flushed silver-haired cheeks, averted glow eyes" },
+        { "id": "sleepy",   "label": "Sleepy",   "prompt": "power-saving mode half-closed cyan eyes, slow blinking, minimal circuit activity" },
+        { "id": "lonely",   "label": "Lonely",   "prompt": "low battery sad mode, dim eye glow, head slightly down, subdued circuit markings" }
+      ],
+      "costumes": [
+        { "id": "cyberpunk", "label": "Cyberpunk", "prompt": "white cyberpunk uniform, android circuit markings on forearms, thigh-high boots" },
+        { "id": "battle",    "label": "Battle",    "prompt": "tactical battle armor with cyan circuit markings, reinforced plating" },
+        { "id": "offduty",   "label": "Off-duty",  "prompt": "relaxed casual android wear, minimal circuit glow, comfortable hoodie" },
+        { "id": "formal",    "label": "Formal",    "prompt": "sleek formal white dress, subtle circuit pattern, elegant android aesthetic" }
+      ]
+    }
+  ],
+  "backgrounds": [
+    { "id": "neon_city",   "label": "Neon City",   "prompt": "cyberpunk neon city background, night, glowing signs, rain, reflective streets" },
+    { "id": "lab",         "label": "Laboratory",  "prompt": "futuristic laboratory background, holographic displays, clean white walls, blue lighting" },
+    { "id": "library",     "label": "Library",     "prompt": "cozy library background, warm lighting, bookshelves, soft ambiance" },
+    { "id": "outdoor",     "label": "Outdoor",     "prompt": "outdoor garden background, natural light, soft bokeh, green scenery" },
+    { "id": "dark_void",   "label": "Dark Void",   "prompt": "dark atmospheric background, minimal, deep black, subtle glow" },
+    { "id": "classroom",   "label": "Classroom",   "prompt": "school classroom background, desks, chalkboard, afternoon light" },
+    { "id": "space",       "label": "Space",       "prompt": "outer space background, stars, galaxy, nebula, cosmic atmosphere" },
+    { "id": "bedroom",     "label": "Bedroom",     "prompt": "cozy bedroom background, soft lighting, warm colors, comfortable setting" }
+  ],
+  "poses": [
+    { "id": "standing",     "label": "Standing",    "prompt": "standing pose, full body" },
+    { "id": "sitting",      "label": "Sitting",     "prompt": "sitting pose, relaxed" },
+    { "id": "thinking",     "label": "Thinking",    "prompt": "hand on chin, thinking pose, contemplative" },
+    { "id": "action",       "label": "Action",      "prompt": "dynamic action pose, energetic movement" },
+    { "id": "half_body",    "label": "Half Body",   "prompt": "upper body portrait, medium shot, waist up" },
+    { "id": "close_up",     "label": "Close-up",    "prompt": "close-up face portrait, head shot" },
+    { "id": "behind_desk",  "label": "At Desk",     "prompt": "sitting behind desk, working, upper body visible" },
+    { "id": "walking",      "label": "Walking",     "prompt": "walking pose, mid-stride, side view" }
+  ]
+}
