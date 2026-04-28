@@ -24,8 +24,8 @@ function settingsModel(provider: AIProvider): string {
 
 function createSessionStore() {
   const { subscribe, set, update } = writable({
-    provider: 'claude' as AIProvider,
-    model:    DEFAULT_MODELS.claude,
+    provider: 'gemini' as AIProvider,
+    model:    DEFAULT_MODELS.gemini,
   });
 
   return {
@@ -37,9 +37,21 @@ function createSessionStore() {
      */
     init() {
       if (typeof localStorage === 'undefined') return;
+
+      // claude → gemini 移行（一度だけ実行）
+      // フラグ設置後に開発者が明示的に claude を再選択した場合は尊重する
+      const MIGRATION_KEY = 'session_migration_v1';
+      if (!localStorage.getItem(MIGRATION_KEY)) {
+        if (localStorage.getItem(KEY_PROVIDER) === 'claude') {
+          localStorage.setItem(KEY_PROVIDER, 'gemini');
+          localStorage.removeItem(KEY_MODEL); // claude モデル名を残さない
+        }
+        localStorage.setItem(MIGRATION_KEY, '1');
+      }
+
       const savedProvider = localStorage.getItem(KEY_PROVIDER) as AIProvider | null;
       const savedModel    = localStorage.getItem(KEY_MODEL);
-      const provider      = savedProvider ?? 'claude';
+      const provider      = savedProvider ?? 'gemini';
       const model         = savedModel    ?? settingsModel(provider);
       set({ provider, model });
     },

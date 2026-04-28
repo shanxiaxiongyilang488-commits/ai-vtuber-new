@@ -11,67 +11,220 @@ interface LabChatRequest {
   userMessage: string;
 }
 
-export const POST: RequestHandler = async ({ request }) => {
-  let body: LabChatRequest;
-  try {
-    body = await request.json();
-  } catch {
-    throw error(400, 'Invalid JSON');
+// base64 data URL: "data:<mime>;base64,<data>"
+interface ImageInput {
+  dataUrl: string;
+}
+
+// ================================================================
+// Request parsing — FormData (sendMessage) or JSON (other callers)
+// ================================================================
+async function parseRequest(request: Request): Promise<{ body: LabChatRequest; images: ImageInput[] }> {
+  const ct = request.headers.get('content-type') ?? '';
+
+  if (ct.includes('multipart/form-data')) {
+    const fd = await request.formData();
+    const body: LabChatRequest = {
+      provider:     (fd.get('provider') as Provider) ?? 'gemini',
+      model:        (fd.get('model') as string | null) ?? undefined,
+      systemPrompt: (fd.get('systemPrompt') as string) ?? '',
+      userMessage:  (fd.get('userMessage') as string) ?? '',
+    };
+    const images: ImageInput[] = [];
+    for (let i = 0; fd.has(`image_${i}`); i++) {
+      const file = fd.get(`image_${i}`) as File;
+      const buf  = await file.arrayBuffer();
+      const b64  = Buffer.from(buf).toString('base64');
+      const mime = file.type || 'image/jpeg';
+      console.log(`[lab-chat] parse image[${i}]: name=${file.name} type=${file.type || '(none)'} size=${buf.byteLength}B b64len=${b64.length} mime_used=${mime}`);
+      if (!b64) { console.warn(`[lab-chat] image[${i}] skipped — empty base64`); continue; }
+      images.push({ dataUrl: `data:${mime};base64,${b64}` });
+    }
+    // Bug 4 fix: note_i をユーザーメッセージへ付加
+    const notes: string[] = [];
+    for (let i = 0; fd.has(`note_${i}`); i++) {
+      const note = fd.get(`note_${i}`) as string | null;
+      if (note?.trim()) notes.push(`[画像${i + 1}: ${note.trim()}]`);
+    }
+    if (notes.length > 0) {
+      body.userMessage = `${body.userMessage}\n${notes.join(' ')}`;
+    }
+    return { body, images };
   }
 
+  const body = await request.json() as LabChatRequest;
+  return { body, images: [] };
+}
+
+// ================================================================
+// OpenAI — Vision content builder
+// ================================================================
+function openAIUserContent(userMessage: string, images: ImageInput[]) {
+  if (images.length === 0) return userMessage;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const parts: any[] = images.map(img => ({
+    type:      'image_url',
+    image_url: { url: img.dataUrl, detail: 'high' },
+  }));
+  parts.push({ type: 'text', text: userMessage });
+  return parts;
+}
+
+async function callOpenAI(
+  systemPrompt: string,
+  userMessage:  string,
+  model?:       string,
+  images:       ImageInput[] = [],
+): Promise<string> {
+  if (!env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY が未設定');
+  const { default: OpenAI } = await import('openai');
+  const client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
+  const completion = await client.chat.completions.create({
+    model: model || 'gpt-4o-mini',
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user',   content: openAIUserContent(userMessage, images) as any },
+    ],
+  });
+  return completion.choices[0].message.content ?? '';
+}
+
+// ================================================================
+// Gemini — Vision parts builder
+// ================================================================
+function geminiUserParts(userMessage: string, images: ImageInput[]) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const parts: any[] = images.map((img, i) => {
+    // indexOf で最初のカンマ位置を取得 — split(',')[1] はカンマ複数時に切り捨てる恐れがある
+    const commaIdx = img.dataUrl.indexOf(',');
+    const header   = commaIdx >= 0 ? img.dataUrl.slice(0, commaIdx) : '';
+    const data     = commaIdx >= 0 ? img.dataUrl.slice(commaIdx + 1) : '';
+    const mimeType = header.match(/^data:(.*?);/)?.[1] ?? 'image/jpeg';
+
+    console.log(`[lab-chat][gemini] image[${i}] mimeType=${mimeType} dataLen=${data.length} valid=${data.length > 100 && mimeType.startsWith('image/')}`);
+    if (!data || data.length < 10) {
+      console.error(`[lab-chat][gemini] image[${i}] INVALID — empty or too-short base64 (len=${data.length})`);
+    }
+
+    return { inlineData: { mimeType, data } };
+  });
+  parts.push({ text: userMessage });
+  console.log(`[lab-chat][gemini] parts built: ${images.length} image(s) + 1 text = ${parts.length} total`);
+  return parts;
+}
+
+// ================================================================
+// Claude — Vision content builder
+// ================================================================
+function claudeUserContent(userMessage: string, images: ImageInput[]) {
+  if (images.length === 0) return userMessage;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const parts: any[] = images.map(img => ({
+    type:   'image',
+    source: {
+      type:       'base64',
+      media_type: img.dataUrl.match(/^data:(.*?);/)?.[1] ?? 'image/jpeg',
+      data:       img.dataUrl.split(',')[1] ?? '',
+    },
+  }));
+  parts.push({ type: 'text', text: userMessage });
+  return parts;
+}
+
+// ================================================================
+// Main handler
+// ================================================================
+export const POST: RequestHandler = async ({ request }) => {
+  let parsed: { body: LabChatRequest; images: ImageInput[] };
+  try {
+    parsed = await parseRequest(request);
+  } catch {
+    throw error(400, 'Invalid request');
+  }
+
+  const { body, images } = parsed;
   const { provider, model, systemPrompt, userMessage } = body;
 
-  console.log(`[lab-chat] provider=${provider} model=${model || '(default)'}`);
+  console.log(`[lab-chat] provider=${provider} model=${model || '(default)'} images=${images.length}`);
 
   // ================================================================
   // OpenAI
   // ================================================================
   if (provider === 'openai') {
     if (!env.OPENAI_API_KEY) throw error(500, 'OPENAI_API_KEY が未設定');
-    const { default: OpenAI } = await import('openai');
-    const client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
-    const completion = await client.chat.completions.create({
-      model: model || 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userMessage },
-      ],
-    });
-    const text = completion.choices[0].message.content ?? '';
+    const actualModel = model || 'gpt-4o-mini';
+    const text = await callOpenAI(systemPrompt, userMessage, actualModel, images);
     console.log(`[lab-chat] openai ok (${text.length} chars)`);
-    return json({ text });
+    return json({ text, provider: 'openai', actualModel });
   }
 
   // ================================================================
-  // Gemini
+  // Gemini（失敗時は OpenAI へフェイルオーバー）
   // ================================================================
   if (provider === 'gemini') {
-    if (!env.GEMINI_API_KEY) throw error(500, 'GEMINI_API_KEY が未設定');
-    const geminiModel = model || 'gemini-2.0-flash';
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${env.GEMINI_API_KEY}`;
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        system_instruction: { parts: [{ text: systemPrompt }] },
-        contents: [{ role: 'user', parts: [{ text: userMessage }] }],
-      }),
-    });
-    if (!res.ok) {
-      const body = await res.text().catch(() => `HTTP ${res.status}`);
-      console.error('[lab-chat] gemini error:', body);
-      if (res.status === 429) {
-        return json(
-          { error: 'quota_exceeded', message: '無料枠の上限に達しました。しばらく待ってから再試行してください。' },
-          { status: 429 }
-        );
+    let geminiFailReason: string | null = null;
+
+    if (env.GEMINI_API_KEY) {
+      try {
+        const geminiModel = model || 'gemini-2.0-flash';
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${env.GEMINI_API_KEY}`;
+
+        const userParts = geminiUserParts(userMessage, images);
+        // ペイロード構造を base64 本体を除いてログ（スパム防止）
+        console.log('[lab-chat][gemini] request_summary:', JSON.stringify({
+          model:           geminiModel,
+          systemPromptLen: systemPrompt.length,
+          partsCount:      userParts.length,
+          imageParts:      userParts
+            .filter((p: any) => p.inlineData)
+            .map((p: any) => ({ mimeType: p.inlineData.mimeType, dataLen: p.inlineData.data.length })),
+          textPart:        (userParts.find((p: any) => p.text) as any)?.text?.slice(0, 80),
+        }));
+
+        const res = await fetch(url, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            system_instruction: { parts: [{ text: systemPrompt }] },
+            contents: [{ role: 'user', parts: userParts }],
+          }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const text: string = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+          if (text) {
+            console.log(`[lab-chat] gemini ok (${text.length} chars)`);
+            return json({ text, provider: 'gemini', actualModel: geminiModel });
+          }
+          // 空応答の場合は candidates の状態もログ
+          console.warn('[lab-chat][gemini] empty text — candidates:', JSON.stringify(data?.candidates?.map((c: any) => ({
+            finishReason: c.finishReason,
+            safetyRatings: c.safetyRatings,
+          }))));
+          geminiFailReason = 'empty response';
+        } else {
+          const errBody = await res.text().catch(() => '');
+          console.error(`[lab-chat][gemini] HTTP ${res.status}: ${errBody.slice(0, 300)}`);
+          geminiFailReason = `HTTP ${res.status}`;
+        }
+      } catch (e) {
+        geminiFailReason = String(e);
       }
-      throw error(res.status, `Gemini API error: ${body}`);
+    } else {
+      geminiFailReason = 'no API key';
     }
-    const data = await res.json();
-    const text: string = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
-    console.log(`[lab-chat] gemini ok (${text.length} chars)`);
-    return json({ text });
+
+    console.warn(`[lab-chat] gemini failed (${geminiFailReason}) — trying OpenAI fallback`);
+
+    try {
+      const fallbackModel = 'gpt-4o-mini';
+      const text = await callOpenAI(systemPrompt, userMessage, fallbackModel, images);
+      console.log(`[lab-chat] openai fallback ok (${text.length} chars)`);
+      return json({ text, failover: true, provider: 'openai', actualModel: fallbackModel });
+    } catch (fallbackErr) {
+      console.error('[lab-chat] openai fallback also failed:', fallbackErr);
+      throw error(503, `Gemini と OpenAI の両方が失敗しました。時間をおいて再試行してください。`);
+    }
   }
 
   // ================================================================
@@ -81,17 +234,17 @@ export const POST: RequestHandler = async ({ request }) => {
     if (!env.ANTHROPIC_API_KEY) throw error(500, 'ANTHROPIC_API_KEY が未設定');
     const claudeModel = model || 'claude-haiku-4-5-20251001';
     const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
+      method:  'POST',
       headers: {
-        'x-api-key': env.ANTHROPIC_API_KEY,
+        'x-api-key':         env.ANTHROPIC_API_KEY,
         'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
+        'content-type':      'application/json',
       },
       body: JSON.stringify({
-        model: claudeModel,
-        max_tokens: 300,
-        system: systemPrompt,
-        messages: [{ role: 'user', content: userMessage }],
+        model:      claudeModel,
+        max_tokens: images.length > 0 ? 800 : 300,
+        system:     systemPrompt,
+        messages:  [{ role: 'user', content: claudeUserContent(userMessage, images) }],
       }),
     });
     if (!res.ok) {
@@ -102,7 +255,7 @@ export const POST: RequestHandler = async ({ request }) => {
     const data = await res.json();
     const text: string = data?.content?.[0]?.text ?? '';
     console.log(`[lab-chat] claude ok (${text.length} chars)`);
-    return json({ text });
+    return json({ text, provider: 'claude', actualModel: claudeModel });
   }
 
   throw error(400, `Unknown provider: ${provider}`);

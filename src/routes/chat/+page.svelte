@@ -304,7 +304,7 @@ async function handleStartDiscussion() {
   <select bind:value={selectedEngine}>
     <option value="openai">OpenAI</option>
     <option value="gemini">Gemini</option>
-    <option value="claude">Claude</option>
+    <option value="claude">Claude (開発者専用)</option>
   </select>
 </div>
 

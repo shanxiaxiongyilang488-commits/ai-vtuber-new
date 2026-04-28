@@ -10,6 +10,12 @@
   let revisedPrompt = $state<string | null>(null);
   let errorMsg      = $state('');
 
+  type RefImage = {
+    thumb: string;   // compressed base64 thumbnail for display
+    label: string;   // user-editable text injected into prompt
+    name:  string;   // original filename
+  };
+
   type LayoutId = 'single' | '2panel' | '4panel' | '3vertical' | 'free';
 
   const LAYOUTS: { id: LayoutId; label: string; count: number | null }[] = [
@@ -35,6 +41,108 @@
   let activePage  = $state(0);
   let activePanel = $state<number | null>(null);
 
+  let refA         = $state<RefImage | null>(null);
+  let refB         = $state<RefImage | null>(null);
+  let refPanelOpen = $state(true);
+
+  // ── Model toggle ─────────────────────────────────────────
+  let studioModel = $state<'fast' | 'gptimage2' | 'fal'>('fast');
+
+  // ── One Panel Pro Mode ────────────────────────────────────
+  let proModeOpen   = $state(false);
+  let proExpression = $state('');
+  let proCamera     = $state('');
+  let proPose       = $state('');
+  let proStyle      = $state('');
+  let proLighting   = $state('');
+
+  // ── ミュリィ キャラクター辞書（常時付与）────────────────────
+  const MURYI_CHAR_DICT =
+    'short silver bob hair, glowing cyan eyes, white cyberpunk uniform, ' +
+    'android circuit markings on forearms, thigh-high boots, 1girl';
+
+  const PRO_EXPRESSIONS = [
+    { id: 'neutral',     label: 'Neutral',     prompt: 'neutral composed expression, steady calm gaze, relaxed closed lips, collected posture' },
+    { id: 'smile',       label: 'Smile',       prompt: 'suppressed smile, slight blush, trying not to look too pleased, faint upward lip curve, soft warm eyes' },
+    { id: 'happy',       label: 'Happy',       prompt: 'bright blush across cheeks, tsundere look-away smile, glowing brighter cyan eyes, barely contained happiness, sparkling gaze' },
+    { id: 'sad',         label: 'Sad',         prompt: 'low battery sad mode, dim eye glow, head slightly down, subdued circuit markings, quiet sorrow, downcast gaze' },
+    { id: 'angry',       label: 'Angry',       prompt: 'error-state glare, sparking overloaded circuit markings, clenched fist, intense cyan stare, sharp indignant expression, furrowed brow' },
+    { id: 'surprised',   label: 'Surprised',   prompt: 'wide-eyed surprise, eyebrows raised high, mouth slightly parted, startled caught-off-guard expression, pupils dilated' },
+    { id: 'embarrassed', label: 'Embarrassed', prompt: 'deeply flustered bright blush, flushed silver-haired cheeks, averted glowing eyes, unable to hide feelings, fidgeting hands' },
+    { id: 'sleepy',      label: 'Sleepy',      prompt: 'power-saving mode half-closed cyan eyes, slow heavy blinking, minimal circuit activity, drowsy sluggish expression, soft drooping eyelids' },
+    { id: 'determined',  label: 'Determined',  prompt: 'fierce determined stare, intensified glowing cyan eyes, set jaw, circuit markings pulsing bright, strong-willed focused gaze' },
+    { id: 'smug',        label: 'Smug',        prompt: 'knowing smug expression, confident side-glance, self-satisfied smirk, one eyebrow slightly raised, amused superior look' },
+    { id: 'shy',         label: 'Shy',         prompt: 'shy averted downward gaze, barely visible blush, fingers fidgeting, circuit patterns dimming softly, timid withdrawn posture' },
+    { id: 'pout',        label: 'Pout',        prompt: 'tsundere pout, puffed cheeks, poorly hidden sulkiness, flushed face, refusing to look directly, crossed arms' },
+  ] as const;
+
+  const PRO_CAMERAS = [
+    { id: 'closeup',    label: 'Close-up',    prompt: 'extreme close-up portrait, face filling frame, intimate tight framing, shallow depth of field, detailed facial features' },
+    { id: 'bust',       label: 'Bust',        prompt: 'bust shot, upper body portrait, collar to crown, three-quarter angle, flattering crop, balanced composition' },
+    { id: 'medium',     label: 'Medium',      prompt: 'medium shot, waist-up framing, natural standing distance, balanced negative space, clean background separation' },
+    { id: 'full_body',  label: 'Full Body',   prompt: 'full body shot, head to toe, complete figure visible, grounded stance, full character design showcase' },
+    { id: 'from_above', label: 'High Angle',  prompt: 'bird\'s eye high angle shot, looking down at subject, foreshortening effect, top-down perspective, vulnerability implied' },
+    { id: 'from_below', label: 'Low Angle',   prompt: 'low angle shot from below, looking upward at subject, heroic imposing perspective, worm\'s eye view, dramatic scale' },
+    { id: 'side',       label: 'Side View',   prompt: 'clean side profile view, pure 90-degree lateral angle, elegant silhouette, hair and outfit shape highlighted' },
+    { id: 'dutch',      label: 'Dutch Angle', prompt: 'dutch angle tilted camera, diagonal tension in frame, dynamic off-kilter composition, cinematic unease' },
+  ] as const;
+
+  const PRO_POSES = [
+    { id: 'standing',     label: 'Standing',     prompt: 'confident upright standing pose, natural weight distribution, balanced grounded posture' },
+    { id: 'sitting',      label: 'Sitting',       prompt: 'relaxed seated pose, legs slightly angled, casual comfortable position, hands resting naturally' },
+    { id: 'leaning',      label: 'Leaning',       prompt: 'casually leaning against surface, one shoulder resting on wall, arms loose at sides, cool relaxed attitude' },
+    { id: 'arms_crossed', label: 'Arms Crossed',  prompt: 'arms folded across chest, guarded defensive stance, chin slightly raised, assertive closed body language' },
+    { id: 'hand_hip',     label: 'Hand on Hip',   prompt: 'one hand on hip, slight side turn, look-away stance, weight shifted to one leg, confident assertive attitude' },
+    { id: 'looking_back', label: 'Looking Back',  prompt: 'glancing back over shoulder, head turned, body facing away, hair catching light, caught elegantly mid-turn' },
+    { id: 'action',       label: 'Action',        prompt: 'dynamic action pose, mid-motion kinetic energy, clothes and hair flowing in movement, energetic explosive stance' },
+    { id: 'reaching',     label: 'Reaching',      prompt: 'arm extended toward viewer, fingers reaching out, leaning slightly forward, direct intimate visual engagement' },
+  ] as const;
+
+  const PRO_STYLES = [
+    { id: '',           label: 'Default',    prompt: '' },
+    { id: 'anime',      label: 'Anime',      prompt: 'high-quality anime illustration, vibrant cel shading, clean precise linework, professional character art quality' },
+    { id: 'realistic',  label: 'Realistic',  prompt: 'photorealistic rendering, cinematic photography quality, ultra-detailed skin and fabric textures, 8k resolution, subsurface scattering' },
+    { id: 'watercolor', label: 'Watercolor', prompt: 'delicate watercolor illustration, flowing pigment bleeds, soft translucent color layers, loose artistic brushwork' },
+    { id: 'cyberpunk',  label: 'Cyberpunk',  prompt: 'cyberpunk neon aesthetic, dark atmospheric background, vivid cyan and magenta accents, synthwave color palette, rain-slicked streets' },
+    { id: 'sketch',     label: 'Sketch',     prompt: 'detailed pencil sketch illustration, expressive confident linework, subtle cross-hatching shading, clean hand-drawn quality' },
+    { id: 'oil',        label: 'Oil Paint',  prompt: 'rich oil painting technique, thick impasto brushwork, deep saturated jewel-toned colors, painterly canvas texture' },
+  ] as const;
+
+  const PRO_LIGHTING = [
+    { id: '',         label: 'Default',     prompt: '' },
+    { id: 'soft',     label: 'Soft',        prompt: 'soft diffused natural lighting, gentle fill light, even flattering exposure, minimal harsh shadows' },
+    { id: 'dramatic', label: 'Dramatic',    prompt: 'high-contrast dramatic lighting, deep noir shadows, powerful single-source rim light, chiaroscuro effect' },
+    { id: 'golden',   label: 'Golden Hour', prompt: 'warm golden hour sunlight, long amber-orange shadows, glowing skin tones, romantic atmospheric haze' },
+    { id: 'neon',     label: 'Neon',        prompt: 'vibrant neon sign illumination, colorful mixed light sources, electric cyan and magenta glow, reflective wet surfaces' },
+    { id: 'studio',   label: 'Studio',      prompt: 'professional studio lighting setup, soft box fill light, subtle edge rim light, clean neutral separation from background' },
+    { id: 'backlit',  label: 'Backlit',     prompt: 'strong rim backlight, glowing silhouette edges, hair lit brilliantly from behind, subtle lens flare, contre-jour atmosphere' },
+  ] as const;
+
+  // ── Pro Mode Presets ──────────────────────────────────────
+  type ProPreset = {
+    id:         string;
+    name:       string;
+    expression: string;
+    camera:     string;
+    pose:       string;
+    style:      string;
+    lighting:   string;
+    isDefault?: true;
+  };
+
+  const PRO_PRESET_KEY = 'studio-pro-presets';
+
+  const DEFAULT_PRO_PRESETS: ProPreset[] = [
+    { id: 'dp_portrait',  name: 'Portrait',  expression: 'smile',      camera: 'bust',       pose: 'standing',     style: 'anime',      lighting: 'soft',     isDefault: true },
+    { id: 'dp_dramatic',  name: 'Dramatic',  expression: 'determined', camera: 'closeup',    pose: 'hand_hip',     style: 'realistic',  lighting: 'dramatic', isDefault: true },
+    { id: 'dp_action',    name: 'Action',    expression: 'determined', camera: 'from_below', pose: 'action',       style: 'anime',      lighting: 'neon',     isDefault: true },
+    { id: 'dp_emotional', name: 'Emotional', expression: 'sad',        camera: 'medium',     pose: 'leaning',      style: 'watercolor', lighting: 'golden',   isDefault: true },
+    { id: 'dp_cyberpunk', name: 'Cyberpunk', expression: 'smug',       camera: 'dutch',      pose: 'arms_crossed', style: 'cyberpunk',  lighting: 'neon',     isDefault: true },
+  ];
+
+  let proPresets    = $state<ProPreset[]>([...DEFAULT_PRO_PRESETS]);
+  let proPresetName = $state('');
+
   let layout    = $derived(pages[activePage].layout);
   let panels    = $derived(pages[activePage].panels);
   let gridCols  = $derived(layout === 'single' || layout === '3vertical' ? 1 : 2);
@@ -52,7 +160,7 @@
     const res = await fetch('/api/studio/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: p, size: s }),
+      body: JSON.stringify({ prompt: injectRefs(p), size: s, model: studioModel }),
     });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
@@ -74,7 +182,7 @@
       const res = await fetch('/api/studio/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: p, size }),
+        body: JSON.stringify({ prompt: injectRefs(p), size, model: studioModel }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -281,6 +389,8 @@
   const PROJECT_KEY      = 'studio-project';
   const MANGA_IMPORT_KEY = 'studio-manga-import';
   const DIARY_IMPORT_KEY = 'studio-diary-import';
+  const YAML_IMPORT_KEY  = 'studio-yaml-import';
+  const REF_KEY          = 'studio-ref-images';
 
   type MangaImportData = {
     panels:     Array<{ prompt: string; scene: string }>;
@@ -291,6 +401,17 @@
     prompt:    string;
     diaryText: string;
     date:      string;
+  };
+
+  type YamlImportData = {
+    pages: Array<{
+      layout:  string;
+      prompt:  string;
+      panels:  Array<{ prompt: string }>;
+    }>;
+    refs?: { a?: string; b?: string };
+    referenceImages?: Array<{ name: string; dataUrl: string; note: string }>;
+    sourceText?: string;
   };
 
   // ── Diary History System ──────────────────────────────────
@@ -331,11 +452,13 @@
     size:       ImageSize;
     pages:      SavedPage[];
     history?:   HistoryEntry[];
+    refs?:      { a: RefImage | null; b: RefImage | null };
   };
 
   let saveFlash          = $state(false);
   let mangaImportBanner  = $state(false);
   let diaryImportBanner  = $state(false);
+  let yamlImportBanner   = $state(false);
   let diaryNote          = $state<DiaryImportData | null>(null);
 
   // ── Browser ──────────────────────────────────────────────
@@ -363,6 +486,7 @@
         layout: pg.layout,
         panels: pg.panels.map(p => ({ prompt: p.prompt })),
       })),
+      refs: { a: refA, b: refB },
       ...(includeHistory ? { history: history.map(e => ({ ...e, url: e.thumb })) } : {}),
     };
   }
@@ -383,6 +507,11 @@
     revisedPrompt = null;
     errorMsg      = '';
     activePanel   = null;
+    if (data.refs) {
+      refA = data.refs.a ?? null;
+      refB = data.refs.b ?? null;
+      saveRefImages();
+    }
   }
 
   function genId(): string {
@@ -451,6 +580,44 @@
 
   function loadProjectFromStorage(): void {
     if (typeof localStorage === 'undefined') return;
+
+    // One-shot: YAML import from Lab
+    try {
+      const yamlRaw = localStorage.getItem(YAML_IMPORT_KEY);
+      if (yamlRaw) {
+        localStorage.removeItem(YAML_IMPORT_KEY);
+        const imp = JSON.parse(yamlRaw) as YamlImportData;
+        if (Array.isArray(imp.pages) && imp.pages.length > 0) {
+          applyProjectData({
+            version:    PROJECT_VERSION,
+            savedAt:    new Date().toISOString(),
+            activePage: 0,
+            size:       '1024x1024',
+            pages: imp.pages.map(pg => ({
+              id:     genId(),
+              prompt: pg.prompt ?? '',
+              layout: (['single','2panel','4panel','3vertical','free'].includes(pg.layout) ? pg.layout : '4panel') as LayoutId,
+              panels: (pg.panels ?? []).map(p => ({ prompt: p.prompt ?? '' })),
+            })),
+          });
+          // Import reference images into refA/refB
+          if (Array.isArray(imp.referenceImages) && imp.referenceImages.length > 0) {
+            const rA = imp.referenceImages[0];
+            const rB = imp.referenceImages[1];
+            if (rA) refA = { thumb: rA.dataUrl, label: rA.note || rA.name, name: rA.name };
+            if (rB) refB = { thumb: rB.dataUrl, label: rB.note || rB.name, name: rB.name };
+            saveRefImages();
+          } else if (imp.refs) {
+            if (imp.refs.a) refA = { thumb: '', label: imp.refs.a, name: 'yaml-ref-a' };
+            if (imp.refs.b) refB = { thumb: '', label: imp.refs.b, name: 'yaml-ref-b' };
+            saveRefImages();
+          }
+          yamlImportBanner = true;
+          setTimeout(() => { yamlImportBanner = false; }, 4000);
+          return;
+        }
+      }
+    } catch { /* ignore */ }
 
     // One-shot: manga import from Lab
     try {
@@ -561,6 +728,200 @@
     activeDiaryId = null;
     diaryNote     = null;
     if (typeof localStorage !== 'undefined') localStorage.removeItem(DIARY_HISTORY_KEY);
+  }
+
+  // ============================================================
+  // Reference Image System
+  // ============================================================
+  function loadRefImages(): void {
+    if (typeof localStorage === 'undefined') return;
+    try {
+      const raw = localStorage.getItem(REF_KEY);
+      if (!raw) return;
+      const data = JSON.parse(raw) as { a: RefImage | null; b: RefImage | null };
+      refA = data.a ?? null;
+      refB = data.b ?? null;
+    } catch { /* ignore */ }
+  }
+
+  function saveRefImages(): void {
+    if (typeof localStorage === 'undefined') return;
+    try {
+      localStorage.setItem(REF_KEY, JSON.stringify({ a: refA, b: refB }));
+    } catch {
+      // Quota exceeded: strip thumbnails and retry
+      try {
+        localStorage.setItem(REF_KEY, JSON.stringify({
+          a: refA ? { ...refA, thumb: '' } : null,
+          b: refB ? { ...refB, thumb: '' } : null,
+        }));
+      } catch { /* fail silently */ }
+    }
+  }
+
+  async function uploadRef(slot: 'A' | 'B', e: Event): Promise<void> {
+    const input = e.currentTarget as HTMLInputElement;
+    const file  = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    const objectUrl = URL.createObjectURL(file);
+    const thumb     = await createThumbnail(objectUrl);
+    URL.revokeObjectURL(objectUrl);
+    const label = file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ');
+    const ref: RefImage = { thumb, label, name: file.name };
+    if (slot === 'A') refA = ref;
+    else              refB = ref;
+    saveRefImages();
+  }
+
+  function clearRef(slot: 'A' | 'B'): void {
+    if (slot === 'A') refA = null;
+    else              refB = null;
+    saveRefImages();
+  }
+
+  function buildRefContext(): string {
+    const parts: string[] = [];
+    if (refA?.label.trim()) parts.push(`character_A: ${refA.label.trim()}`);
+    if (refB?.label.trim()) parts.push(`character_B: ${refB.label.trim()}`);
+    return parts.join(', ');
+  }
+
+  function injectRefs(prompt: string): string {
+    const ctx = buildRefContext();
+    return ctx ? `${ctx}, ${prompt}` : prompt;
+  }
+
+  // ── One Panel Pro Mode functions ─────────────────────────
+  function buildEnhancedPrompt(): string {
+    const base = pages[activePage].prompt.trim();
+    const parts: string[] = [];
+    parts.push('masterpiece, best quality, highly detailed, ultra-high resolution');
+    // ① character dict: selected character takes priority, fall back to ミュリィ hardcoded
+    parts.push(selectedChar?.prompt ?? MURYI_CHAR_DICT);
+    if (base) parts.push(base);
+    // ② expression: character-specific prompt first, generic fallback
+    const charExpr = proExpression
+      ? selectedChar?.expressions.find(e => e.id === proExpression)
+      : undefined;
+    const expr  = charExpr ?? PRO_EXPRESSIONS.find(e => e.id === proExpression);
+    const cam   = PRO_CAMERAS.find(c => c.id === proCamera);
+    const pose  = PRO_POSES.find(p => p.id === proPose);
+    const style = PRO_STYLES.find(s => s.id === proStyle);
+    const light = PRO_LIGHTING.find(l => l.id === proLighting);
+    if (expr?.prompt)  parts.push(expr.prompt);
+    if (cam?.prompt)   parts.push(cam.prompt);
+    if (pose?.prompt)  parts.push(pose.prompt);
+    if (style?.prompt) parts.push(style.prompt);
+    if (light?.prompt) parts.push(light.prompt);
+    return parts.filter(Boolean).join(', ');
+  }
+
+  function buildNegativeHint(): string {
+    const neg = [
+      'bad anatomy', 'extra fingers', 'fused fingers', 'missing limbs',
+      'deformed hands', 'malformed body', 'blurry', 'low quality',
+      'jpeg artifacts', 'watermark', 'signature', 'text overlay',
+      'duplicate', 'out of frame',
+    ];
+    if (proStyle === 'anime')      neg.push('photorealistic', '3d render', 'cgi');
+    if (proStyle === 'realistic')  neg.push('cartoon', 'anime flat shading');
+    if (proStyle === 'watercolor') neg.push('sharp hard lines', 'digital photograph');
+    if (proStyle === 'sketch')     neg.push('color fill', 'photorealistic render');
+    if (proStyle === 'cyberpunk')  neg.push('bright daylight', 'pastoral nature');
+    if (proStyle === 'oil')        neg.push('photograph', 'digital art');
+    return `Avoid: ${neg.join(', ')}`;
+  }
+
+  async function generatePro(): Promise<void> {
+    const p = buildEnhancedPrompt();
+    if (!p.trim() || generating) return;
+    errorMsg      = '';
+    revisedPrompt = null;
+    generating    = true;
+    previewUrl    = null;
+    try {
+      const res = await fetch('/api/studio/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: injectRefs(`${p}, ${buildNegativeHint()}`), size, model: studioModel }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.message ?? `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      if (!data.url) throw new Error('No image data returned.');
+      previewUrl    = data.url;
+      revisedPrompt = data.revisedPrompt ?? null;
+      await addToHistory(data.url, p, size);
+      if (diaryNote) {
+        const thumb   = await createThumbnail(data.url);
+        const entryId = activeDiaryId ?? genId();
+        const entry: DiaryEntry = {
+          id: entryId, date: diaryNote.date, diaryText: diaryNote.diaryText,
+          prompt: p, mood: currentDiaryMood, thumb, createdAt: new Date().toISOString(),
+        };
+        const idx = diaryHistory.findIndex(e => e.id === entryId);
+        if (idx >= 0) diaryHistory[idx] = entry;
+        else diaryHistory = [entry, ...diaryHistory].slice(0, MAX_DIARY_ENTRIES);
+        activeDiaryId = entryId;
+        saveDiaryHistory();
+      }
+    } catch (e) {
+      errorMsg = e instanceof Error ? e.message : 'Generation failed.';
+    } finally {
+      generating = false;
+    }
+  }
+
+  function loadProPresets(): void {
+    if (typeof localStorage === 'undefined') return;
+    try {
+      const raw = localStorage.getItem(PRO_PRESET_KEY);
+      const custom: ProPreset[] = raw ? (JSON.parse(raw) as ProPreset[]) : [];
+      proPresets = [...DEFAULT_PRO_PRESETS, ...custom];
+    } catch {
+      proPresets = [...DEFAULT_PRO_PRESETS];
+    }
+  }
+
+  function saveProPresets(): void {
+    if (typeof localStorage === 'undefined') return;
+    try {
+      const custom = proPresets.filter(p => !p.isDefault);
+      localStorage.setItem(PRO_PRESET_KEY, JSON.stringify(custom));
+    } catch { /* quota */ }
+  }
+
+  function applyProPreset(preset: ProPreset): void {
+    proExpression = preset.expression;
+    proCamera     = preset.camera;
+    proPose       = preset.pose;
+    proStyle      = preset.style;
+    proLighting   = preset.lighting;
+    proPresetName = preset.name;
+  }
+
+  function saveCurrentAsPreset(): void {
+    const name = proPresetName.trim();
+    if (!name) return;
+    const id = `custom_${Date.now()}`;
+    proPresets = [...proPresets, { id, name, expression: proExpression, camera: proCamera, pose: proPose, style: proStyle, lighting: proLighting }];
+    saveProPresets();
+  }
+
+  function deleteProPreset(id: string): void {
+    proPresets = proPresets.filter(p => p.id !== id);
+    saveProPresets();
+  }
+
+  function proPresetTitle(preset: ProPreset): string {
+    return [
+      preset.expression ? `Expr: ${preset.expression}` : '',
+      preset.camera     ? `Cam: ${preset.camera}`       : '',
+      preset.style      ? `Style: ${preset.style}`      : '',
+    ].filter(Boolean).join(' · ');
   }
 
   // ── Browser functions ────────────────────────────────────
@@ -957,6 +1318,8 @@
     }, 2000);
   });
 
+  loadRefImages();
+  loadProPresets();
   loadHistory();
   loadProjectFromStorage();
   projectIndex = loadIndex();
@@ -1053,6 +1416,9 @@
   {#if diaryImportBanner}
     <div class="diary-import-banner">📘 絵日記を読み込みました</div>
   {/if}
+  {#if yamlImportBanner}
+    <div class="yaml-import-banner">◈ Lab からのYAML化データを読み込みました</div>
+  {/if}
 
   <!-- ── MAIN ──────────────────────────────────────── -->
   <main class="studio-main">
@@ -1141,6 +1507,266 @@
         {/if}
       </div>
 
+      <!-- Reference Images -->
+      <div class="panel ref-panel">
+        <div class="panel-hd">
+          <span class="panel-label">REFERENCE IMAGES</span>
+          {#if refA || refB}
+            <span class="ref-active-badge">ACTIVE</span>
+          {/if}
+          <span style="flex:1"></span>
+          <button class="icon-btn" onclick={() => (refPanelOpen = !refPanelOpen)}>
+            {refPanelOpen ? '▲' : '▼'}
+          </button>
+        </div>
+
+        {#if refPanelOpen}
+          <div class="ref-slots">
+
+            <!-- Slot A -->
+            <div class="ref-slot">
+              <div class="ref-slot-hd">
+                <span class="ref-slot-label">CHAR A</span>
+                {#if refA}
+                  <button class="ref-clear-btn" onclick={() => clearRef('A')} title="Remove reference">✕</button>
+                {/if}
+              </div>
+              {#if refA}
+                <div class="ref-thumb-wrap">
+                  <img src={refA.thumb} alt="Reference A" class="ref-thumb" />
+                </div>
+                <div class="ref-fname">{refA.name}</div>
+                <input
+                  class="ref-label-input"
+                  bind:value={refA.label}
+                  placeholder="prompt tags for this character..."
+                  oninput={saveRefImages}
+                  title="This text will be prepended to every generated prompt"
+                />
+              {:else}
+                <label class="ref-upload-area">
+                  <input
+                    type="file"
+                    accept="image/*"
+                    style="display:none"
+                    onchange={(e) => uploadRef('A', e)}
+                  />
+                  <span class="ref-upload-icon">+</span>
+                  <span class="ref-upload-hint">Upload reference</span>
+                </label>
+              {/if}
+            </div>
+
+            <!-- Slot B -->
+            <div class="ref-slot">
+              <div class="ref-slot-hd">
+                <span class="ref-slot-label">CHAR B</span>
+                {#if refB}
+                  <button class="ref-clear-btn" onclick={() => clearRef('B')} title="Remove reference">✕</button>
+                {/if}
+              </div>
+              {#if refB}
+                <div class="ref-thumb-wrap">
+                  <img src={refB.thumb} alt="Reference B" class="ref-thumb" />
+                </div>
+                <div class="ref-fname">{refB.name}</div>
+                <input
+                  class="ref-label-input"
+                  bind:value={refB.label}
+                  placeholder="prompt tags for this character..."
+                  oninput={saveRefImages}
+                  title="This text will be prepended to every generated prompt"
+                />
+              {:else}
+                <label class="ref-upload-area">
+                  <input
+                    type="file"
+                    accept="image/*"
+                    style="display:none"
+                    onchange={(e) => uploadRef('B', e)}
+                  />
+                  <span class="ref-upload-icon">+</span>
+                  <span class="ref-upload-hint">Upload reference</span>
+                </label>
+              {/if}
+            </div>
+
+          </div>
+
+          {#if refA || refB}
+            <div class="ref-inject-preview">
+              <span class="ref-inject-lbl">INJECT →</span>
+              <span class="ref-inject-text">
+                {buildRefContext() || '(label を入力するとプロンプトへ注入されます)'}
+              </span>
+            </div>
+          {/if}
+        {/if}
+      </div>
+
+      <!-- One Panel Pro Mode -->
+      <div class="panel pro-panel" class:pro-active={proModeOpen}>
+        <div class="panel-hd pro-hd" onclick={() => (proModeOpen = !proModeOpen)} style="cursor:pointer">
+          <span class="pro-hex">◆</span>
+          <span class="panel-label pro-label">ONE PANEL PRO</span>
+          {#if proModeOpen}
+            <span class="pro-on-badge">ON</span>
+          {/if}
+          <span style="flex:1"></span>
+          <button class="icon-btn" onclick={(e) => { e.stopPropagation(); proModeOpen = !proModeOpen; }}>
+            {proModeOpen ? '▲' : '▼'}
+          </button>
+        </div>
+
+        {#if proModeOpen}
+          <div class="pro-body">
+
+            <!-- Expression -->
+            <div class="pro-section">
+              <div class="pro-section-hd">EXPRESSION</div>
+              <div class="pro-chips">
+                {#each PRO_EXPRESSIONS as e}
+                  <button
+                    class="pro-chip"
+                    class:active={proExpression === e.id}
+                    onclick={() => { proExpression = proExpression === e.id ? '' : e.id; }}
+                    title={e.prompt}
+                  >{e.label}</button>
+                {/each}
+              </div>
+            </div>
+
+            <!-- Camera -->
+            <div class="pro-section">
+              <div class="pro-section-hd">CAMERA</div>
+              <div class="pro-chips">
+                {#each PRO_CAMERAS as c}
+                  <button
+                    class="pro-chip"
+                    class:active={proCamera === c.id}
+                    onclick={() => { proCamera = proCamera === c.id ? '' : c.id; }}
+                    title={c.prompt}
+                  >{c.label}</button>
+                {/each}
+              </div>
+            </div>
+
+            <!-- Pose -->
+            <div class="pro-section">
+              <div class="pro-section-hd">POSE</div>
+              <div class="pro-chips">
+                {#each PRO_POSES as p}
+                  <button
+                    class="pro-chip"
+                    class:active={proPose === p.id}
+                    onclick={() => { proPose = proPose === p.id ? '' : p.id; }}
+                    title={p.prompt}
+                  >{p.label}</button>
+                {/each}
+              </div>
+            </div>
+
+            <!-- Style -->
+            <div class="pro-section">
+              <div class="pro-section-hd">STYLE</div>
+              <div class="pro-chips">
+                {#each PRO_STYLES as s}
+                  <button
+                    class="pro-chip pro-chip-style"
+                    class:active={proStyle === s.id}
+                    onclick={() => { proStyle = s.id; }}
+                    title={s.prompt || 'No style override'}
+                  >{s.label}</button>
+                {/each}
+              </div>
+            </div>
+
+            <!-- Lighting -->
+            <div class="pro-section">
+              <div class="pro-section-hd">LIGHTING</div>
+              <div class="pro-chips">
+                {#each PRO_LIGHTING as l}
+                  <button
+                    class="pro-chip pro-chip-light"
+                    class:active={proLighting === l.id}
+                    onclick={() => { proLighting = l.id; }}
+                    title={l.prompt || 'No lighting override'}
+                  >{l.label}</button>
+                {/each}
+              </div>
+            </div>
+
+            <!-- Presets -->
+            <div class="pro-section">
+              <div class="pro-section-hd">PRESETS</div>
+
+              <div class="pro-preset-list">
+                {#each proPresets as preset (preset.id)}
+                  <div class="pro-preset-item" class:is-default={preset.isDefault}>
+                    <button
+                      class="pro-preset-btn"
+                      onclick={() => applyProPreset(preset)}
+                      title={proPresetTitle(preset)}
+                    >{preset.name}</button>
+                    {#if !preset.isDefault}
+                      <button
+                        class="pro-preset-del"
+                        onclick={() => deleteProPreset(preset.id)}
+                        title="Delete preset"
+                      >✕</button>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+
+              <div class="pro-preset-save-row">
+                <input
+                  class="pro-preset-name-input"
+                  type="text"
+                  placeholder="Preset name…"
+                  bind:value={proPresetName}
+                  onkeydown={(e) => { if (e.key === 'Enter') saveCurrentAsPreset(); }}
+                  maxlength="30"
+                />
+                <button
+                  class="pro-preset-save-btn"
+                  onclick={saveCurrentAsPreset}
+                  disabled={!proPresetName.trim()}
+                  title="Save current settings as preset"
+                >+ SAVE</button>
+              </div>
+            </div>
+
+            <!-- Enhanced Prompt Preview -->
+            <div class="pro-preview">
+              <div class="pro-preview-hd">
+                <span class="pro-preview-lbl">ENHANCED PROMPT</span>
+                <span class="pro-tag-count">{buildEnhancedPrompt().split(',').filter(t => t.trim()).length} tags</span>
+              </div>
+              <div class="pro-preview-text">
+                {buildEnhancedPrompt() || '(base promptを入力してください)'}
+              </div>
+            </div>
+
+            <!-- Generate Pro -->
+            <button
+              class="pro-gen-btn"
+              class:generating
+              onclick={generatePro}
+              disabled={generating || !pages[activePage].prompt.trim()}
+            >
+              {#if generating}
+                <span class="gen-dots"><span></span><span></span><span></span></span>
+                GENERATING…
+              {:else}
+                ◆ GENERATE PRO
+              {/if}
+            </button>
+
+          </div>
+        {/if}
+      </div>
+
       <!-- Diary Panel -->
       {#if diaryNote}
         <div class="panel diary-panel">
@@ -1151,19 +1777,21 @@
             <button class="icon-btn" onclick={() => { diaryNote = null; activeDiaryId = null; }} title="閉じる">✕</button>
           </div>
 
-          <div class="diary-text">{diaryNote.diaryText}</div>
+          <blockquote class="diary-blockquote">{diaryNote.diaryText}</blockquote>
 
           <div class="mood-row">
             <span class="mood-lbl">MOOD</span>
-            {#each MOOD_OPTIONS as m}
-              <button
-                class="mood-chip"
-                class:active={currentDiaryMood === m.id}
-                style="--mc:{m.color}"
-                onclick={() => (currentDiaryMood = m.id)}
-                title={m.label}
-              >{m.icon} {m.label}</button>
-            {/each}
+            <div class="mood-chips">
+              {#each MOOD_OPTIONS as m}
+                <button
+                  class="mood-chip"
+                  class:active={currentDiaryMood === m.id}
+                  style="--mc:{m.color}"
+                  onclick={() => (currentDiaryMood = m.id)}
+                  title={m.label}
+                ><span class="mood-icon">{m.icon}</span><span class="mood-name">{m.label}</span></button>
+              {/each}
+            </div>
           </div>
 
           <button
@@ -1176,7 +1804,7 @@
               <span class="gen-dots"><span></span><span></span><span></span></span>
               GENERATING…
             {:else}
-              📷 TODAY'S IMAGE を生成
+              <span class="dg-icon">◼</span> TODAY'S IMAGE を生成
             {/if}
           </button>
         </div>
@@ -1198,6 +1826,26 @@
         ></textarea>
         <div class="prompt-foot">
           <span class="prompt-hint">Ctrl+Enter to generate</span>
+          <div class="model-toggle">
+            <button
+              class="model-btn"
+              class:active={studioModel === 'fast'}
+              onclick={() => studioModel = 'fast'}
+              title="DALL-E 3 — reliable, revised prompt"
+            >Fast</button>
+            <button
+              class="model-btn"
+              class:active={studioModel === 'gptimage2'}
+              onclick={() => studioModel = 'gptimage2'}
+              title="GPT Image 1 — higher quality"
+            >GPT Image 2</button>
+            <button
+              class="model-btn"
+              class:active={studioModel === 'fal'}
+              onclick={() => studioModel = 'fal'}
+              title="FAL Flux Schnell — fast open-source model"
+            >FAL Flux</button>
+          </div>
           <select class="size-select" bind:value={size}>
             <option value="1024x1024">1:1 Square</option>
             <option value="1792x1024">16:9 Wide</option>
@@ -2169,6 +2817,35 @@
 
 .size-select:focus { border-color: rgba(0,229,255,0.4); }
 
+.model-toggle {
+  display: flex;
+  gap: 2px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--pborder);
+  border-radius: 4px;
+  padding: 2px;
+}
+
+.model-btn {
+  font-size: 12px;
+  font-family: inherit;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  color: var(--muted);
+  padding: 3px 8px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+.model-btn:hover { background: rgba(0,229,255,0.08); color: var(--text2); }
+
+.model-btn.active {
+  background: rgba(0,229,255,0.15);
+  color: var(--accent);
+}
+
 .revised-prompt {
   margin-top: 12px;
   padding: 10px 12px;
@@ -2772,6 +3449,331 @@
   color: #34d399;
 }
 
+.yaml-import-banner {
+  background: rgba(0,229,255,0.07);
+  border: 1px solid rgba(0,229,255,0.4);
+  color: #00e5ff;
+}
+
+/* ============================================================
+   ONE PANEL PRO MODE
+   ============================================================ */
+.pro-panel {
+  flex-shrink: 0;
+  border-color: rgba(168,85,247,0.2);
+  background: rgba(168,85,247,0.025);
+  transition: border-color 0.2s, background 0.2s;
+}
+.pro-panel.pro-active {
+  border-color: rgba(168,85,247,0.45);
+  background: rgba(168,85,247,0.04);
+  box-shadow: 0 0 20px rgba(168,85,247,0.08) inset;
+}
+
+.pro-hd { user-select: none; }
+
+.pro-hex {
+  color: var(--pu);
+  font-size: 10px;
+  opacity: 0.8;
+}
+
+.pro-label {
+  color: var(--pu) !important;
+  letter-spacing: 2px;
+}
+
+.pro-on-badge {
+  font-size: 8px;
+  letter-spacing: 2px;
+  font-weight: 700;
+  color: var(--pu);
+  background: rgba(168,85,247,0.15);
+  border: 1px solid rgba(168,85,247,0.4);
+  border-radius: 3px;
+  padding: 1px 6px;
+  animation: pro-pulse 2s ease-in-out infinite;
+}
+@keyframes pro-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.6; }
+}
+
+.pro-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+}
+
+.pro-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pro-section-hd {
+  font-size: 9px;
+  letter-spacing: 2px;
+  color: rgba(168,85,247,0.7);
+  font-weight: 700;
+  padding-bottom: 2px;
+  border-bottom: 1px solid rgba(168,85,247,0.12);
+}
+
+.pro-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.pro-chip {
+  font-size: 10px;
+  letter-spacing: 0.8px;
+  font-family: inherit;
+  padding: 4px 9px;
+  border-radius: 3px;
+  border: 1px solid rgba(168,85,247,0.2);
+  background: rgba(168,85,247,0.04);
+  color: var(--text2);
+  cursor: pointer;
+  transition: color 0.12s, background 0.12s, border-color 0.12s, box-shadow 0.12s;
+  line-height: 1.3;
+}
+.pro-chip:hover {
+  color: var(--pu);
+  border-color: rgba(168,85,247,0.45);
+  background: rgba(168,85,247,0.1);
+}
+.pro-chip.active {
+  color: var(--pu);
+  background: rgba(168,85,247,0.18);
+  border-color: rgba(168,85,247,0.7);
+  box-shadow: 0 0 8px rgba(168,85,247,0.25);
+  font-weight: 600;
+}
+
+/* Style chips use gold accent, lighting chips use amber */
+.pro-chip-style.active {
+  color: var(--gold);
+  background: rgba(251,191,36,0.12);
+  border-color: rgba(251,191,36,0.5);
+  box-shadow: 0 0 8px rgba(251,191,36,0.18);
+}
+.pro-chip-style:hover {
+  color: var(--gold);
+  border-color: rgba(251,191,36,0.4);
+  background: rgba(251,191,36,0.07);
+}
+.pro-chip-light.active {
+  color: #fb923c;
+  background: rgba(251,146,60,0.12);
+  border-color: rgba(251,146,60,0.5);
+  box-shadow: 0 0 8px rgba(251,146,60,0.18);
+}
+.pro-chip-light:hover {
+  color: #fb923c;
+  border-color: rgba(251,146,60,0.4);
+  background: rgba(251,146,60,0.07);
+}
+
+.pro-preview {
+  border: 1px solid rgba(168,85,247,0.18);
+  border-radius: 4px;
+  background: rgba(168,85,247,0.04);
+  overflow: hidden;
+}
+.pro-preview-hd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 9px;
+  border-bottom: 1px solid rgba(168,85,247,0.12);
+  background: rgba(168,85,247,0.06);
+}
+.pro-preview-lbl {
+  font-size: 8px;
+  letter-spacing: 2px;
+  color: rgba(168,85,247,0.7);
+  font-weight: 700;
+}
+.pro-tag-count {
+  font-size: 9px;
+  color: var(--muted);
+  letter-spacing: 0.5px;
+}
+.pro-preview-text {
+  padding: 8px 9px;
+  font-size: 10px;
+  color: var(--text2);
+  line-height: 1.6;
+  letter-spacing: 0.3px;
+  word-break: break-all;
+  max-height: 90px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--dim) transparent;
+}
+
+.pro-gen-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 16px;
+  background: rgba(168,85,247,0.1);
+  border: 1px solid rgba(168,85,247,0.35);
+  border-radius: 5px;
+  color: var(--pu);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s, color 0.15s;
+}
+.pro-gen-btn:hover:not(:disabled) {
+  background: rgba(168,85,247,0.2);
+  border-color: rgba(168,85,247,0.65);
+  box-shadow: 0 0 18px rgba(168,85,247,0.3);
+  color: #c084fc;
+}
+.pro-gen-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.pro-gen-btn.generating {
+  color: var(--cy);
+  border-color: rgba(0,229,255,0.3);
+  background: rgba(0,229,255,0.05);
+  cursor: not-allowed;
+}
+
+/* ── Pro Presets ─────────────────────────────────────────── */
+.pro-preset-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.pro-preset-item {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid rgba(0,229,255,0.2);
+  background: rgba(0,229,255,0.04);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.pro-preset-item:hover {
+  border-color: rgba(0,229,255,0.45);
+  box-shadow: 0 0 8px rgba(0,229,255,0.12);
+}
+.pro-preset-item.is-default {
+  border-color: rgba(168,85,247,0.2);
+  background: rgba(168,85,247,0.04);
+}
+.pro-preset-item.is-default:hover {
+  border-color: rgba(168,85,247,0.5);
+  box-shadow: 0 0 8px rgba(168,85,247,0.15);
+}
+
+.pro-preset-btn {
+  font-size: 10px;
+  letter-spacing: 0.8px;
+  font-family: inherit;
+  font-weight: 600;
+  padding: 4px 10px;
+  background: transparent;
+  border: none;
+  color: var(--cy);
+  cursor: pointer;
+  transition: color 0.12s, background 0.12s;
+  white-space: nowrap;
+  line-height: 1.3;
+}
+.pro-preset-item.is-default .pro-preset-btn {
+  color: var(--pu);
+}
+.pro-preset-btn:hover {
+  background: rgba(0,229,255,0.08);
+}
+.pro-preset-item.is-default .pro-preset-btn:hover {
+  background: rgba(168,85,247,0.1);
+}
+
+.pro-preset-del {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 100%;
+  min-height: 26px;
+  background: transparent;
+  border: none;
+  border-left: 1px solid rgba(0,229,255,0.15);
+  color: var(--muted);
+  font-size: 9px;
+  cursor: pointer;
+  transition: color 0.12s, background 0.12s;
+  flex-shrink: 0;
+}
+.pro-preset-del:hover {
+  color: #f87171;
+  background: rgba(248,113,113,0.1);
+}
+
+.pro-preset-save-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.pro-preset-name-input {
+  flex: 1;
+  background: rgba(0,229,255,0.04);
+  border: 1px solid rgba(0,229,255,0.18);
+  border-radius: 3px;
+  color: var(--text);
+  font-size: 11px;
+  font-family: inherit;
+  padding: 5px 8px;
+  outline: none;
+  transition: border-color 0.15s;
+  min-width: 0;
+}
+.pro-preset-name-input:focus {
+  border-color: rgba(0,229,255,0.4);
+  box-shadow: 0 0 6px rgba(0,229,255,0.08);
+}
+.pro-preset-name-input::placeholder { color: var(--muted); font-size: 10px; }
+
+.pro-preset-save-btn {
+  font-size: 10px;
+  letter-spacing: 1.2px;
+  font-family: inherit;
+  font-weight: 700;
+  padding: 5px 12px;
+  border-radius: 3px;
+  border: 1px solid rgba(0,229,255,0.3);
+  background: rgba(0,229,255,0.07);
+  color: var(--cy);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.12s, border-color 0.12s, box-shadow 0.12s;
+}
+.pro-preset-save-btn:hover:not(:disabled) {
+  background: rgba(0,229,255,0.14);
+  border-color: rgba(0,229,255,0.55);
+  box-shadow: 0 0 8px rgba(0,229,255,0.18);
+}
+.pro-preset-save-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
 /* ============================================================
    DIARY PANEL (current entry + mood + generate)
    ============================================================ */
@@ -3142,5 +4144,184 @@
   padding: 5px 8px;
   line-height: 1.5;
   letter-spacing: 0.3px;
+}
+
+/* ============================================================
+   REFERENCE IMAGE SYSTEM
+   ============================================================ */
+.ref-panel {
+  /* inherits .panel base styles */
+}
+
+.ref-active-badge {
+  font-size: 8px;
+  letter-spacing: 1.5px;
+  color: var(--cy);
+  background: rgba(0,229,255,0.1);
+  border: 1px solid rgba(0,229,255,0.3);
+  border-radius: 3px;
+  padding: 1px 6px;
+  margin-left: 6px;
+  animation: pulse-ref 2s ease-in-out infinite;
+}
+
+@keyframes pulse-ref {
+  0%, 100% { opacity: 0.7; }
+  50%       { opacity: 1;   }
+}
+
+.ref-slots {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  padding: 8px 0 4px;
+}
+
+.ref-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ref-slot-hd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.ref-slot-label {
+  font-size: 9px;
+  letter-spacing: 2px;
+  color: var(--cy);
+  opacity: 0.65;
+}
+
+.ref-clear-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  flex-shrink: 0;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 4px;
+  color: rgba(255,255,255,0.5);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  line-height: 1;
+  transition: color 0.15s, background 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+.ref-clear-btn:hover {
+  color: #f87171;
+  background: rgba(248,113,113,0.12);
+  border-color: rgba(248,113,113,0.4);
+  box-shadow: 0 0 6px rgba(248,113,113,0.2);
+}
+
+.ref-thumb-wrap {
+  width: 100%;
+  aspect-ratio: 1;
+  overflow: hidden;
+  border-radius: 4px;
+  border: 1px solid rgba(0,229,255,0.18);
+  background: var(--bg2);
+}
+
+.ref-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.ref-fname {
+  font-size: 8.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: 0.3px;
+}
+
+.ref-label-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: rgba(0,229,255,0.04);
+  border: 1px solid rgba(0,229,255,0.15);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 10px;
+  padding: 4px 6px;
+  outline: none;
+  resize: none;
+  transition: border-color 0.15s;
+}
+.ref-label-input:focus {
+  border-color: rgba(0,229,255,0.45);
+  background: rgba(0,229,255,0.07);
+}
+.ref-label-input::placeholder { color: var(--muted); opacity: 0.7; }
+
+.ref-upload-area {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  width: 100%;
+  aspect-ratio: 1;
+  border: 1px dashed rgba(0,229,255,0.22);
+  border-radius: 4px;
+  background: rgba(0,229,255,0.02);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.ref-upload-area:hover {
+  background: rgba(0,229,255,0.07);
+  border-color: rgba(0,229,255,0.45);
+}
+
+.ref-upload-icon {
+  font-size: 20px;
+  color: rgba(0,229,255,0.35);
+  line-height: 1;
+}
+
+.ref-upload-hint {
+  font-size: 9px;
+  color: var(--muted);
+  letter-spacing: 0.5px;
+  text-align: center;
+}
+
+.ref-inject-preview {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  margin-top: 6px;
+  padding: 5px 8px;
+  background: rgba(0,229,255,0.03);
+  border: 1px solid rgba(0,229,255,0.1);
+  border-radius: 4px;
+}
+
+.ref-inject-lbl {
+  font-size: 9px;
+  letter-spacing: 1px;
+  color: var(--cy);
+  opacity: 0.6;
+  flex-shrink: 0;
+  padding-top: 1px;
+}
+
+.ref-inject-text {
+  font-size: 9.5px;
+  color: var(--text2);
+  line-height: 1.5;
+  word-break: break-all;
 }
 </style>

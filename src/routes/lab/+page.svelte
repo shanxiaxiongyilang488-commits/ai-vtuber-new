@@ -206,6 +206,31 @@
   };
   let compareLog = $state<CompareLogEntry[]>([]);
 
+  // ── Reference Images (Chat Upload) ───────────────────────────
+  type ReferenceImage = {
+    name:    string;
+    dataUrl: string;  // compressed thumbnail
+    note:    string;  // user-editable description injected into YAML
+  };
+
+  let referenceImages = $state<ReferenceImage[]>([]);
+  let yamlConverting  = $state(false);
+
+  // ── Emotion Feedback ─────────────────────────────────────────
+  type EmotionFeedbackEntry = {
+    timestamp:   string;
+    charId:      string;
+    textSnippet: string;
+    detected:    string;
+    confidence:  number;
+    delta_trust: number;
+    applied:     Record<string, number>;
+    source:      'python' | 'fallback';
+  };
+  let emotionFeedbackEnabled = $state(false);
+  let emotionFeedbackRunning = $state(false);
+  let emotionFeedbackLog     = $state<EmotionFeedbackEntry[]>([]);
+
   // ── Batch Test Mode ────────────────────────────────────────
   type BatchRow = {
     text: string; label: string;
@@ -263,6 +288,7 @@
   type APIStatuses = { openai: APIStatus; gemini: APIStatus; claude: APIStatus };
   let apiStatuses = $state<APIStatuses>({ openai: '---', gemini: '---', claude: '---' });
   let checkingAPI = $state(false);
+  let failoverNotice = $state<string | null>(null);
 
   async function checkAPIStatus() {
     checkingAPI = true;
@@ -298,6 +324,9 @@
   let debugOpen        = $state(false);
   let lastSystemPrompt = $state('');
   let lastResponseMs   = $state<number | null>(null);
+  let lastSentImages   = $state(0);
+  let lastUsedProvider = $state<string | null>(null);
+  let lastUsedModel    = $state<string | null>(null);
 
   const activeEmotionLabels = $derived(
     (() => {
@@ -430,6 +459,120 @@
 
   function saveEmotion(): void {
     localStorage.setItem(LS_EMOTION, JSON.stringify(emotion));
+    localStorage.setItem(LS_EMOTION_CHAR(activePreset), JSON.stringify(emotion));
+  }
+
+  function saveEmotionForChar(charId: string): void {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(LS_EMOTION_CHAR(charId), JSON.stringify(emotion));
+  }
+
+  function loadEmotionForChar(charId: string): boolean {
+    if (typeof localStorage === 'undefined') return false;
+    const raw = localStorage.getItem(LS_EMOTION_CHAR(charId));
+    if (!raw) return false;
+    try {
+      const e = JSON.parse(raw) as Partial<typeof emotion>;
+      if (e.mood      != null) emotion.mood      = clamp(e.mood);
+      if (e.trust     != null) emotion.trust     = clamp(e.trust);
+      if (e.affection != null) emotion.affection = clamp(e.affection);
+      if (e.focus     != null) emotion.focus     = clamp(e.focus);
+      if (e.anger     != null) emotion.anger     = clamp(e.anger);
+      if (e.jealousy  != null) emotion.jealousy  = clamp(e.jealousy);
+      return true;
+    } catch { return false; }
+  }
+
+  function saveEmotionFeedbackLog(): void {
+    if (typeof localStorage === 'undefined') return;
+    try {
+      localStorage.setItem(LS_EMOTION_FEEDBACK_LOG(activePreset), JSON.stringify(emotionFeedbackLog.slice(0, 30)));
+    } catch { /* quota: fail silently */ }
+  }
+
+  function loadEmotionFeedbackLog(charId: string): void {
+    if (typeof localStorage === 'undefined') return;
+    const raw = localStorage.getItem(LS_EMOTION_FEEDBACK_LOG(charId));
+    if (!raw) { emotionFeedbackLog = []; return; }
+    try { emotionFeedbackLog = JSON.parse(raw) as EmotionFeedbackEntry[]; }
+    catch { emotionFeedbackLog = []; }
+  }
+
+  function toggleEmotionFeedback(): void {
+    emotionFeedbackEnabled = !emotionFeedbackEnabled;
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(LS_EMOTION_FEEDBACK_ON, String(emotionFeedbackEnabled));
+    }
+  }
+
+  async function applyEmotionFeedbackAsync(text: string): Promise<void> {
+    if (emotionFeedbackRunning) return;
+    emotionFeedbackRunning = true;
+    try {
+      const res = await fetch('/api/emotion-py', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ text, current_emotion: pngEmotion, trust: emotion.trust }),
+      });
+      if (!res.ok) return;
+
+      const result = await res.json() as {
+        emotion: string; confidence: number;
+        delta_trust: number; reason: string;
+        source: 'python' | 'fallback';
+      };
+
+      const applied: Record<string, number> = {};
+
+      if (result.delta_trust !== 0) {
+        const prev = emotion.trust;
+        emotion.trust = clamp(emotion.trust + result.delta_trust);
+        const actual  = emotion.trust - prev;
+        if (actual !== 0) applied.trust = actual;
+      }
+
+      if (result.emotion === 'joy') {
+        const prevA = emotion.affection, prevM = emotion.mood;
+        emotion.affection = clamp(emotion.affection + 3);
+        emotion.mood      = clamp(emotion.mood      + 2);
+        if (emotion.affection - prevA !== 0) applied.affection = emotion.affection - prevA;
+        if (emotion.mood      - prevM !== 0) applied.mood      = emotion.mood      - prevM;
+      } else if (result.emotion === 'anger') {
+        const prevAng = emotion.anger, prevM = emotion.mood;
+        emotion.anger = clamp(emotion.anger + 5);
+        emotion.mood  = clamp(emotion.mood  - 3);
+        if (emotion.anger - prevAng !== 0) applied.anger = emotion.anger - prevAng;
+        if (emotion.mood  - prevM   !== 0) applied.mood  = emotion.mood  - prevM;
+      } else if (result.emotion === 'sadness') {
+        const prevM = emotion.mood;
+        emotion.mood = clamp(emotion.mood - 4);
+        if (emotion.mood - prevM !== 0) applied.mood = emotion.mood - prevM;
+      } else if (result.emotion === 'embarrassment') {
+        const prevA = emotion.affection;
+        emotion.affection = clamp(emotion.affection + 2);
+        if (emotion.affection - prevA !== 0) applied.affection = emotion.affection - prevA;
+      }
+
+      saveEmotion();
+
+      const entry: EmotionFeedbackEntry = {
+        timestamp:   new Date().toISOString(),
+        charId:      activePreset,
+        textSnippet: text.length > 40 ? text.slice(0, 40) + '…' : text,
+        detected:    result.emotion,
+        confidence:  result.confidence,
+        delta_trust: result.delta_trust,
+        applied,
+        source:      result.source,
+      };
+      emotionFeedbackLog = [entry, ...emotionFeedbackLog].slice(0, 30);
+      saveEmotionFeedbackLog();
+
+    } catch {
+      // Never surface errors — must not break chat
+    } finally {
+      emotionFeedbackRunning = false;
+    }
   }
 
   function saveCustomProfile(): void {
@@ -459,6 +602,9 @@
   }
 
   function applyPreset(name: PresetName) {
+    // Persist departing character's emotion before switching
+    if (activePreset !== name) saveEmotionForChar(activePreset);
+
     if (name !== 'muryi' && name !== 'custom') {
       emotion.jealousy  = clamp(emotion.jealousy  + 15);
       emotion.affection = clamp(emotion.affection -  3);
@@ -469,7 +615,11 @@
       const cp = CHARACTER_PROFILES[name];
       if (cp) speakerId = cp.voicevoxSpeakerId;
     }
+    // Restore arriving character's saved emotion (overrides the tweaks above when found)
+    loadEmotionForChar(name);
     saveEmotion();
+    // Restore emotion feedback log for the arriving character
+    loadEmotionFeedbackLog(name);
 
     // Custom Persona Editor へ自動反映
     const profile = CHARACTER_PROFILES[name];
@@ -656,10 +806,76 @@
   }
 
   // ============================================================
+  // 4コマ YAML パーサー
+  // ============================================================
+  let yonkomaGenerating = $state(false);
+
+  interface YonkomaField { key: string; value: string; }
+  interface YonkomaPanel { num: number; fields: YonkomaField[]; }
+  interface YonkomaData  { title: string; panels: YonkomaPanel[]; yaml: string; preamble: string; postamble: string; }
+
+  function parseYonkomaYaml(text: string): YonkomaData | null {
+    const blockMatch = text.match(/```ya?ml\r?\n([\s\S]*?)```/i);
+    if (!blockMatch) return null;
+    const raw  = blockMatch[0];
+    const yaml = blockMatch[1];
+    const idx  = text.indexOf(raw);
+    const preamble  = text.slice(0, idx).trim();
+    const postamble = text.slice(idx + raw.length).trim();
+
+    const titleM = yaml.match(/(?:^|\n)title:\s*["']?(.+?)["']?\s*(?:\n|$)/);
+    const title  = titleM?.[1]?.trim() ?? '';
+
+    const panels: YonkomaPanel[] = [];
+    for (let i = 1; i <= 4; i++) {
+      const re = new RegExp(`(?:^|\\n)panel${i}:[^\\n]*\\n((?:[ \\t]+[^\\n]+\\n?)*)`);
+      const m  = yaml.match(re);
+      if (!m) continue;
+      const fields: YonkomaField[] = [];
+      for (const line of m[1].split('\n')) {
+        const kv = line.match(/^[ \t]+(\w+):\s*(.*)/);
+        if (kv) fields.push({ key: kv[1], value: kv[2].trim().replace(/^["']|["']$/g, '') });
+      }
+      panels.push({ num: i, fields });
+    }
+
+    return { title, panels, yaml: yaml.trimEnd(), preamble, postamble };
+  }
+
+  // ============================================================
   // Chat to Manga Pipeline
   // ============================================================
   const MANGA_IMPORT_KEY = 'studio-manga-import';
+  const YAML_IMPORT_KEY  = 'studio-yaml-import';
   let mangaConverting = $state<string | null>(null);
+
+  function regenerateYonkomaPanel(panelNum: number, title: string, fields: YonkomaField[]) {
+    const desc = fields.map(f => `${f.key}: ${f.value}`).join(' / ');
+    inputText = `4コマ漫画「${title}」のpanel${panelNum}だけ書き直して。現在:「${desc}」。ギャグ寄り、もっとキャラらしく面白く。`;
+    sendMessage();
+  }
+
+  function sendPanelToStudio(panel: YonkomaPanel, title: string) {
+    const desc = panel.fields.map(f => f.value).filter(Boolean).join(', ');
+    try {
+      localStorage.setItem(YAML_IMPORT_KEY, JSON.stringify({
+        pages: [{ layout: 'single', prompt: `${title} - コマ${panel.num}: ${desc}`, panels: [{ prompt: desc }] }],
+        sourceText: `4コマ panel${panel.num}`,
+      }));
+    } catch { /* quota */ }
+    window.open('/studio', '_blank');
+  }
+
+  function downloadYonkomaYaml(yaml: string, title: string) {
+    const fname = `4koma_${(title || 'yonkoma').replace(/[^\w぀-龯]/g, '_')}.yaml`;
+    const blob  = new Blob([yaml], { type: 'text/yaml' });
+    const url   = URL.createObjectURL(blob);
+    const a     = document.createElement('a');
+    a.href      = url;
+    a.download  = fname;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
 
   type MangaImportPanel = { prompt: string; scene: string };
 
@@ -742,6 +958,140 @@
       console.error('[Lab] convertToManga:', e);
     } finally {
       mangaConverting = null;
+    }
+  }
+
+  // ============================================================
+  // Chat to YAML/Studio Pipeline
+  // ============================================================
+  async function createLabThumbnail(file: File): Promise<string> {
+    return new Promise(resolve => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        const THUMB = 512;
+        const r = Math.min(THUMB / img.width, THUMB / img.height);
+        const canvas = document.createElement('canvas');
+        canvas.width  = Math.round(img.width  * r);
+        canvas.height = Math.round(img.height * r);
+        canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
+        URL.revokeObjectURL(url);
+        resolve(canvas.toDataURL('image/jpeg', 0.75));
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); resolve(''); };
+      img.src = url;
+    });
+  }
+
+  async function handleReferenceImageUpload(e: Event): Promise<void> {
+    const input = e.currentTarget as HTMLInputElement;
+    const files = Array.from(input.files ?? []);
+    input.value = '';
+    for (const file of files) {
+      if (referenceImages.length >= 2) break;
+      const dataUrl = await createLabThumbnail(file);
+      const name    = file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ');
+      referenceImages = [...referenceImages, { name, dataUrl, note: '' }];
+    }
+  }
+
+  function removeReferenceImage(i: number): void {
+    referenceImages = referenceImages.filter((_, idx) => idx !== i);
+  }
+
+  function dataUrlToBlob(dataUrl: string): Blob {
+    const [header, b64] = dataUrl.split(',');
+    const mime = header.match(/:(.*?);/)?.[1] ?? 'image/jpeg';
+    const bytes = atob(b64);
+    const arr = new Uint8Array(bytes.length);
+    for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+    return new Blob([arr], { type: mime });
+  }
+
+  async function convertToYaml(msg: ChatMessage): Promise<void> {
+    if (yamlConverting) return;
+    yamlConverting = true;
+    try {
+      const msgIdx     = messages.findIndex(m => m.time === msg.time && m.role === msg.role);
+      const ctxMsgs    = messages.slice(Math.max(0, (msgIdx >= 0 ? msgIdx : messages.length) - 8), (msgIdx >= 0 ? msgIdx : messages.length) + 1);
+      const contextText = ctxMsgs
+        .filter(m => m.role !== 'error')
+        .map(m => `${m.role === 'user' ? 'ユーザー' : 'AI'}: ${m.text}`)
+        .join('\n');
+
+      const refContext = referenceImages.length > 0
+        ? `\n[参照キャラクター]\n${referenceImages.map((r, i) => `キャラクター${i === 0 ? 'A' : 'B'}: ${r.note || r.name}`).join('\n')}`
+        : '';
+
+      const sysPrompt = [
+        'あなたはマンガ制作アシスタントAIです。',
+        '以下の会話から、マルチページ漫画プロジェクトのJSONを生成してください。',
+        '必ず以下のJSON形式のみを出力し、他のテキストは一切出力しないこと:',
+        '{',
+        '  "pages": [',
+        '    {',
+        '      "layout": "4panel",',
+        '      "prompt": "ページのシーン概要（日本語可）",',
+        '      "panels": [',
+        '        { "prompt": "コマ1の英語画像生成タグ（カンマ区切り）" },',
+        '        { "prompt": "コマ2の英語画像生成タグ" },',
+        '        { "prompt": "コマ3の英語画像生成タグ" },',
+        '        { "prompt": "コマ4の英語画像生成タグ" }',
+        '      ]',
+        '    }',
+        '  ],',
+        '  "refs": {',
+        '    "a": "キャラクターAの英語外見タグ（カンマ区切り）",',
+        '    "b": "キャラクターBの英語外見タグ（存在しない場合は省略）"',
+        '  }',
+        '}',
+        'layoutは "single" / "2panel" / "3vertical" / "4panel" から最適なものを選ぶこと。',
+        'キャラクターが1人の場合はrefsのbキーを省略すること。',
+        'プロンプトは必ず英語のカンマ区切りタグで書くこと。',
+      ].join('\n');
+
+      const provider = $sessionStore.provider === 'onair' ? 'claude' : $sessionStore.provider;
+      const model    = $sessionStore.provider === 'onair' ? 'claude-haiku-4-5-20251001' : ($sessionStore.model || undefined);
+
+      const res = await fetch('/api/lab-chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider, model, systemPrompt: sysPrompt, userMessage: contextText + refContext }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message ?? res.statusText);
+      const data = await res.json();
+      const raw  = (data.text ?? '') as string;
+
+      type YamlPage = { layout: string; prompt: string; panels: { prompt: string }[] };
+      type YamlParsed = { pages: YamlPage[]; refs?: { a?: string; b?: string } };
+      let parsed: YamlParsed;
+      try {
+        const jsonMatch = raw.match(/\{[\s\S]*\}/);
+        parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(raw);
+      } catch {
+        parsed = { pages: [{ layout: '4panel', prompt: msg.text.slice(0, 200), panels: [{ prompt: msg.text.slice(0, 300) }] }] };
+      }
+
+      const yamlData = {
+        ...parsed,
+        referenceImages: referenceImages.length > 0 ? referenceImages : undefined,
+        sourceText: msg.text.slice(0, 60),
+      };
+
+      if (typeof localStorage !== 'undefined') {
+        try {
+          localStorage.setItem(YAML_IMPORT_KEY, JSON.stringify(yamlData));
+        } catch {
+          try {
+            localStorage.setItem(YAML_IMPORT_KEY, JSON.stringify({ ...yamlData, referenceImages: undefined }));
+          } catch { /* quota */ }
+        }
+      }
+      window.open('/studio', '_blank');
+    } catch (e) {
+      console.error('[Lab] convertToYaml:', e);
+    } finally {
+      yamlConverting = false;
     }
   }
 
@@ -1424,6 +1774,13 @@
   // ============================================================
   // Chat
   // ============================================================
+  async function sendYonkomaPrompt() {
+    yonkomaGenerating = true;
+    inputText = 'この画像のキャラを使って4コマ漫画のYAMLを作って。\nギャグ寄り、キャラの個性を活かして。';
+    console.log('[yonkoma] prompt:', inputText);
+    try { await sendMessage(); } finally { yonkomaGenerating = false; }
+  }
+
   async function sendMessage() {
     const text = inputText.trim();
     if (!text || isThinking) return;
@@ -1445,6 +1802,7 @@
 
     console.log('[Lab] provider:', $sessionStore.provider);
     console.log('[Lab] model   :', $sessionStore.model || '(default)');
+    console.log('[Lab] images  :', referenceImages.length, referenceImages.length > 0 ? referenceImages.map(r => r.name).join(', ') : '(none)');
     console.log('[Lab] request start');
 
     const _reqStart = Date.now();
@@ -1458,19 +1816,25 @@
           body: JSON.stringify({ message: text }),
         });
       } else {
-        const _sysPrompt = buildLabSystemPrompt();
+        let _sysPrompt = buildLabSystemPrompt();
+        if (referenceImages.length > 0) {
+          const _noteList = referenceImages
+            .map((r, i) => `画像${i + 1}「${r.note || r.name}」`)
+            .join('、');
+          _sysPrompt += `\n\n【参照画像】${_noteList}が添付されています。キャラクターとして自然に画像の内容を踏まえて返答してください。`;
+        }
         lastSystemPrompt = _sysPrompt;
         console.log('[Lab] system prompt:', _sysPrompt);
-        res = await fetch('/api/lab-chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            provider: $sessionStore.provider,
-            model: $sessionStore.model || undefined,
-            systemPrompt: _sysPrompt,
-            userMessage: text,
-          }),
-        });
+        const _fd = new FormData();
+        _fd.append('provider', $sessionStore.provider);
+        if ($sessionStore.model) _fd.append('model', $sessionStore.model);
+        _fd.append('systemPrompt', _sysPrompt);
+        _fd.append('userMessage', text);
+        for (let _i = 0; _i < referenceImages.length; _i++) {
+          _fd.append(`image_${_i}`, dataUrlToBlob(referenceImages[_i].dataUrl), `ref_${_i}.jpg`);
+          if (referenceImages[_i].note) _fd.append(`note_${_i}`, referenceImages[_i].note);
+        }
+        res = await fetch('/api/lab-chat', { method: 'POST', body: _fd });
       }
       if (!res.ok) {
         let userMsg = 'APIエラーが発生しました。しばらく後に再試行してください。';
@@ -1489,9 +1853,16 @@
         return;
       }
       const data = await res.json();
+      if (data.failover) {
+        failoverNotice = 'Gemini 失敗 → OpenAI へ自動切替しました';
+        setTimeout(() => { failoverNotice = null; }, 5000);
+      }
       aiText = $sessionStore.provider === 'onair' ? data.reply : data.text;
-      lastResponseMs = Date.now() - _reqStart;
-      console.log('[Lab] response success');
+      lastResponseMs   = Date.now() - _reqStart;
+      lastSentImages   = referenceImages.length;
+      lastUsedProvider = data.provider  ?? $sessionStore.provider;
+      lastUsedModel    = data.actualModel ?? $sessionStore.model ?? null;
+      console.log('[Lab] response success — provider:', lastUsedProvider, 'model:', lastUsedModel, 'images_sent:', lastSentImages);
     } catch (err) {
       console.error('[Lab] response fail:', err);
       messages = [...messages, { role: 'error', text: '通信エラーが発生しました。接続を確認してください。', time: getTime() }];
@@ -1510,6 +1881,8 @@
     messages = [...messages, { role: 'ai', text: aiText, time: getTime(), avatar: selectedAvatar, imagePrompt: toggles.imagePromptMode ? buildImagePrompt() : undefined }];
     addMemory('assistant', aiText);
     updateEmotionFromReply(aiText);
+    // Fire-and-forget: never awaited, never breaks chat
+    if (emotionFeedbackEnabled) applyEmotionFeedbackAsync(aiText);
     if (reconciliationPending) {
       addSpecialMemory('reconciled', `仲直りした（「${text.slice(0, 15)}」の後）`);
     }
@@ -1680,6 +2053,9 @@
   const LS_BOND               = 'lab-bond';
   const LS_CUSTOM_PROFILE     = 'lab-custom-profile';
   const LS_SLOT: Record<SlotKey, string> = { a: 'lab-custom-slot-a', b: 'lab-custom-slot-b', c: 'lab-custom-slot-c' };
+  const LS_EMOTION_FEEDBACK_ON  = 'lab-emotion-feedback-on';
+  const LS_EMOTION_FEEDBACK_LOG = (charId: string) => `lab-emotion-feedback-log-${charId}`;
+  const LS_EMOTION_CHAR         = (charId: string) => `lab-emotion-${charId}`;
   const MEMORY_UPDATE_EVERY   = 3;                      // N回の交換ごとに更新
   const MEMORY_STALE_MS       = 60 * 60 * 1000;         // 1時間経過で起動時に自動更新
   const L_DEF = 220, L_MIN = 140, L_MAX = 480;
@@ -2298,7 +2674,10 @@ ${recent}
     if (sl) leftWidth  = Math.max(L_MIN, Math.min(L_MAX,  parseInt(sl)));
     if (sr) rightWidth = Math.max(R_MIN, Math.min(R_MAX, parseInt(sr)));
 
-    const savedEmotion = localStorage.getItem(LS_EMOTION);
+    // Load emotion: prefer per-character key; fall back to global (backward-compat migration)
+    const savedEmotionChar   = localStorage.getItem(LS_EMOTION_CHAR(activePreset));
+    const savedEmotionGlobal = localStorage.getItem(LS_EMOTION);
+    const savedEmotion = savedEmotionChar ?? savedEmotionGlobal;
     if (savedEmotion) {
       try {
         const e = JSON.parse(savedEmotion) as Partial<typeof emotion>;
@@ -2308,8 +2687,14 @@ ${recent}
         if (e.focus     != null) emotion.focus     = clamp(e.focus);
         if (e.anger     != null) emotion.anger     = clamp(e.anger);
         if (e.jealousy  != null) emotion.jealousy  = clamp(e.jealousy);
+        // Migrate global key → per-char key on first load
+        if (!savedEmotionChar) localStorage.setItem(LS_EMOTION_CHAR(activePreset), savedEmotion);
       } catch { /* 破損データは無視 */ }
     }
+    // Restore emotion feedback toggle and log
+    const savedFbOn = localStorage.getItem(LS_EMOTION_FEEDBACK_ON);
+    if (savedFbOn === 'true') emotionFeedbackEnabled = true;
+    loadEmotionFeedbackLog(activePreset);
     const savedBond = localStorage.getItem(LS_BOND);
     if (savedBond) bond = clamp(parseInt(savedBond));
 
@@ -2537,6 +2922,11 @@ ${recent}
         <div class="cmb-fill" style="background:{moodColor}; opacity:0.08"></div>
       </div>
 
+      <!-- Failover notice -->
+      {#if failoverNotice}
+        <div class="failover-notice">{failoverNotice}</div>
+      {/if}
+
       <!-- Messages -->
       <div class="chat-messages" bind:this={chatEl}>
         {#each messages as msg (msg.time + msg.role + msg.text.slice(0, 8))}
@@ -2560,7 +2950,50 @@ ${recent}
                 </div>
               {/if}
               <div class="msg-bubble">
-                {#if parseMangaResponse(msg.text)}
+                {#if parseYonkomaYaml(msg.text) !== null}
+                  {@const _y = parseYonkomaYaml(msg.text)!}
+                  <div class="yonkoma-display">
+                    {#if _y.preamble}<div class="msg-text yonkoma-preamble">{_y.preamble}</div>{/if}
+                    {#if _y.title}
+                      <div class="yonkoma-title">
+                        <span class="yonkoma-title-badge">4コマ</span>{_y.title}
+                      </div>
+                    {/if}
+                    {#if _y.panels.length > 0}
+                      <div class="yonkoma-panels">
+                        {#each _y.panels as panel}
+                          <div class="yonkoma-panel">
+                            <div class="yonkoma-panel-main">
+                              <div class="yonkoma-panel-num">▪ {panel.num}</div>
+                              <div class="yonkoma-panel-fields">
+                                {#each panel.fields as f}
+                                  <div class="yonkoma-field">
+                                    <span class="yonkoma-field-key">{f.key}</span><span class="yonkoma-field-val">{f.value}</span>
+                                  </div>
+                                {/each}
+                              </div>
+                            </div>
+                            <div class="yonkoma-panel-actions">
+                              <button class="ypb ypb-regen" onclick={() => regenerateYonkomaPanel(panel.num, _y.title, panel.fields)} disabled={isThinking} title="このコマを再生成">↺ 再生成</button>
+                              <button class="ypb ypb-img" onclick={() => sendPanelToStudio(panel, _y.title)} title="Image Studioで画像化">◈ 画像化</button>
+                            </div>
+                          </div>
+                        {/each}
+                      </div>
+                    {/if}
+                    <div class="yonkoma-code-wrap">
+                      <div class="yonkoma-code-hd">
+                        <span class="yonkoma-code-label">YAML</span>
+                        <div class="yonkoma-code-btns">
+                          <button class="yonkoma-copy-btn" onclick={() => navigator.clipboard.writeText(_y.yaml)}>⎘ COPY</button>
+                          <button class="yonkoma-dl-btn" onclick={() => downloadYonkomaYaml(_y.yaml, _y.title)}>↓ DL</button>
+                        </div>
+                      </div>
+                      <pre class="yonkoma-code">{_y.yaml}</pre>
+                    </div>
+                    {#if _y.postamble}<div class="msg-text yonkoma-postamble">{_y.postamble}</div>{/if}
+                  </div>
+                {:else if parseMangaResponse(msg.text)}
                   {#each parseMangaResponse(msg.text)! as sec}
                     <div class="manga-sec manga-sec-{sec.label}">
                       <div class="manga-sec-hd">{sec.label.toUpperCase()}</div>
@@ -2582,13 +3015,22 @@ ${recent}
                 {/if}
                 <div class="msg-time">{msg.time}</div>
                 {#if msg.role === 'ai' && !msg.isGreeting}
-                  <button
-                    class="manga-send-btn"
-                    class:loading={mangaConverting === msg.time}
-                    onclick={() => convertToManga(msg)}
-                    disabled={mangaConverting !== null}
-                    title="会話をImage Studioで漫画化"
-                  >{mangaConverting === msg.time ? '⏳ 変換中…' : '⬛ MANGA化'}</button>
+                  <div class="msg-action-row">
+                    <button
+                      class="manga-send-btn"
+                      class:loading={mangaConverting === msg.time}
+                      onclick={() => convertToManga(msg)}
+                      disabled={mangaConverting !== null}
+                      title="会話をImage Studioで漫画化"
+                    >{mangaConverting === msg.time ? '⏳ 変換中…' : '⬛ MANGA化'}</button>
+                    <button
+                      class="yaml-send-btn"
+                      class:loading={yamlConverting}
+                      onclick={() => convertToYaml(msg)}
+                      disabled={yamlConverting}
+                      title="構造化YAMLとしてImage Studioへ送る"
+                    >{yamlConverting ? '⏳ 変換中…' : '◈ YAML化'}</button>
+                  </div>
                 {/if}
               </div>
               {#if msg.role === 'user'}
@@ -2864,8 +3306,60 @@ ${recent}
         </div>
       {/if}
 
+      <!-- Reference image thumbnails strip -->
+      {#if referenceImages.length > 0}
+        <div class="ref-img-strip">
+          {#each referenceImages as ref, i}
+            <div class="ref-img-chip">
+              {#if ref.dataUrl}
+                <img src={ref.dataUrl} alt={ref.name} class="ref-img-thumb" />
+              {/if}
+              <input
+                type="text"
+                class="ref-img-note"
+                placeholder={ref.name}
+                bind:value={ref.note}
+              />
+              <button class="ref-img-remove" onclick={() => removeReferenceImage(i)} title="削除">✕</button>
+            </div>
+          {/each}
+        </div>
+        <div class="ref-quick-actions">
+          <button
+            class="yonkoma-btn"
+            class:loading={yonkomaGenerating}
+            onclick={sendYonkomaPrompt}
+            disabled={isThinking}
+            title="添付画像のキャラで4コマ漫画YAMLを生成"
+          >
+            {#if yonkomaGenerating}
+              <span class="yonkoma-spin">◌</span> 生成中…
+            {:else}
+              <span class="yonkoma-icon">▣▣</span> 4コマ生成
+            {/if}
+          </button>
+        </div>
+      {/if}
+
       <!-- Input -->
       <div class="chat-input-area">
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+        <label class="ref-upload-btn" title="参照画像をアップロード（最大2枚）" class:disabled={referenceImages.length >= 2}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M3 15l5-5 4 4 3-3 6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <circle cx="8.5" cy="8.5" r="1.5" fill="currentColor"/>
+          </svg>
+          REF
+          <input
+            type="file"
+            accept="image/*"
+            multiple
+            style="display:none"
+            disabled={referenceImages.length >= 2}
+            onchange={handleReferenceImageUpload}
+          />
+        </label>
         <textarea
           class="chat-input"
           placeholder="メッセージを入力... (Enter で送信)"
@@ -3272,7 +3766,7 @@ ${recent}
             >
               <option value="openai">OpenAI</option>
               <option value="gemini">Gemini</option>
-              <option value="claude">Claude</option>
+              <option value="claude">Claude (開発者専用)</option>
               <option value="onair">OnAir</option>
             </select>
           </div>
@@ -3347,6 +3841,66 @@ ${recent}
           <div class="bar-wrap"><div class="bar" style="width:{bond}%; background:#f59e0b"></div></div>
           <span class="stat-num">{bond}</span>
         </div>
+      </div>
+
+      <!-- EMOTION FEEDBACK -->
+      <div class="ef-section">
+        <div class="ef-header">
+          <span class="ef-diamond">◆</span>
+          <span class="ef-title">EMOTION FEEDBACK</span>
+          <span class="ef-spacer"></span>
+          {#if emotionFeedbackRunning}
+            <span class="ef-analyzing">ANALYZING…</span>
+          {/if}
+          <button
+            class="ef-toggle-btn"
+            class:active={emotionFeedbackEnabled}
+            onclick={toggleEmotionFeedback}
+            title="AI応答からリアルタイムで感情パラメータを自動更新"
+          >{emotionFeedbackEnabled ? 'ON' : 'OFF'}</button>
+        </div>
+        {#if emotionFeedbackEnabled}
+          {#if emotionFeedbackLog.length === 0}
+            <p class="ef-empty">— 次のAI応答後に記録されます —</p>
+          {:else}
+            <div class="ef-log">
+              {#each emotionFeedbackLog.slice(0, 10) as entry (entry.timestamp)}
+                <div class="ef-entry">
+                  <div class="ef-entry-top">
+                    <span class="ef-detected">{entry.detected}</span>
+                    <span class="ef-conf">{(entry.confidence * 100).toFixed(0)}%</span>
+                    <span
+                      class="ef-dt"
+                      class:pos={entry.delta_trust > 0}
+                      class:neg={entry.delta_trust < 0}
+                    >Δtrust {entry.delta_trust > 0 ? '+' : ''}{entry.delta_trust}</span>
+                    {#if entry.source === 'fallback'}
+                      <span class="ef-fallback">OFFLINE</span>
+                    {/if}
+                    <span class="ef-ts">{new Date(entry.timestamp).toLocaleTimeString('ja-JP', { hour12: false })}</span>
+                  </div>
+                  <div class="ef-snippet">"{entry.textSnippet}"</div>
+                  {#if Object.keys(entry.applied).length > 0}
+                    <div class="ef-applied">
+                      {#each Object.entries(entry.applied) as [k, v]}
+                        <span class="ef-chip" class:pos={v > 0} class:neg={v < 0}>
+                          {k} {v > 0 ? '+' : ''}{v}
+                        </span>
+                      {/each}
+                    </div>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+            <div class="ef-footer">
+              <span class="ef-count">{emotionFeedbackLog.length} ENTRIES · {activePreset}</span>
+              <button
+                class="ef-clear-btn"
+                onclick={() => { emotionFeedbackLog = []; saveEmotionFeedbackLog(); }}
+              >CLEAR</button>
+            </div>
+          {/if}
+        {/if}
       </div>
 
       <div class="char-log">
@@ -3461,6 +4015,14 @@ ${recent}
             <div class="dbg-row">
               <span class="dbg-lbl">MODEL</span>
               <span class="dbg-val">{$sessionStore.provider}{$sessionStore.model ? ' / ' + $sessionStore.model : ''}</span>
+            </div>
+            <div class="dbg-row">
+              <span class="dbg-lbl">RESPONDED AS</span>
+              <span class="dbg-val {lastUsedProvider ? 'dbg-hi' : ''}">{lastUsedProvider ? lastUsedProvider + (lastUsedModel ? ' / ' + lastUsedModel : '') : '—'}</span>
+            </div>
+            <div class="dbg-row">
+              <span class="dbg-lbl">IMAGES SENT</span>
+              <span class="dbg-val {lastSentImages > 0 ? 'dbg-hi' : ''}">{lastSentImages > 0 ? lastSentImages + ' image(s)' : '—'}</span>
             </div>
             <div class="dbg-row">
               <span class="dbg-lbl">LATENCY</span>
@@ -4073,6 +4635,22 @@ ${recent}
   color: var(--pu);
   text-shadow: 0 0 8px var(--pu-glow);
   animation: blink 0.9s ease-in-out infinite;
+}
+
+.failover-notice {
+  margin: 4px 12px 0;
+  padding: 5px 12px;
+  border-radius: 6px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: #fbbf24;
+  background: rgba(251,191,36,0.1);
+  border: 1px solid rgba(251,191,36,0.3);
+  animation: fadeout-notice 5s forwards;
+}
+@keyframes fadeout-notice {
+  0%, 70% { opacity: 1; }
+  100%     { opacity: 0; }
 }
 
 .section-lbl {
@@ -5152,6 +5730,200 @@ ${recent}
 .manga-sec-prompt .manga-sec-hd { color: rgba(251,191,36,0.8); }
 .manga-sec-prompt .manga-sec-body { font-size: 10px; color: rgba(200,180,255,0.8); word-break: break-all; }
 
+/* ── 4コマ YAML 表示 ───────────────────────────────────────────── */
+.yonkoma-display {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.yonkoma-preamble { margin-bottom: 2px; }
+.yonkoma-postamble { margin-top: 2px; }
+
+.yonkoma-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  background: rgba(251,191,36,0.05);
+  border: 1px solid rgba(251,191,36,0.22);
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #fbbf24;
+  letter-spacing: 0.02em;
+}
+.yonkoma-title-badge {
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  padding: 2px 5px;
+  background: rgba(251,191,36,0.12);
+  border: 1px solid rgba(251,191,36,0.3);
+  border-radius: 3px;
+  color: #f59e0b;
+  flex-shrink: 0;
+}
+
+.yonkoma-panels {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.yonkoma-panel {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 10px;
+  background: rgba(0,229,255,0.025);
+  border: 1px solid rgba(0,229,255,0.1);
+  border-left: 2px solid rgba(0,229,255,0.35);
+  border-radius: 4px;
+}
+.yonkoma-panel-main {
+  display: flex;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+.yonkoma-panel-num {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--cy, #00e5ff);
+  opacity: 0.65;
+  white-space: nowrap;
+  padding-top: 1px;
+  min-width: 22px;
+}
+.yonkoma-panel-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
+.yonkoma-panel-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex-shrink: 0;
+}
+.ypb {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 8px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  font-family: inherit;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+  white-space: nowrap;
+}
+.ypb:disabled { opacity: 0.35; cursor: not-allowed; }
+.ypb-regen {
+  color: #a78bfa;
+  background: rgba(167,139,250,0.06);
+  border: 1px solid rgba(167,139,250,0.22);
+}
+.ypb-regen:hover:not(:disabled) {
+  background: rgba(167,139,250,0.14);
+  border-color: rgba(167,139,250,0.48);
+}
+.ypb-img {
+  color: #22d3ee;
+  background: rgba(34,211,238,0.05);
+  border: 1px solid rgba(34,211,238,0.2);
+}
+.ypb-img:hover:not(:disabled) {
+  background: rgba(34,211,238,0.12);
+  border-color: rgba(34,211,238,0.44);
+}
+.yonkoma-field {
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+.yonkoma-field-key {
+  font-size: 8.5px;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: #4b5563;
+  margin-right: 6px;
+}
+.yonkoma-field-val {
+  color: #cbd5e1;
+}
+
+.yonkoma-code-wrap {
+  border: 1px solid rgba(100,116,139,0.18);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.yonkoma-code-hd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 10px;
+  background: rgba(100,116,139,0.07);
+  border-bottom: 1px solid rgba(100,116,139,0.13);
+}
+.yonkoma-code-label {
+  font-size: 8.5px;
+  letter-spacing: 1.5px;
+  color: #4b5563;
+  font-weight: 600;
+}
+.yonkoma-code-btns {
+  display: flex;
+  gap: 4px;
+}
+.yonkoma-copy-btn {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: #22d3ee;
+  background: transparent;
+  border: 1px solid rgba(34,211,238,0.22);
+  border-radius: 3px;
+  padding: 1px 8px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.12s, border-color 0.12s;
+}
+.yonkoma-copy-btn:hover {
+  background: rgba(34,211,238,0.1);
+  border-color: rgba(34,211,238,0.45);
+}
+.yonkoma-dl-btn {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: #34d399;
+  background: transparent;
+  border: 1px solid rgba(52,211,153,0.22);
+  border-radius: 3px;
+  padding: 1px 8px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.12s, border-color 0.12s;
+}
+.yonkoma-dl-btn:hover {
+  background: rgba(52,211,153,0.1);
+  border-color: rgba(52,211,153,0.45);
+}
+.yonkoma-code {
+  margin: 0;
+  padding: 10px 12px;
+  background: rgba(0,0,0,0.35);
+  font-family: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', monospace;
+  font-size: 11px;
+  line-height: 1.65;
+  color: #94a3b8;
+  overflow-x: auto;
+  white-space: pre;
+}
+
 .studio-btn {
   display: block;
   width: 100%;
@@ -5200,6 +5972,166 @@ ${recent}
 .manga-send-btn.loading {
   color: var(--cy);
   border-color: rgba(0,229,255,0.3);
+}
+
+.msg-action-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.yaml-send-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  font-size: 10px;
+  letter-spacing: 1.2px;
+  font-family: inherit;
+  font-weight: 600;
+  color: #34d399;
+  background: rgba(52,211,153,0.06);
+  border: 1px solid rgba(52,211,153,0.25);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.yaml-send-btn:hover:not(:disabled) {
+  background: rgba(52,211,153,0.12);
+  border-color: rgba(52,211,153,0.5);
+}
+.yaml-send-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.yaml-send-btn.loading {
+  color: var(--cy);
+  border-color: rgba(0,229,255,0.3);
+}
+
+/* Reference image strip (above chat input) */
+.ref-img-strip {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 12px 4px;
+  border-top: 1px solid rgba(52,211,153,0.15);
+  background: rgba(52,211,153,0.03);
+  flex-shrink: 0;
+}
+.ref-img-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(52,211,153,0.06);
+  border: 1px solid rgba(52,211,153,0.2);
+  border-radius: 4px;
+  padding: 4px 6px;
+}
+.ref-img-thumb {
+  width: 36px;
+  height: 36px;
+  object-fit: cover;
+  border-radius: 3px;
+  border: 1px solid rgba(52,211,153,0.2);
+  flex-shrink: 0;
+}
+.ref-img-note {
+  width: 120px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid rgba(52,211,153,0.25);
+  color: var(--text);
+  font-size: 11px;
+  font-family: inherit;
+  padding: 2px 4px;
+  outline: none;
+}
+.ref-img-note::placeholder { color: var(--muted); font-size: 10px; }
+.ref-img-remove {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 4px;
+  border-radius: 2px;
+  line-height: 1;
+  transition: color 0.15s;
+  flex-shrink: 0;
+}
+.ref-img-remove:hover { color: #f87171; }
+
+.ref-quick-actions {
+  display: flex;
+  gap: 6px;
+  padding: 4px 12px 5px;
+  background: rgba(52,211,153,0.03);
+  border-top: 1px solid rgba(52,211,153,0.08);
+  flex-shrink: 0;
+}
+
+.yonkoma-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 11px;
+  font-size: 10px;
+  font-family: inherit;
+  letter-spacing: 1px;
+  font-weight: 600;
+  color: #34d399;
+  background: rgba(52,211,153,0.06);
+  border: 1px solid rgba(52,211,153,0.28);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, box-shadow 0.12s;
+}
+.yonkoma-btn:hover:not(:disabled) {
+  background: rgba(52,211,153,0.14);
+  border-color: rgba(52,211,153,0.55);
+  box-shadow: 0 0 8px rgba(52,211,153,0.15);
+}
+.yonkoma-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.yonkoma-icon {
+  font-size: 9px;
+  letter-spacing: -1px;
+  opacity: 0.8;
+}
+
+/* REF upload button inside chat-input-area */
+.ref-upload-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 4px 7px;
+  font-size: 9px;
+  letter-spacing: 1px;
+  font-family: inherit;
+  font-weight: 600;
+  color: #34d399;
+  background: rgba(52,211,153,0.06);
+  border: 1px solid rgba(52,211,153,0.25);
+  border-radius: 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.12s, border-color 0.12s;
+  align-self: stretch;
+}
+.ref-upload-btn:hover:not(.disabled) {
+  background: rgba(52,211,153,0.12);
+  border-color: rgba(52,211,153,0.5);
+}
+.ref-upload-btn.disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
 /* ============================================================
@@ -6702,5 +7634,203 @@ ${recent}
 
 .dbg-hi {
   color: rgba(0,229,255,0.9);
+}
+
+/* ============================================================
+   EMOTION FEEDBACK SECTION
+   ============================================================ */
+.ef-section {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: rgba(0,229,255,0.03);
+  border: 1px solid rgba(0,229,255,0.1);
+  border-radius: 4px;
+}
+
+.ef-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 8px;
+}
+
+.ef-diamond {
+  font-size: 9px;
+  color: var(--cy);
+  opacity: 0.7;
+}
+
+.ef-title {
+  font-size: 9px;
+  letter-spacing: 2px;
+  color: var(--cy);
+  opacity: 0.75;
+  text-transform: uppercase;
+}
+
+.ef-spacer { flex: 1; }
+
+.ef-analyzing {
+  font-size: 9px;
+  color: #a78bfa;
+  letter-spacing: 1px;
+  animation: pulse-opacity 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse-opacity {
+  0%, 100% { opacity: 0.5; }
+  50%       { opacity: 1;   }
+}
+
+.ef-toggle-btn {
+  padding: 2px 10px;
+  background: rgba(0,229,255,0.06);
+  border: 1px solid rgba(0,229,255,0.18);
+  border-radius: 3px;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.ef-toggle-btn:hover {
+  background: rgba(0,229,255,0.12);
+  color: var(--cy);
+  border-color: rgba(0,229,255,0.4);
+}
+.ef-toggle-btn.active {
+  background: rgba(0,229,255,0.14);
+  color: var(--cy);
+  border-color: rgba(0,229,255,0.5);
+  box-shadow: 0 0 6px rgba(0,229,255,0.2);
+}
+
+.ef-empty {
+  font-size: 9px;
+  color: var(--muted);
+  text-align: center;
+  padding: 6px 0;
+  letter-spacing: 0.5px;
+}
+
+.ef-log {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ef-entry {
+  background: rgba(255,255,255,0.025);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 3px;
+  padding: 6px 8px;
+}
+
+.ef-entry-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 3px;
+}
+
+.ef-detected {
+  font-size: 10px;
+  font-weight: 600;
+  color: #a78bfa;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.ef-conf {
+  font-size: 9px;
+  color: var(--muted);
+}
+
+.ef-dt {
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(255,255,255,0.04);
+}
+.ef-dt.pos { color: #34d399; background: rgba(52,211,153,0.1); }
+.ef-dt.neg { color: #f43f5e; background: rgba(244,63,94,0.1);  }
+
+.ef-fallback {
+  font-size: 8px;
+  letter-spacing: 1px;
+  color: #fb923c;
+  opacity: 0.7;
+}
+
+.ef-ts {
+  margin-left: auto;
+  font-size: 8px;
+  color: var(--muted);
+  opacity: 0.6;
+}
+
+.ef-snippet {
+  font-size: 9px;
+  color: rgba(200,220,255,0.45);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 4px;
+  font-style: italic;
+}
+
+.ef-applied {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.ef-chip {
+  font-size: 8.5px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(255,255,255,0.05);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.3px;
+}
+.ef-chip.pos { color: #34d399; background: rgba(52,211,153,0.08);  }
+.ef-chip.neg { color: #f43f5e; background: rgba(244,63,94,0.08); }
+
+.ef-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 7px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255,255,255,0.05);
+}
+
+.ef-count {
+  font-size: 8.5px;
+  color: var(--muted);
+  letter-spacing: 0.5px;
+}
+
+.ef-clear-btn {
+  padding: 2px 8px;
+  background: transparent;
+  border: 1px solid rgba(244,63,94,0.2);
+  border-radius: 3px;
+  color: rgba(244,63,94,0.5);
+  font-family: inherit;
+  font-size: 8px;
+  letter-spacing: 1px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.ef-clear-btn:hover {
+  background: rgba(244,63,94,0.08);
+  color: #f43f5e;
+  border-color: rgba(244,63,94,0.4);
 }
 </style>

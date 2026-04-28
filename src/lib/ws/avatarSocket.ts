@@ -45,10 +45,16 @@ const _state = writable<AvatarStateMsg>({ ...DEFAULT });
 export const avatarState = readonly(_state);
 
 // ── WS 管理 ──────────────────────────────────────────────────────
-let _ws:      WebSocket | null                      = null;
-let _timer:   ReturnType<typeof setTimeout> | null  = null;
-let _url      = 'ws://localhost:8000/ws/avatar';
-let _running  = false;
+const MAX_RETRIES = 5;
+// 指数バックオフ: 3s → 6s → 12s → 24s → 30s（上限）
+const retryDelay  = (attempt: number) => Math.min(3000 * (1 << (attempt - 1)), 30_000);
+
+let _ws:         WebSocket | null                     = null;
+let _timer:      ReturnType<typeof setTimeout> | null = null;
+let _url         = 'ws://localhost:8000/ws/avatar';
+let _running     = false;
+let _retries     = 0;
+let _failLogged  = false;
 
 function _connect(): void {
   if (!_running) return;
@@ -57,6 +63,8 @@ function _connect(): void {
 
   _ws.onopen = () => {
     console.debug('[avatarSocket] connected to', _url);
+    _retries    = 0;
+    _failLogged = false;
   };
 
   _ws.onmessage = (e: MessageEvent<string>) => {
@@ -70,10 +78,21 @@ function _connect(): void {
 
   _ws.onclose = () => {
     if (!_running) return;
-    console.debug('[avatarSocket] closed — retry in 2 s');
-    _timer = setTimeout(_connect, 2000);
+    _retries++;
+
+    if (_retries > MAX_RETRIES) {
+      if (!_failLogged) {
+        console.warn(`[avatarSocket] Python server unreachable — gave up after ${MAX_RETRIES} attempts. Avatar sync disabled.`);
+        _failLogged = true;
+      }
+      return;
+    }
+
+    const delay = retryDelay(_retries);
+    _timer = setTimeout(_connect, delay);
   };
 
+  // onerror は onclose を誘発するだけ — ここでは何もログしない
   _ws.onerror = () => _ws?.close();
 }
 
@@ -82,16 +101,19 @@ function _connect(): void {
  * 返値をそのまま onDestroy / onMount の cleanup として使える。
  */
 export function initAvatarWs(url = 'ws://localhost:8000/ws/avatar'): () => void {
-  _url     = url;
-  _running = true;
+  _url        = url;
+  _running    = true;
+  _retries    = 0;
+  _failLogged = false;
   _connect();
 
   return () => {
-    _running = false;
+    _running    = false;
+    _retries    = 0;
+    _failLogged = false;
     if (_timer !== null) { clearTimeout(_timer); _timer = null; }
     _ws?.close();
     _ws = null;
-    // ストアをデフォルトに戻す
     _state.set({ ...DEFAULT });
   };
 }

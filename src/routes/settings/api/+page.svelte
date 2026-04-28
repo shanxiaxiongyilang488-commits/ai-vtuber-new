@@ -46,6 +46,8 @@
     status: 'not_tested',
   });
 
+  let falKey = $state('');
+
   let saveFlash = $state<Record<string, boolean>>({});
 
   // ── LocalStorage helpers ───────────────────────────────────────────────────
@@ -63,6 +65,8 @@
 
     local.baseUrl = g('api_local_url') || 'http://localhost:1234';
     local.model   = g('api_local_model') || 'local-model';
+
+    falKey = g('api_fal_key');
   }
 
   function saveOpenai() {
@@ -87,6 +91,11 @@
     localStorage.setItem('api_local_url',   local.baseUrl ?? '');
     localStorage.setItem('api_local_model', local.model);
     flashSave('local');
+  }
+
+  function saveFal() {
+    localStorage.setItem('api_fal_key', falKey);
+    flashSave('fal');
   }
 
   function flashSave(id: string) {
@@ -227,6 +236,7 @@
         <div class="provider-badge claude-badge">Claude</div>
         {@render statusBadge(claude.status)}
       </div>
+      <p class="card-note dev-note">⚠ 開発者専用 — 通常利用は Gemini / OpenAI を推奨</p>
 
       <div class="fields">
         <label class="field">
@@ -299,6 +309,32 @@
           disabled={gemini.status === 'testing'}
         >
           {gemini.status === 'testing' ? 'Testing…' : 'Test Connection'}
+        </button>
+      </div>
+    </section>
+
+    <!-- ── FAL ──────────────────────────────────────────────────────────── -->
+    <section class="card">
+      <div class="card-header">
+        <div class="provider-badge fal-badge">FAL</div>
+      </div>
+      <p class="card-note">画像生成専用 — Flux Schnell（スタジオタブで使用）</p>
+
+      <div class="fields" style="grid-template-columns: 1fr;">
+        <label class="field">
+          <span class="field-label">API Key</span>
+          <input
+            type="password"
+            class="input"
+            placeholder="fal-..."
+            bind:value={falKey}
+          />
+        </label>
+      </div>
+
+      <div class="actions">
+        <button class="btn btn-save" onclick={saveFal}>
+          {saveFlash['fal'] ? 'Saved ✓' : 'Save'}
         </button>
       </div>
     </section>
@@ -438,6 +474,7 @@
     margin-top: -0.75rem;
     margin-bottom: 1.25rem;
   }
+  .dev-note { color: #f59e0b; }
 
   /* ── Provider badges ── */
   .provider-badge {
@@ -452,6 +489,7 @@
   .openai-badge { background: rgba(16,163,127,0.15); color: #10a37f; border: 1px solid rgba(16,163,127,0.3); }
   .claude-badge { background: rgba(205,127,50,0.15);  color: #d97706; border: 1px solid rgba(205,127,50,0.3); }
   .gemini-badge { background: rgba(99,102,241,0.15);  color: #818cf8; border: 1px solid rgba(99,102,241,0.3); }
+  .fal-badge    { background: rgba(168,85,247,0.15);  color: #c084fc; border: 1px solid rgba(168,85,247,0.3); }
   .local-badge  { background: rgba(34,197,94,0.15);   color: #4ade80; border: 1px solid rgba(34,197,94,0.3);  }
 
   /* ── Status badges ── */
