@@ -10,11 +10,35 @@ type Message = {
   text: string;
 };
 
+import { marked } from 'marked';
+
+// 型をちゃんとつける
+function renderMessage(text: string) {
+  if (!text) return "";
+
+  // 強制的に構造化
+  const formatted = text
+    // 見出し
+    .replace(/##\s*/g, '\n\n## ')
+    // セクション区切り
+    .replace(/■\s*/g, '\n\n■ ')
+    // リスト
+    .replace(/-\s*/g, '\n- ')
+    // 文末で改行
+    .replace(/。/g, '。\n')
+    // 連続改行整理
+    .replace(/\n{3,}/g, '\n\n');
+
+  return marked.parse(formatted);
+}
+
 let topic = $state("");
 let modalOpen = $state(false);
 let selectedCharacter = $state<Character | null>(null);
 let messages = $state<Message[]>([]);
 let selectedEngine = $state<"openai" | "gemini" | "claude">("openai");
+// 長文モード：true のとき bubble 幅を拡張し pre-wrap を強制する
+let longMode = $state(false);
 
 // ----------------------------
 // キャラ初期設定
@@ -183,6 +207,54 @@ async function handleStartDiscussion() {
     });
   }
 }
+
+function copyText(text: string) {
+  if (!text) return;
+  navigator.clipboard.writeText(text);
+}
+
+function downloadText(text: string, filename = "output.md") {
+  if (!text) return;
+
+  const blob = new Blob([text], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+
+  URL.revokeObjectURL(url);
+}
+
+// 会話履歴を Markdown 形式に整形してダウンロード
+function generateMarkdown() {
+  if (messages.length === 0) return;
+  const lines = messages.map(m => `## ${m.speaker}\n\n${m.text}`);
+  const content = `# AI ディスカッション\n\nトピック：${topic}\n\n---\n\n${lines.join('\n\n---\n\n')}`;
+  downloadText(content, 'discussion.md');
+}
+
+// 会話履歴を YAML 形式に整形してダウンロード
+function generateYAML() {
+  if (messages.length === 0) return;
+  const entries = messages.map(m =>
+    `- speaker: "${m.speaker}"\n  text: |\n    ${m.text.replace(/\n/g, '\n    ')}`
+  );
+  const content = `topic: "${topic}"\nmessages:\n${entries.join('\n')}`;
+  downloadText(content, 'discussion.yaml');
+}
+
+// AIに資料生成を依頼する（既存の discussion フローを再利用）
+async function generateDocFlow() {
+  const basePrompt = topic.trim()
+    ? `「${topic}」について、以下の構成でMarkdown資料を作成してください。\n\n## 概要\n## 背景・目的\n## 主なポイント（箇条書き）\n## まとめ`
+    : `会話の内容を整理し、以下の構成でMarkdown資料を作成してください。\n\n## 概要\n## 背景・目的\n## 主なポイント（箇条書き）\n## まとめ`;
+  topic = basePrompt;
+  await handleStartDiscussion();
+}
+
+
 </script>
 
 <svelte:head>
@@ -230,6 +302,16 @@ async function handleStartDiscussion() {
           <span class="title-accent">ターミナル</span>
         </h1>
         <div class="header-right">
+          <!-- 資料生成ボタン -->
+          <button class="gen-btn" onclick={generateDocFlow}>📄 資料生成</button>
+          <button class="gen-btn" onclick={generateMarkdown} disabled={messages.length === 0}>MD</button>
+          <button class="gen-btn" onclick={generateYAML}     disabled={messages.length === 0}>YAML</button>
+          <!-- 長文モードトグル -->
+          <button
+            class="long-mode-btn"
+            class:active={longMode}
+            onclick={() => (longMode = !longMode)}
+          >LONG</button>
           <span class="ver-tag">v2.0.0</span>
         </div>
       </div>
@@ -237,7 +319,7 @@ async function handleStartDiscussion() {
     </header>
 
     <!-- Chat area -->
-    <main class="chat-area">
+    <main class="chat-area" class:long-mode={longMode}>
       {#if messages.length === 0}
         <div class="empty-state">
           <div class="corner corner-tl" aria-hidden="true"></div>
@@ -275,9 +357,16 @@ async function handleStartDiscussion() {
       <span class="name">{msg.speaker}</span>
 
       <div class="bubble">
-        {msg.text}
-      </div>
-    </div>
+  <div class="markdown" style="white-space: pre-wrap;">
+    {@html renderMessage(msg.text)}
+  </div>
+</div>
+
+<div class="action-buttons">
+  <button onclick={() => copyText(msg.text)}>📋 COPY</button>
+  <button onclick={() => downloadText(msg.text)}>💾 DL</button>
+</div>
+</div>
 
     {#if !isLeft}
       <div class="avatar">
@@ -434,6 +523,13 @@ async function handleStartDiscussion() {
     -webkit-text-fill-color: transparent;
     background-clip: text;
     filter: drop-shadow(0 0 8px rgba(34, 211, 238, 0.5));
+  }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
   }
 
   .ver-tag {
@@ -801,4 +897,93 @@ async function handleStartDiscussion() {
 .bubble {
   transition: all 0.3s ease;
 }
+
+.markdown ul {
+  padding-left: 20px;
+}
+
+.markdown {
+  white-space: pre-wrap;
+  line-height: 1.6;
+}
+
+.action-buttons {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.action-buttons button {
+  background: #0f172a;
+  border: 1px solid #38bdf8;
+  color: #38bdf8;
+  padding: 4px 8px;
+  font-size: 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.action-buttons button:hover {
+  background: #38bdf8;
+  color: black;
+}
+
+/* ── 長文モードトグルボタン ── */
+.long-mode-btn {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: #475569;
+  background: transparent;
+  border: 1px solid #1e293b;
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s, background 0.2s;
+}
+.long-mode-btn.active {
+  color: #22d3ee;
+  border-color: rgba(34, 211, 238, 0.5);
+  background: rgba(34, 211, 238, 0.06);
+  box-shadow: 0 0 8px rgba(34, 211, 238, 0.15);
+}
+
+/* ── 長文モード：コンテナ幅とバブル幅を拡張 ── */
+.chat-area.long-mode .messages {
+  max-width: min(1200px, 95vw);
+}
+.chat-area.long-mode .bubble-wrap {
+  max-width: 80%;
+}
+/* 長文モード時のみ pre-wrap を CSS で付与（inline style 不使用） */
+.chat-area.long-mode .markdown {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── 資料生成ボタン ── */
+.gen-btn {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: #64748b;
+  background: transparent;
+  border: 1px solid #1e293b;
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s, background 0.2s;
+}
+.gen-btn:hover:not(:disabled) {
+  color: #a855f7;
+  border-color: rgba(168, 85, 247, 0.5);
+  background: rgba(168, 85, 247, 0.06);
+}
+.gen-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
 </style>

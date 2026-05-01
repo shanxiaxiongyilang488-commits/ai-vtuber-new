@@ -9,6 +9,8 @@
   let previewUrl    = $state<string | null>(null);
   let revisedPrompt = $state<string | null>(null);
   let errorMsg      = $state('');
+  let characterLock = true;
+  let generatedPanels: string[] = [];
 
   type RefImage = {
     thumb: string;   // compressed base64 thumbnail for display
@@ -46,7 +48,7 @@
   let refPanelOpen = $state(true);
 
   // ── Model toggle ─────────────────────────────────────────
-  let studioModel = $state<'fast' | 'gptimage2' | 'fal'>('fast');
+  let studioModel = $state<'gpt-image-2' | 'fal-fast' | 'fal-pro'>('gpt-image-2');
 
   // ── One Panel Pro Mode ────────────────────────────────────
   let proModeOpen   = $state(false);
@@ -153,15 +155,47 @@
       : `grid-template-columns: repeat(${gridCols}, 1fr); grid-template-rows: repeat(${gridRows}, 1fr);`
   );
 
+async function buildPrompt(basePrompt: string, refDescription: string) {
+  const res = await fetch('/api/prompt', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' }, // ← 追加
+  body: JSON.stringify({ basePrompt, refDescription })
+});
+
+  const data = await res.json();
+  return data.prompt;
+}
+
+
   // ============================================================
   // Actions
   // ============================================================
   async function callGenerate(p: string, s: ImageSize): Promise<string> {
-    const res = await fetch('/api/studio/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: injectRefs(p), size: s, model: studioModel }),
-    });
+    // Claudeでプロンプト強化
+const enhanced = await buildPrompt(
+  injectRefs(p),
+  `
+use the exact same character as the reference image
+
+same face, same hair, same outfit, same proportions
+
+do not redesign the character
+
+anime girl, long twin tails with rainbow gradient hair, blue eyes, idol outfit
+`
+);
+
+// 生成
+const res = await fetch('/api/studio/generate', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    prompt: enhanced,
+    size: s,
+    model: studioModel,
+    refImage: refA?.thumb ?? undefined
+  })
+});
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
       throw new Error(data.message ?? `HTTP ${res.status}`);
@@ -182,7 +216,7 @@
       const res = await fetch('/api/studio/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: injectRefs(p), size, model: studioModel }),
+        body: JSON.stringify({ prompt: injectRefs(p), size, model: studioModel, refImage: refA?.thumb ?? undefined }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -844,7 +878,7 @@
       const res = await fetch('/api/studio/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: injectRefs(`${p}, ${buildNegativeHint()}`), size, model: studioModel }),
+        body: JSON.stringify({ prompt: injectRefs(`${p}, ${buildNegativeHint()}`), size, model: studioModel, refImage: refA?.thumb ?? undefined }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -1266,7 +1300,7 @@
         const blob   = await new Promise<Blob>(res => canvas.toBlob(b => res(b!), 'image/png'));
         files.push({ name: `page-${i + 1}.png`, data: new Uint8Array(await blob.arrayBuffer()) });
       }
-      triggerDownload(new Blob([buildZip(files)], { type: 'application/zip' }),
+      triggerDownload(new Blob([buildZip(files).buffer as ArrayBuffer], { type: 'application/zip' }),
         `${slugName()}-export.zip`);
     } finally { exporting = false; }
   }
@@ -1280,7 +1314,7 @@
         const blob   = await new Promise<Blob>(res => canvas.toBlob(b => res(b!), 'image/jpeg', 0.92));
         pdfPages.push({ bytes: new Uint8Array(await blob.arrayBuffer()), w: canvas.width, h: canvas.height });
       }
-      triggerDownload(new Blob([buildPdf(pdfPages)], { type: 'application/pdf' }),
+      triggerDownload(new Blob([buildPdf(pdfPages).slice()], { type: 'application/pdf' }),
         `${slugName()}.pdf`);
     } finally { exporting = false; }
   }
@@ -1829,22 +1863,22 @@
           <div class="model-toggle">
             <button
               class="model-btn"
-              class:active={studioModel === 'fast'}
-              onclick={() => studioModel = 'fast'}
-              title="DALL-E 3 — reliable, revised prompt"
-            >Fast</button>
-            <button
-              class="model-btn"
-              class:active={studioModel === 'gptimage2'}
-              onclick={() => studioModel = 'gptimage2'}
-              title="GPT Image 1 — higher quality"
+              class:active={studioModel === 'gpt-image-2'}
+              onclick={() => studioModel = 'gpt-image-2'}
+              title="GPT Image 2 — character reference edit"
             >GPT Image 2</button>
             <button
               class="model-btn"
-              class:active={studioModel === 'fal'}
-              onclick={() => studioModel = 'fal'}
-              title="FAL Flux Schnell — fast open-source model"
-            >FAL Flux</button>
+              class:active={studioModel === 'fal-fast'}
+              onclick={() => studioModel = 'fal-fast'}
+              title="FAL Flux Dev — fast open-source model"
+            >FAL Flux Dev</button>
+            <button
+              class="model-btn"
+              class:active={studioModel === 'fal-pro'}
+              onclick={() => studioModel = 'fal-pro'}
+              title="FAL Flux Pro — high quality generation"
+            >FAL Flux Pro</button>
           </div>
           <select class="size-select" bind:value={size}>
             <option value="1024x1024">1:1 Square</option>
@@ -4324,4 +4358,83 @@
   line-height: 1.5;
   word-break: break-all;
 }
+
+.preview-img {
+  width: 100%;
+  height: auto;
+  object-fit: contain;
+  display: block;
+}
+
+.preview-area {
+  max-height: 600px;
+  overflow: auto;
+}
+
+.preview-panel {
+  height: auto !important;
+}
+
+.preview-area {
+  max-height: none !important;
+}
+
+.preview-img {
+  max-height: none !important;
+}
+
+.preview-panel {
+  width: 100%;
+}
+
+.preview-area {
+  width: 100%;
+  overflow: auto;
+}
+
+.preview-img {
+  width: 100%;
+  min-width: 600px; /* ←これが重要 */
+}
+
+/* =========================
+   PREVIEW 完全修正版
+========================= */
+
+/* 親パネル制限解除 */
+.preview-panel,
+.panel.preview-panel {
+  height: auto !important;
+  width: 100%;
+}
+
+/* プレビューエリア（高さ制限解除＆スクロール対応） */
+.preview-area {
+  width: 100%;
+  height: auto;
+  max-height: none;          /* ← これが超重要 */
+  overflow-x: auto;          /* 横スクロール */
+  overflow-y: auto;          /* 縦スクロール */
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+}
+
+/* 画像本体 */
+.preview-img {
+  display: block;
+  width: 100%;
+  height: auto;
+  object-fit: contain;
+  max-width: 100%;
+  min-width: 600px;          /* ← 小さく潰れ防止（必要なら調整） */
+}
+
+/* さらに外側の制限を潰す（ラスボス対策） */
+.col-left,
+.panel {
+  height: auto !important;
+  overflow: visible !important;
+}
+
 </style>
