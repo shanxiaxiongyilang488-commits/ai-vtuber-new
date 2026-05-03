@@ -2,11 +2,9 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 
 interface GenerateRequest {
-  prompt:   string;
-  negative: string;
+  prompt:    string;
+  dialogue?: string;
 }
-
-console.log("generate API called");
 
 export const POST: RequestHandler = async ({ request }) => {
   let body: GenerateRequest;
@@ -18,9 +16,14 @@ export const POST: RequestHandler = async ({ request }) => {
 
   if (!body.prompt?.trim()) throw error(400, 'prompt is required');
 
-  console.log(`[api/generate] prompt="${body.prompt.slice(0, 80)}" negative="${body.negative.slice(0, 60)}"`);
+  console.log(`[api/generate] prompt="${body.prompt.slice(0, 80)}"`);
 
-  return json({
-  image: "https://placehold.co/512x512?text=Generated"
-});
+  const res = await fetch('http://localhost:5173/api/studio/generate', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ prompt: body.prompt.trim() }),
+  });
+
+  const data = await res.json();
+  return json({ image: data.url ?? data.image });
 };

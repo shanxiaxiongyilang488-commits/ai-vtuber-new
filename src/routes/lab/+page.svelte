@@ -83,6 +83,12 @@
   let selectedAvatar = $state('/avatars/muryi.png');
   let editingName = $state(false);
   let tooltipKey = $state<string | null>(null);
+  let personaModalOpen = $state(false);
+  let charAvatarImages = $state<Record<string, string>>({});
+  let fileInput = $state<HTMLInputElement | null>(null);
+
+  // アップロード済みがあればそちらを優先、なければ静的ファイルパス
+  let currentAvatarSrc = $derived(charAvatarImages[charName] ?? selectedAvatar);
 
   let personality = $state<Personality>({
     trust: 76, affection: 61, lonely: 40, energy: 70,
@@ -359,10 +365,31 @@
     localStorage.setItem(LS_LAST_CHAR, name);
     if (presetId) {
       applyPreset(presetId);
-      setTimeout(() => {
-        document.getElementById('persona-editor')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }, 50);
     }
+    personaModalOpen = true;
+  }
+
+  // ── キャラアイコン管理 ──────────────────────────────────
+  function saveCharIcons() {
+    localStorage.setItem(LS_CHAR_ICONS, JSON.stringify(charAvatarImages));
+  }
+
+  function handleIconUpload(e: Event) {
+    const file = (e.target as HTMLInputElement).files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      charAvatarImages = { ...charAvatarImages, [charName]: reader.result as string };
+      saveCharIcons();
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function removeCharIcon() {
+    const next = { ...charAvatarImages };
+    delete next[charName];
+    charAvatarImages = next;
+    saveCharIcons();
   }
 
   // ============================================================
@@ -1878,7 +1905,7 @@
       return;
     }
 
-    messages = [...messages, { role: 'ai', text: aiText, time: getTime(), avatar: selectedAvatar, imagePrompt: toggles.imagePromptMode ? buildImagePrompt() : undefined }];
+    messages = [...messages, { role: 'ai', text: aiText, time: getTime(), avatar: currentAvatarSrc, imagePrompt: toggles.imagePromptMode ? buildImagePrompt() : undefined }];
     addMemory('assistant', aiText);
     updateEmotionFromReply(aiText);
     // Fire-and-forget: never awaited, never breaks chat
@@ -1954,24 +1981,19 @@
   ];
 
   const PRESET_LIST: { id: PresetName; label: string; color: string }[] = [
-    { id: 'muryi',    label: 'ミュリィ',  color: '#00e5ff' },
-    { id: 'tsundere', label: 'ツンデレ',  color: '#fb923c' },
-    { id: 'yandere',  label: 'ヤンデレ',  color: '#f43f5e' },
-    { id: 'kuudere',  label: 'クーデレ',  color: '#818cf8' },
-    { id: 'risea',    label: 'リセア',    color: '#34d399' },
-    { id: 'amaenbou', label: '甘えん坊',  color: '#f9a8d4' },
-    { id: 'imouto',   label: '妹系',      color: '#fbbf24' },
-    { id: 'joousama', label: '女王様',    color: '#c084fc' },
-    { id: 'shio',     label: '塩対応',    color: '#64748b' },
-    { id: 'mukanjo',  label: '無感情AI',  color: '#94a3b8' },
-    { id: 'jealous',  label: '嫉妬深い',  color: '#dc2626' },
-    { id: 'hogo',     label: '保護者',    color: '#059669' },
-    { id: 'youkya',   label: '陽キャ',    color: '#f97316' },
-    { id: 'menhera',  label: 'メンヘラ',  color: '#e879f9' },
-    { id: 'ciel',     label: 'シエル',    color: '#93c5fd' },
-    { id: 'menoa',    label: 'メノア',    color: '#86efac' },
-    { id: 'piona',    label: 'ピオナ',    color: '#fbbf24' },
-    { id: 'custom',   label: 'Custom',    color: '#a78bfa' },
+    { id: 'tsundere', label: 'ツンデレ', color: '#fb923c' },
+    { id: 'yandere',  label: 'ヤンデレ', color: '#f43f5e' },
+    { id: 'kuudere',  label: 'クール',   color: '#818cf8' },
+    { id: 'amaenbou', label: '甘えん坊', color: '#f9a8d4' },
+    { id: 'imouto',   label: '妹系',     color: '#fbbf24' },
+    { id: 'joousama', label: '女王様',   color: '#c084fc' },
+    { id: 'shio',     label: '塩対応',   color: '#64748b' },
+    { id: 'mukanjo',  label: '無口',     color: '#94a3b8' },
+    { id: 'jealous',  label: '嫉妬深い', color: '#dc2626' },
+    { id: 'hogo',     label: '優しい',   color: '#059669' },
+    { id: 'youkya',   label: '元気',     color: '#f97316' },
+    { id: 'menhera',  label: 'メンヘラ', color: '#e879f9' },
+    { id: 'custom',   label: 'Custom',   color: '#a78bfa' },
   ];
 
   const TOGGLE_LIST = [
@@ -2046,6 +2068,7 @@
   const LS_RECENT_PROGRESS = 'lab-recent-progress';
   const LS_LAST_CHAR       = 'lab-last-char';
   const LS_CHAT_HISTORY    = 'lab-chat-history';
+  const LS_CHAR_ICONS      = 'lab-char-icons';
   const HISTORY_MAX        = 50;
   const LS_LONG_MEMORY        = 'lab-long-memory';
   const LS_MEMORY_UPDATED_AT  = 'lab-memory-updated-at';
@@ -2570,7 +2593,7 @@ ${recent}
         const data    = await res.json();
         const aiText: string = ($sessionStore.provider === 'onair' ? data.reply : data.text) ?? '';
         if (aiText) {
-          messages = [...messages, { role: 'ai', text: aiText, time: getTime(), avatar: selectedAvatar }];
+          messages = [...messages, { role: 'ai', text: aiText, time: getTime(), avatar: currentAvatarSrc }];
           localStorage.setItem(LS_LAST_MOOD,       detectMood(aiText));
           localStorage.setItem(LS_RECENT_PROGRESS, aiText.length > 50 ? aiText.slice(0, 50) + '…' : aiText);
           setTimeout(() => chatEl?.scrollTo({ top: chatEl.scrollHeight, behavior: 'smooth' }), 50);
@@ -2786,6 +2809,12 @@ ${recent}
     // ⑤ 常に最下部へスクロール（初回起動・挨拶のみ・履歴復元いずれも）
     setTimeout(() => chatEl?.scrollTo({ top: chatEl.scrollHeight, behavior: 'smooth' }), 80);
 
+    // キャラアイコン復元
+    const savedIcons = localStorage.getItem(LS_CHAR_ICONS);
+    if (savedIcons) {
+      try { charAvatarImages = JSON.parse(savedIcons); } catch { /* 破損データは無視 */ }
+    }
+
     sessionStore.init();
     resetIdleTimer(); // autoTalk ON の場合、起動直後からタイマー開始
 
@@ -2812,6 +2841,248 @@ ${recent}
 <!-- ============================================================
      ROOT
      ============================================================ -->
+<svelte:window onkeydown={(e) => { if (e.key === 'Escape') personaModalOpen = false; }} />
+
+<!-- ── Persona Modal ── -->
+{#if personaModalOpen}
+  <div
+    class="persona-overlay"
+    onclick={(e) => { if (e.target === e.currentTarget) personaModalOpen = false; }}
+    role="dialog"
+    aria-modal="true"
+  >
+    <div class="persona-modal">
+      <!-- Header -->
+      <div class="pm-header">
+        <span class="pm-tag">◈ PERSONA CONFIG</span>
+        <span class="pm-char">{charName}</span>
+        <button class="pm-close" onclick={() => personaModalOpen = false}>×</button>
+      </div>
+      <div class="pm-header-line"></div>
+
+      <!-- Body: 既存のペルソナセクションをそのまま包む -->
+      <div class="pm-body">
+
+        <!-- PROFILE HEADER -->
+        <div class="profile-header">
+          <input
+            type="file"
+            accept="image/*"
+            bind:this={fileInput}
+            style="display:none"
+            onchange={handleIconUpload}
+          />
+                    <div
+            class="avatar-wrapper"
+            tabindex="0"
+            onclick={() => fileInput?.click()}
+            onkeydown={(e) => e.key === 'Enter' && fileInput?.click()}
+          >
+            <img
+              src={currentAvatarSrc}
+              alt={charName}
+              class="profile-avatar"
+              onerror={(e) => { (e.target as HTMLImageElement).src = '/avatars/default.png'; }}
+            />
+          </div>
+          <div class="profile-name">{charName}</div>
+          <div class="avatar-hint">タップで変更</div>
+        </div>
+        <div class="pm-section-divider"></div>
+
+        <!-- PRESET BUTTONS -->
+        <div class="section-lbl">PERSONA PRESETS</div>
+        <div class="preset-grid">
+          {#each PRESET_LIST as p}
+            <button
+              class="preset-btn"
+              class:active={activePreset === p.id}
+              style="--pc:{p.color}"
+              onclick={() => applyPreset(p.id)}
+            >
+              {p.label}
+            </button>
+          {/each}
+        </div>
+
+        {#if activePreset !== 'custom'}
+          <button class="cp-dup-btn cp-dup-standalone" onclick={duplicateToCustom}>
+            ◈ DUPLICATE CURRENT → CUSTOM
+          </button>
+        {/if}
+
+        <!-- Persona Editor -->
+        <div class="custom-profile-section" id="persona-editor">
+          <div class="cp-editor-hd">
+            {activePreset === 'custom' ? '◈ CUSTOM PERSONA EDITOR' : '◈ CURRENT PERSONA'}
+          </div>
+          <div class="cp-fields">
+            <div class="cp-row">
+              <span class="cp-lbl">NAME</span>
+              <input
+                class="cp-input"
+                type="text"
+                placeholder="キャラクター名"
+                bind:value={customProfile.name}
+                oninput={saveCustomProfile}
+                disabled={activePreset !== 'custom'}
+              />
+            </div>
+            <div class="cp-row">
+              <span class="cp-lbl">一人称</span>
+              <input
+                class="cp-input"
+                type="text"
+                placeholder="私、僕、俺 など"
+                bind:value={customProfile.firstPerson}
+                oninput={saveCustomProfile}
+              />
+            </div>
+            <div class="cp-row">
+              <span class="cp-lbl">二人称</span>
+              <input
+                class="cp-input"
+                type="text"
+                placeholder="あなた、君、お前 など"
+                bind:value={customProfile.secondPerson}
+                oninput={saveCustomProfile}
+              />
+            </div>
+            <div class="cp-row">
+              <span class="cp-lbl">他人</span>
+              <input
+                class="cp-input"
+                type="text"
+                placeholder="あの人、彼、彼女 など"
+                bind:value={customProfile.thirdPerson}
+                oninput={saveCustomProfile}
+              />
+            </div>
+            <div class="cp-row">
+              <span class="cp-lbl">口調</span>
+              <textarea
+                class="cp-input cp-textarea"
+                placeholder="話し方・性格の説明"
+                bind:value={customProfile.speechStyle}
+                oninput={saveCustomProfile}
+                disabled={activePreset !== 'custom'}
+              ></textarea>
+            </div>
+            <div class="cp-row">
+              <span class="cp-lbl">口癖</span>
+              <input
+                class="cp-input"
+                type="text"
+                placeholder="よく使う表現・口癖"
+                bind:value={customProfile.habits}
+                oninput={saveCustomProfile}
+                disabled={activePreset !== 'custom'}
+              />
+            </div>
+            <div class="cp-row">
+              <span class="cp-lbl">語尾</span>
+              <input
+                class="cp-input"
+                type="text"
+                placeholder="語尾の特徴"
+                bind:value={customProfile.sentenceEnding}
+                oninput={saveCustomProfile}
+                disabled={activePreset !== 'custom'}
+              />
+            </div>
+            <div class="cp-row">
+              <span class="cp-lbl">怒り方</span>
+              <input
+                class="cp-input"
+                type="text"
+                placeholder="怒った時の言い方"
+                bind:value={customProfile.angerStyle}
+                oninput={saveCustomProfile}
+                disabled={activePreset !== 'custom'}
+              />
+            </div>
+            <div class="cp-row">
+              <span class="cp-lbl">甘い時</span>
+              <input
+                class="cp-input"
+                type="text"
+                placeholder="好意・愛情表現"
+                bind:value={customProfile.affectionStyle}
+                oninput={saveCustomProfile}
+                disabled={activePreset !== 'custom'}
+              />
+            </div>
+            <div class="cp-row">
+              <span class="cp-lbl">嫉妬時</span>
+              <input
+                class="cp-input"
+                type="text"
+                placeholder="嫉妬した時の言い方"
+                bind:value={customProfile.jealousyStyle}
+                oninput={saveCustomProfile}
+                disabled={activePreset !== 'custom'}
+              />
+            </div>
+            <div class="cp-row">
+              <span class="cp-lbl">メモ</span>
+              <textarea
+                class="cp-input cp-textarea"
+                placeholder="その他の性格・設定メモ"
+                bind:value={customProfile.memo}
+                oninput={saveCustomProfile}
+                disabled={activePreset !== 'custom'}
+              ></textarea>
+            </div>
+          </div>
+
+          {#if activePreset === 'custom'}
+            <div class="cp-slots">
+              <div class="cp-slots-hd">SAVE SLOTS</div>
+              {#each (['a', 'b', 'c'] as const) as k}
+                <div class="cp-slot-row">
+                  <span class="cp-slot-label">SLOT {k.toUpperCase()}</span>
+                  <span class="cp-slot-name">{customSlots[k]?.name || '— empty —'}</span>
+                  <button class="cp-slot-btn cp-save" onclick={() => saveSlot(k)}>SAVE</button>
+                  <button class="cp-slot-btn cp-load" onclick={() => loadSlot(k)} disabled={!customSlots[k]}>LOAD</button>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </div>
+
+        <!-- VOICE CONFIG -->
+        <div class="pm-section-divider"></div>
+        <div class="pm-sub-section">
+          <div class="section-lbl">VOICE CONFIG</div>
+          <div class="vc-rows">
+            <div class="vc-row">
+              <span class="vc-lbl">ENGINE</span>
+              <select class="vc-select" bind:value={voiceEngine}>
+                <option value="none">NONE</option>
+                <option value="voicevox">VOICEVOX</option>
+                <option value="elevenlabs">ELEVENLABS</option>
+              </select>
+            </div>
+            {#if voiceEngine === 'voicevox'}
+              <div class="vc-row">
+                <span class="vc-lbl">SPEAKER ID</span>
+                <input type="number" class="vc-input" bind:value={speakerId} min="0" max="999" />
+              </div>
+            {/if}
+            {#if voiceEngine === 'elevenlabs'}
+              <div class="vc-row">
+                <span class="vc-lbl">VOICE ID</span>
+                <input type="text" class="vc-input" bind:value={voiceId} placeholder="voice id…" />
+              </div>
+            {/if}
+          </div>
+        </div>
+
+      </div><!-- /pm-body -->
+    </div><!-- /persona-modal -->
+  </div><!-- /persona-overlay -->
+{/if}
+
 <div class="lab" class:night-mode={toggles.nightMode}>
 
   <!-- ==================== HEADER ==================== -->
@@ -3049,7 +3320,7 @@ ${recent}
           <div class="msg-wrap ai">
             <div class="msg-av ai-av">
               <img
-                src={selectedAvatar}
+                src={currentAvatarSrc}
                 alt={charName}
                 onerror={(e) => { (e.target as HTMLImageElement).src = '/avatars/default.png'; }}
               />
@@ -3421,7 +3692,7 @@ ${recent}
           >
             <div class="avatar-inner">
               <img
-                src={selectedAvatar}
+                src={currentAvatarSrc}
                 alt={charName}
                 class="av-img"
                 onerror={(e) => { (e.target as HTMLImageElement).src = '/avatars/default.png'; }}
@@ -3481,7 +3752,7 @@ ${recent}
               title={av.name}
             >
               <img
-                src={av.file}
+                src={charAvatarImages[av.name] ?? av.file}
                 alt={av.name}
                 onerror={(e) => { (e.target as HTMLImageElement).src = '/avatars/default.png'; }}
               />
@@ -3507,167 +3778,16 @@ ${recent}
         </div>
       </div>
 
-      <!-- 3. PERSONA PRESETS + CUSTOM PERSONA EDITOR + SAVE SLOTS -->
+      <!-- 3. PERSONA: キャラクターカードクリックでモーダルを開く -->
       <div class="ctrl-section">
-        <div class="section-lbl">PERSONA PRESETS</div>
-        <div class="preset-grid">
-          {#each PRESET_LIST as p}
-            <button
-              class="preset-btn"
-              class:active={activePreset === p.id}
-              style="--pc:{p.color}"
-              onclick={() => applyPreset(p.id)}
-            >
-              {p.label}
-            </button>
-          {/each}
-        </div>
-
-        {#if activePreset !== 'custom'}
-          <button class="cp-dup-btn cp-dup-standalone" onclick={duplicateToCustom}>
-            ◈ DUPLICATE CURRENT → CUSTOM
-          </button>
-        {/if}
-
-        <!-- Persona Editor: 全プリセット常時表示 / 人格フィールドはpreset時read-only -->
-        <div class="custom-profile-section" id="persona-editor">
-          <div class="cp-editor-hd">
-            {activePreset === 'custom' ? '◈ CUSTOM PERSONA EDITOR' : '◈ CURRENT PERSONA'}
-          </div>
-          <div class="cp-fields">
-            <div class="cp-row">
-              <span class="cp-lbl">NAME</span>
-              <input
-                class="cp-input"
-                type="text"
-                placeholder="キャラクター名"
-                bind:value={customProfile.name}
-                oninput={saveCustomProfile}
-                disabled={activePreset !== 'custom'}
-              />
-            </div>
-            <div class="cp-row">
-              <span class="cp-lbl">一人称</span>
-              <input
-                class="cp-input"
-                type="text"
-                placeholder="私、僕、俺 など"
-                bind:value={customProfile.firstPerson}
-                oninput={saveCustomProfile}
-              />
-            </div>
-            <div class="cp-row">
-              <span class="cp-lbl">二人称</span>
-              <input
-                class="cp-input"
-                type="text"
-                placeholder="あなた、君、お前 など"
-                bind:value={customProfile.secondPerson}
-                oninput={saveCustomProfile}
-              />
-            </div>
-            <div class="cp-row">
-              <span class="cp-lbl">他人</span>
-              <input
-                class="cp-input"
-                type="text"
-                placeholder="あの人、彼、彼女 など"
-                bind:value={customProfile.thirdPerson}
-                oninput={saveCustomProfile}
-              />
-            </div>
-            <div class="cp-row">
-              <span class="cp-lbl">口調</span>
-              <textarea
-                class="cp-input cp-textarea"
-                placeholder="話し方・性格の説明"
-                bind:value={customProfile.speechStyle}
-                oninput={saveCustomProfile}
-                disabled={activePreset !== 'custom'}
-              ></textarea>
-            </div>
-            <div class="cp-row">
-              <span class="cp-lbl">口癖</span>
-              <input
-                class="cp-input"
-                type="text"
-                placeholder="よく使う表現・口癖"
-                bind:value={customProfile.habits}
-                oninput={saveCustomProfile}
-                disabled={activePreset !== 'custom'}
-              />
-            </div>
-            <div class="cp-row">
-              <span class="cp-lbl">語尾</span>
-              <input
-                class="cp-input"
-                type="text"
-                placeholder="語尾の特徴"
-                bind:value={customProfile.sentenceEnding}
-                oninput={saveCustomProfile}
-                disabled={activePreset !== 'custom'}
-              />
-            </div>
-            <div class="cp-row">
-              <span class="cp-lbl">怒り方</span>
-              <input
-                class="cp-input"
-                type="text"
-                placeholder="怒った時の言い方"
-                bind:value={customProfile.angerStyle}
-                oninput={saveCustomProfile}
-                disabled={activePreset !== 'custom'}
-              />
-            </div>
-            <div class="cp-row">
-              <span class="cp-lbl">甘い時</span>
-              <input
-                class="cp-input"
-                type="text"
-                placeholder="好意・愛情表現"
-                bind:value={customProfile.affectionStyle}
-                oninput={saveCustomProfile}
-                disabled={activePreset !== 'custom'}
-              />
-            </div>
-            <div class="cp-row">
-              <span class="cp-lbl">嫉妬時</span>
-              <input
-                class="cp-input"
-                type="text"
-                placeholder="嫉妬した時の言い方"
-                bind:value={customProfile.jealousyStyle}
-                oninput={saveCustomProfile}
-                disabled={activePreset !== 'custom'}
-              />
-            </div>
-            <div class="cp-row">
-              <span class="cp-lbl">メモ</span>
-              <textarea
-                class="cp-input cp-textarea"
-                placeholder="その他の性格・設定メモ"
-                bind:value={customProfile.memo}
-                oninput={saveCustomProfile}
-                disabled={activePreset !== 'custom'}
-              ></textarea>
-            </div>
-          </div>
-
-          {#if activePreset === 'custom'}
-            <!-- Save Slots: Custom モード時のみ表示 -->
-            <div class="cp-slots">
-              <div class="cp-slots-hd">SAVE SLOTS</div>
-              {#each (['a', 'b', 'c'] as const) as k}
-                <div class="cp-slot-row">
-                  <span class="cp-slot-label">SLOT {k.toUpperCase()}</span>
-                  <span class="cp-slot-name">{customSlots[k]?.name || '— empty —'}</span>
-                  <button class="cp-slot-btn cp-save" onclick={() => saveSlot(k)}>SAVE</button>
-                  <button class="cp-slot-btn cp-load" onclick={() => loadSlot(k)} disabled={!customSlots[k]}>LOAD</button>
-                </div>
-              {/each}
-            </div>
-          {/if}
-        </div>
+        <div class="section-lbl">PERSONA</div>
+        <p class="persona-hint">キャラクターカードをクリックして編集</p>
+        <button
+          class="persona-open-btn"
+          onclick={() => personaModalOpen = true}
+        >
+          ◈ {activePreset !== 'custom' ? (PRESET_LIST.find(p => p.id === activePreset)?.label ?? activePreset) : 'Custom'} — EDIT PERSONA
+        </button>
       </div>
 
       <!-- 5. PARAMETER MATRIX -->
@@ -3726,34 +3846,9 @@ ${recent}
         </div>
       </div>
 
-      <!-- 7. VOICE CONFIG -->
-      <div class="av-effects voice-cfg-block">
-        <div class="section-lbl">VOICE CONFIG</div>
-        <div class="vc-rows">
-          <div class="vc-row">
-            <span class="vc-lbl">ENGINE</span>
-            <select class="vc-select" bind:value={voiceEngine}>
-              <option value="none">NONE</option>
-              <option value="voicevox">VOICEVOX</option>
-              <option value="elevenlabs">ELEVENLABS</option>
-            </select>
-          </div>
-          {#if voiceEngine === 'voicevox'}
-            <div class="vc-row">
-              <span class="vc-lbl">SPEAKER ID</span>
-              <input type="number" class="vc-input" bind:value={speakerId} min="0" max="999" />
-            </div>
-          {/if}
-          {#if voiceEngine === 'elevenlabs'}
-            <div class="vc-row">
-              <span class="vc-lbl">VOICE ID</span>
-              <input type="text" class="vc-input" bind:value={voiceId} placeholder="voice id…" />
-            </div>
-          {/if}
-        </div>
-      </div>
+      <!-- 7. VOICE CONFIG → persona modal に統合 -->
 
-      <!-- 8. AI CONFIG -->
+      <!-- 8. AI CONFIG（グローバル設定） -->
       <div class="av-effects ai-cfg-block">
         <div class="section-lbl">AI CONFIG</div>
         <div class="vc-rows">
@@ -7832,5 +7927,221 @@ ${recent}
   background: rgba(244,63,94,0.08);
   color: #f43f5e;
   border-color: rgba(244,63,94,0.4);
+}
+
+/* ── Persona Modal ── */
+.persona-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: pm-overlay-in 0.18s ease forwards;
+}
+@keyframes pm-overlay-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.persona-modal {
+  width: min(480px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  background: linear-gradient(145deg, rgba(8, 12, 24, 0.98), rgba(14, 8, 30, 0.98));
+  border: 1px solid rgba(34, 211, 238, 0.35);
+  border-radius: 14px;
+  box-shadow:
+    0 0 40px rgba(34, 211, 238, 0.12),
+    0 24px 64px rgba(0, 0, 0, 0.8);
+  animation: pm-modal-in 0.22s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(34,211,238,0.2) transparent;
+}
+@keyframes pm-modal-in {
+  from { opacity: 0; transform: scale(0.92) translateY(12px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.pm-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 18px 12px;
+}
+.pm-tag {
+  font-family: 'Courier New', monospace;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  color: rgba(34, 211, 238, 0.6);
+  text-transform: uppercase;
+}
+.pm-char {
+  flex: 1;
+  font-size: 15px;
+  font-weight: 700;
+  color: #22d3ee;
+  text-shadow: 0 0 10px rgba(34, 211, 238, 0.5);
+  letter-spacing: 0.06em;
+}
+.pm-close {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: none;
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+  flex-shrink: 0;
+  padding: 0;
+}
+.pm-close:hover {
+  background: rgba(248, 113, 113, 0.18);
+  color: #f87171;
+}
+.pm-header-line {
+  height: 1px;
+  background: linear-gradient(90deg, rgba(34,211,238,0.4), rgba(168,85,247,0.2), transparent);
+  margin: 0 18px;
+}
+.pm-body {
+  padding: 16px 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ── Persona hint / open button (inline section) ── */
+.persona-hint {
+  font-size: 10px;
+  color: rgba(34, 211, 238, 0.35);
+  letter-spacing: 0.06em;
+  margin: 0;
+}
+.persona-open-btn {
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 7px;
+  border: 1px solid rgba(34, 211, 238, 0.3);
+  background: rgba(34, 211, 238, 0.06);
+  color: #22d3ee;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+.persona-open-btn:hover {
+  background: rgba(34, 211, 238, 0.12);
+  border-color: rgba(34, 211, 238, 0.6);
+  box-shadow: 0 0 10px rgba(34, 211, 238, 0.15);
+}
+
+/* pm-body スクロール対応 */
+.pm-body {
+  overflow-y: auto;
+  max-height: calc(100vh - 120px);
+  scrollbar-width: thin;
+  scrollbar-color: rgba(34,211,238,0.2) transparent;
+}
+
+/* セクション区切り */
+.pm-section-divider {
+  height: 1px;
+  background: linear-gradient(90deg, rgba(34,211,238,0.2), rgba(168,85,247,0.1), transparent);
+  margin: 4px 0;
+}
+
+.pm-sub-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+/* ── Profile Header ── */
+.profile-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  width: 100%;
+  margin: 0 auto 28px auto;
+}
+.profile-avatar {
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  object-fit: cover;
+  cursor: pointer;
+  border: 2px solid #00ffff;
+  transition: transform 0.2s, opacity 0.2s, box-shadow 0.2s;
+  position: relative;
+  box-shadow: 0 0 12px rgba(0, 255, 255, 0.4);
+}
+
+/* ホバー */
+.profile-avatar:hover {
+  transform: scale(1.08);
+  opacity: 0.9;
+  box-shadow: 0 0 18px rgba(0, 255, 255, 0.8);
+}
+
+/* クリック時（押した感） */
+.profile-avatar:active {
+  transform: scale(0.95);
+  box-shadow: 0 0 6px rgba(0, 255, 255, 0.4);
+}
+
+/* ＋マーク表示用ラッパー想定 */
+.avatar-wrapper {
+  position: relative;
+  display: inline-block;
+}
+
+/* 右下に＋表示 */
+.avatar-wrapper::after {
+  content: "＋";
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 22px;
+  height: 22px;
+  font-size: 14px;
+  color: #0ff;
+  background: rgba(0, 0, 0, 0.7);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #00ffff;
+  box-shadow: 0 0 6px rgba(0,255,255,0.6);
+}
+
+/* 名前 */
+.profile-name {
+  margin-top: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #e2e8f0;
+  letter-spacing: 0.06em;
+}
+
+/* ヒント */
+.avatar-hint {
+  font-size: 11px;
+  color: rgba(0, 255, 255, 0.45);
+  margin-top: 4px;
+  letter-spacing: 0.06em;
 }
 </style>

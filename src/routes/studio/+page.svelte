@@ -147,7 +147,12 @@
 
   let layout    = $derived(pages[activePage].layout);
   let panels    = $derived(pages[activePage].panels);
-  let gridCols  = $derived(layout === 'single' || layout === '3vertical' ? 1 : 2);
+  // free レイアウト時はコマ数の平方根で列数を自動決定（4→2列, 6→3列, 9→3列）
+  let gridCols  = $derived(
+    layout === 'single' || layout === '3vertical' ? 1 :
+    layout === 'free' ? Math.ceil(Math.sqrt(panels.length)) :
+    2
+  );
   let gridRows  = $derived(Math.ceil(panels.length / gridCols));
   let gridStyle = $derived(
     layout === 'free'
@@ -260,8 +265,11 @@ const res = await fetch('/api/studio/generate', {
   }
 
   function sendToPanel(i: number) {
+    console.log('[sendToPanel] previewUrl:', previewUrl?.slice(0, 60) ?? 'null');
     if (!previewUrl) return;
-    panels[i] = { ...panels[i], prompt: pages[activePage].prompt, imageUrl: previewUrl };
+    // $derived の panels[i] ではなく $state の元データに直接代入する
+    pages[activePage].panels[i] = { ...panels[i], prompt: pages[activePage].prompt, imageUrl: previewUrl };
+    console.log('[sendToPanel] panel', i, 'imageUrl set:', pages[activePage].panels[i].imageUrl?.slice(0, 40));
   }
 
   function copyPrompt() {
