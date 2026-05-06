@@ -46,7 +46,7 @@
   };
 
   type ChatMessage = {
-    role: 'user' | 'ai' | 'error';
+    role: 'user' | 'assistant'
     text: string;
     time: string;
     avatar?: string;
@@ -215,6 +215,7 @@
 
   let referenceImages = $state<ReferenceImage[]>([]);
   let yamlConverting  = $state(false);
+  let visionScanning = $state(false);
 
   // ── Emotion Feedback ─────────────────────────────────────────
   type EmotionFeedbackEntry = {
@@ -984,20 +985,65 @@
   }
 
   async function handleReferenceImageUpload(e: Event): Promise<void> {
-    const input = e.currentTarget as HTMLInputElement;
-    const files = Array.from(input.files ?? []);
-    input.value = '';
-    for (const file of files) {
-      if (referenceImages.length >= 2) break;
-      const dataUrl = await createLabThumbnail(file);
-      const name    = file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ');
-      referenceImages = [...referenceImages, { name, dataUrl, note: '' }];
-    }
+  const input = e.currentTarget as HTMLInputElement;
+  const files = Array.from(input.files ?? []);
+
+  input.value = '';
+
+  for (const file of files) {
+    if (referenceImages.length >= 2) break;
+
+    const dataUrl = await createLabThumbnail(file);
+
+    const name = file.name
+      .replace(/\.[^/.]+$/, '')
+      .replace(/[_-]/g, ' ');
+
+    referenceImages.push({
+      name,
+      dataUrl,
+      note: ''
+    });
+  }
+}
+
+function removeReferenceImage(i: number): void {
+  referenceImages.splice(i, 1);
+}
+    
+
+  async function analyzeReferenceImage() {
+    visionScanning = true;
+  if (referenceImages.length === 0) {
+    console.warn('[Vision] reference image not found');
+    return;
   }
 
-  function removeReferenceImage(i: number): void {
-    referenceImages = referenceImages.filter((_, idx) => idx !== i);
-  }
+  const image = referenceImages[0];
+
+  console.log('[Vision] analyzing image:', image.name);
+
+  const response = await fetch('/api/chat', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      message:
+        'この画像を詳しく説明してください。キャラクターの髪型、服装、色、表情、世界観を分析してください。',
+      images: [image.dataUrl]
+    })
+  });
+
+  const data = await response.json();
+
+  console.log('[Vision result]', data);
+
+  visionScanning = false;
+}
+
+
+
 
   function dataUrlToBlob(dataUrl: string): Blob {
     const [header, b64] = dataUrl.split(',');
@@ -3341,6 +3387,8 @@ ${recent}
         </div>
       {/if}
 
+      
+
       <!-- Input -->
       <div class="chat-input-area">
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -3360,6 +3408,17 @@ ${recent}
             onchange={handleReferenceImageUpload}
           />
         </label>
+        <button
+          class="vision-btn"
+          onclick={analyzeReferenceImage}
+          disabled={referenceImages.length === 0}
+        >
+          {#if visionScanning}
+            SCANNING...
+          {:else}
+            VISION
+          {/if}
+        </button>
         <textarea
           class="chat-input"
           placeholder="メッセージを入力... (Enter で送信)"
@@ -7832,5 +7891,49 @@ ${recent}
   background: rgba(244,63,94,0.08);
   color: #f43f5e;
   border-color: rgba(244,63,94,0.4);
+}
+
+.vision-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  min-width: 58px;
+  height: 42px;
+
+  padding: 6px 10px;
+
+  font-size: 11px;
+  letter-spacing: 1px;
+  font-family: inherit;
+  font-weight: 700;
+
+  color: #ff66ff;
+
+  background: rgba(255, 0, 255, 0.08);
+
+  border: 1px solid rgba(255, 0, 255, 0.35);
+  border-radius: 6px;
+
+  cursor: pointer;
+
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    transform 0.12s;
+
+  flex-shrink: 0;
+}
+
+.vision-btn:hover:not(:disabled) {
+  background: rgba(255, 0, 255, 0.18);
+  border-color: rgba(255, 0, 255, 0.8);
+
+  transform: translateY(-1px);
+}
+
+.vision-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 </style>
