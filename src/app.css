@@ -19,42 +19,205 @@
 :global(body) {
   background: var(--bg);
   color: var(--text);
-  font-family: system-ui, -apple-system, sans-serif;
+
+  font-family:
+    "Inter",
+    "Noto Sans JP",
+    system-ui,
+    sans-serif;
+
+  font-size: 17px;
+  line-height: 1.7;
+
+  overflow: hidden;
 }
 
 /* =========================================
    MAIN LAYOUT（←最重要）
 ========================================= */
 :global(main) {
-  display: flex;
-  width: 100%;
   height: 100vh;
-  gap: 16px;
-  padding: 16px;
+
+  display: flex;
+
+  gap: 24px;
+  padding: 24px;
+
+  background:
+    radial-gradient(
+      circle at top,
+      rgba(0,255,255,0.06),
+      transparent 45%
+    ),
+    var(--bg);
 }
 
 /* 左（チャット） */
 :global(.chat-panel) {
   flex: 1;
+
   min-width: 0;
+
+  display: flex;
+  flex-direction: column;
+
+  gap: 18px;
 }
 
 /* 右（キャラ） */
 :global(.right-panel) {
-  width: 300px;
+  width: 380px;
+
   flex-shrink: 0;
+
+  display: flex;
+  flex-direction: column;
+
+  gap: 18px;
 }
 
 /* =========================================
    PANEL（共通）
 ========================================= */
 :global(.panel) {
-  background: rgba(255,255,255,0.03);
-  border: 1px solid rgba(255,255,255,0.05);
-  border-radius: 12px;
-  padding: 12px;
+
+  background:
+    rgba(18, 22, 30, 0.92);
+
+  border:
+    1px solid rgba(255,255,255,0.08);
+
+  border-radius: 22px;
+
+  padding: 20px;
+
+  backdrop-filter: blur(10px);
+
+  box-shadow:
+    0 0 30px rgba(0,255,255,0.08);
+
+  overflow: hidden;
 }
 
+/* ========================================
+   CHAT TEXT
+======================================== */
+
+:global(.message) {
+  font-size: 1rem;
+  line-height: 1.8;
+}
+
+/* ========================================
+   INPUT
+======================================== */
+
+:global(textarea) {
+
+  min-height: 160px;
+
+  font-size: 1rem;
+
+  line-height: 1.7;
+
+  padding: 16px;
+
+  border-radius: 16px;
+
+  background:
+    rgba(255,255,255,0.04);
+
+  color: var(--text);
+
+  border:
+    1px solid rgba(255,255,255,0.08);
+}
+
+/* ========================================
+   BUTTON
+======================================== */
+
+:global(button) {
+
+  min-height: 44px;
+
+  padding:
+    10px 18px;
+
+  border-radius: 14px;
+
+  font-size: 0.95rem;
+}
+
+/* ========================================
+   SCROLLBAR
+======================================== */
+
+:global(::-webkit-scrollbar) {
+  width: 10px;
+}
+
+:global(::-webkit-scrollbar-thumb) {
+
+  background:
+    rgba(0,255,255,0.18);
+
+  border-radius: 999px;
+}
+
+/* ========================================
+   GLOBAL UI SCALE
+======================================== */
+
+:global(body) {
+  zoom: 1.2;
+}
+/* ========================================
+   FORCE BIGGER UI
+======================================== */
+
+:global(*) {
+  font-size: 15px !important;
+}
+
+/* チャット */
+
+:global(.message),
+:global(.chat-message) {
+  font-size: 16px !important;
+  line-height: 1.8 !important;
+}
+
+/* 入力欄 */
+
+:global(textarea),
+:global(input) {
+
+  font-size: 16px !important;
+
+  min-height: 56px;
+}
+
+/* ボタン */
+
+:global(button) {
+
+  font-size: 14px !important;
+
+  min-height: 42px;
+
+  padding: 10px 16px;
+}
+
+/* 右パネル */
+
+:global(.right-panel) {
+  width: 420px !important;
+}
+
+body {
+  background: red !important;
+}
 /* =========================================
    DEBUG用（消してもOK）
 ========================================= */

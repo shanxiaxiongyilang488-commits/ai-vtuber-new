@@ -2105,11 +2105,12 @@ function removeReferenceImage(i: number): void {
   const MEMORY_UPDATE_EVERY   = 3;                      // N回の交換ごとに更新
   const MEMORY_STALE_MS       = 60 * 60 * 1000;         // 1時間経過で起動時に自動更新
   const L_DEF = 220, L_MIN = 140, L_MAX = 480;
-  const R_DEF = 340, R_MIN = 200, R_MAX = 560;
+  const R_DEF = 340, R_MIN = 80, R_MAX = 1200;
 
   let leftWidth  = $state(L_DEF);
   let rightWidth = $state(R_DEF);
   let resizing   = $state<'left' | 'right' | null>(null);
+  let showRightPanel = $state(true);
   let rsStartX = 0;
   let rsStartW = 0;
 
@@ -3462,7 +3463,10 @@ ${recent}
     <div class="resize-bar" onmousedown={(e) => startResize('right', e)} aria-hidden="true"></div>
 
     <!-- ===== RIGHT: Character Viewer + Controls ===== -->
-    <section class="panel right-panel" style="width:{rightWidth}px">
+    <section
+        class="panel right-panel"
+        style="width:{rightWidth}px; min-width:80px;"
+      >
 
       <!-- 1. CHARACTER VIEWER -->
       <div class="panel-hd">
@@ -4611,6 +4615,11 @@ ${recent}
   min-height: 0;
   position: relative;
   z-index: 1;
+
+  gap: 16px;
+  padding: 12px;
+
+  overflow: hidden;
 }
 
 .lab-main.is-resizing {
@@ -4618,14 +4627,27 @@ ${recent}
   user-select: none;
 }
 
-.chat-panel {
-  flex: 1;
-  min-width: 200px;
+
+ .chat-panel {
+    flex: 1 1 auto;
+    min-width: 300px;
+
+    display: flex;
+    flex-direction: column;
+
+    min-height: 0;
+    overflow: hidden;
+
+    zoom: 1.12;
+    padding: 12px;
 }
 
+
 .right-panel {
-  flex-shrink: 0;
-  padding: 14px 12px;
+    flex-shrink: 0;
+    padding: 24px 22px;
+
+    zoom: 1.2;
 }
 
 /* ── Resize bar ── */
@@ -5588,12 +5610,17 @@ ${recent}
 
 /* Messages */
 .chat-messages {
-  flex: 1;
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px;
+
   overflow-y: auto;
-  padding: 12px;
+  padding: 18px;
+
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
+
   scrollbar-width: thin;
   scrollbar-color: var(--dim) transparent;
 }
@@ -6366,7 +6393,7 @@ ${recent}
 .chat-input-area {
   display: flex;
   gap: 8px;
-  padding: 10px 12px;
+  padding: 18px 20px;
   border-top: 1px solid var(--pborder);
   background: rgba(0,5,18,0.6);
   flex-shrink: 0;
