@@ -83,6 +83,7 @@
   let selectedAvatar = $state('/avatars/muryi.png');
   let editingName = $state(false);
   let tooltipKey = $state<string | null>(null);
+  let showCharacterModal = $state(false);
 
   let personality = $state<Personality>({
     trust: 76, affection: 61, lonely: 40, energy: 70,
@@ -360,9 +361,7 @@
     localStorage.setItem(LS_LAST_CHAR, name);
     if (presetId) {
       applyPreset(presetId);
-      setTimeout(() => {
-        document.getElementById('persona-editor')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }, 50);
+      showCharacterModal = true;
     }
   }
 
@@ -4409,6 +4408,15 @@ ${recent}
   </footer>
 </div>
 
+{#if showCharacterModal}
+  <div class="modal-overlay" onclick={() => { showCharacterModal = false; }}>
+    <div class="modal-window" onclick={(e) => e.stopPropagation()}>
+      <p class="modal-title">TEST MODAL</p>
+      <button class="modal-close-btn" onclick={() => { showCharacterModal = false; }}>閉じる</button>
+    </div>
+  </div>
+{/if}
+
 <style>
 /* ============================================================
    VARIABLES
@@ -7962,5 +7970,49 @@ ${recent}
 .vision-btn:disabled {
   opacity: 0.35;
   cursor: not-allowed;
+}
+
+/* ── Character Modal ── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-window {
+  background: #0d0d1a;
+  border: 1px solid rgba(0, 229, 255, 0.4);
+  border-radius: 8px;
+  padding: 32px 40px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  min-width: 260px;
+}
+
+.modal-title {
+  color: #00e5ff;
+  font-size: 14px;
+  letter-spacing: 0.15em;
+  margin: 0;
+}
+
+.modal-close-btn {
+  background: rgba(0, 229, 255, 0.08);
+  border: 1px solid rgba(0, 229, 255, 0.35);
+  border-radius: 4px;
+  color: #00e5ff;
+  font-size: 12px;
+  padding: 6px 20px;
+  cursor: pointer;
+}
+
+.modal-close-btn:hover {
+  background: rgba(0, 229, 255, 0.18);
 }
 </style>
