@@ -4430,6 +4430,10 @@ ${recent}
         <img class="modal-avatar" src={selectedAvatar} alt={charName}
           onerror={(e) => { (e.target as HTMLImageElement).src = '/avatars/default.png'; }} />
         <div class="modal-char-name">{charName}</div>
+        <label class="modal-avatar-upload">
+          ◈ 画像を変更
+          <input type="file" accept="image/*" style="display:none" onchange={handleAvatarUpload} />
+        </label>
       </div>
       <div class="section-lbl">PERSONA PRESETS</div>
       <div class="preset-grid">
@@ -8159,6 +8163,22 @@ ${recent}
 
 .modal-close-btn:hover {
   background: rgba(0, 229, 255, 0.18);
+}
+
+.modal-avatar-upload {
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  color: rgba(0, 229, 255, 0.6);
+  border: 1px solid rgba(0, 229, 255, 0.25);
+  border-radius: 4px;
+  padding: 4px 14px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.modal-avatar-upload:hover {
+  color: #00e5ff;
+  border-color: rgba(0, 229, 255, 0.6);
 }
 
 .modal-voice-sep {
