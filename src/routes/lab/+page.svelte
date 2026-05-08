@@ -280,6 +280,8 @@
   let voiceEngine = $state<VoiceEngineType>('voicevox');
   let speakerId   = $state(20);
   let voiceId     = $state('');
+  let voiceSpeed  = $state(1.0);
+  let voicePitch  = $state(0);
 
   // ============================================================
   // AI config — sessionStore で一元管理
@@ -363,6 +365,18 @@
       applyPreset(presetId);
       showCharacterModal = true;
     }
+  }
+
+  function handleAvatarUpload(e: Event) {
+    const file = (e.currentTarget as HTMLInputElement).files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const url = reader.result as string;
+      selectedAvatar = url;
+      try { localStorage.setItem(LS_CUSTOM_AVATAR, url); } catch { /* quota: fail silently */ }
+    };
+    reader.readAsDataURL(file);
   }
 
   // ============================================================
@@ -2090,6 +2104,7 @@ function removeReferenceImage(i: number): void {
   const LS_LAST_MOOD       = 'lab-last-mood';
   const LS_RECENT_PROGRESS = 'lab-recent-progress';
   const LS_LAST_CHAR       = 'lab-last-char';
+  const LS_CUSTOM_AVATAR   = 'lab-custom-avatar';
   const LS_CHAT_HISTORY    = 'lab-chat-history';
   const HISTORY_MAX        = 50;
   const LS_LONG_MEMORY        = 'lab-long-memory';
@@ -3572,7 +3587,7 @@ ${recent}
       <!-- 3. PERSONA PRESETS + CUSTOM PERSONA EDITOR + SAVE SLOTS -->
       <div class="ctrl-section">
         <div class="section-lbl">PERSONA PRESETS</div>
-        <div class="preset-grid">
+        <div class="preset-grid" style="display:none">
           {#each PRESET_LIST as p}
             <button
               class="preset-btn"
@@ -4411,7 +4426,110 @@ ${recent}
 {#if showCharacterModal}
   <div class="modal-overlay" onclick={() => { showCharacterModal = false; }}>
     <div class="modal-window" onclick={(e) => e.stopPropagation()}>
-      <p class="modal-title">TEST MODAL</p>
+      <div class="modal-avatar-wrap">
+        <img class="modal-avatar" src={selectedAvatar} alt={charName}
+          onerror={(e) => { (e.target as HTMLImageElement).src = '/avatars/default.png'; }} />
+        <div class="modal-char-name">{charName}</div>
+      </div>
+      <div class="section-lbl">PERSONA PRESETS</div>
+      <div class="preset-grid">
+        {#each PRESET_LIST.filter(p => !['muryi','risea','ciel','menoa','piona','custom'].includes(p.id)) as p}
+          <button
+            class="preset-btn"
+            class:active={activePreset === p.id}
+            style="--pc:{p.color}"
+            onclick={() => applyPreset(p.id)}
+          >
+            {p.label}
+          </button>
+        {/each}
+      </div>
+      <div class="cp-editor-hd">
+        {activePreset === 'custom' ? '◈ CUSTOM PERSONA EDITOR' : '◈ CURRENT PERSONA'}
+      </div>
+      <div class="cp-row">
+        <span class="cp-lbl">NAME</span>
+        <input class="cp-input" type="text" placeholder="キャラクター名"
+          bind:value={customProfile.name} oninput={saveCustomProfile}
+          disabled={activePreset !== 'custom'} />
+      </div>
+      <div class="cp-row">
+        <span class="cp-lbl">一人称</span>
+        <input class="cp-input" type="text" placeholder="私、僕、俺 など"
+          bind:value={customProfile.firstPerson} oninput={saveCustomProfile} />
+      </div>
+      <div class="cp-row">
+        <span class="cp-lbl">二人称</span>
+        <input class="cp-input" type="text" placeholder="あなた、君、お前 など"
+          bind:value={customProfile.secondPerson} oninput={saveCustomProfile} />
+      </div>
+      <div class="cp-row">
+        <span class="cp-lbl">他人</span>
+        <input class="cp-input" type="text" placeholder="あの人、彼、彼女 など"
+          bind:value={customProfile.thirdPerson} oninput={saveCustomProfile} />
+      </div>
+      <div class="cp-row">
+        <span class="cp-lbl">口調</span>
+        <textarea class="cp-input cp-textarea" placeholder="話し方・性格の説明"
+          bind:value={customProfile.speechStyle} oninput={saveCustomProfile}
+          disabled={activePreset !== 'custom'}></textarea>
+      </div>
+      <div class="cp-row">
+        <span class="cp-lbl">語尾</span>
+        <input class="cp-input" type="text" placeholder="語尾の特徴"
+          bind:value={customProfile.sentenceEnding} oninput={saveCustomProfile}
+          disabled={activePreset !== 'custom'} />
+      </div>
+      <div class="cp-row">
+        <span class="cp-lbl">怒り方</span>
+        <input class="cp-input" type="text" placeholder="怒った時の言い方"
+          bind:value={customProfile.angerStyle} oninput={saveCustomProfile}
+          disabled={activePreset !== 'custom'} />
+      </div>
+      <div class="cp-row">
+        <span class="cp-lbl">甘い時</span>
+        <input class="cp-input" type="text" placeholder="好意・愛情表現"
+          bind:value={customProfile.affectionStyle} oninput={saveCustomProfile}
+          disabled={activePreset !== 'custom'} />
+      </div>
+      <div class="cp-row">
+        <span class="cp-lbl">嫉妬時</span>
+        <input class="cp-input" type="text" placeholder="嫉妬した時の言い方"
+          bind:value={customProfile.jealousyStyle} oninput={saveCustomProfile}
+          disabled={activePreset !== 'custom'} />
+      </div>
+      <div class="cp-row">
+        <span class="cp-lbl">メモ</span>
+        <textarea class="cp-input cp-textarea" placeholder="その他の性格・設定メモ"
+          bind:value={customProfile.memo} oninput={saveCustomProfile}
+          disabled={activePreset !== 'custom'}></textarea>
+      </div>
+      <div class="modal-voice-sep"></div>
+      <div class="section-lbl">VOICE SETTINGS</div>
+      <div class="vc-rows modal-vc-rows">
+        <div class="vc-row">
+          <span class="vc-lbl">ENGINE</span>
+          <select class="vc-select" bind:value={voiceEngine}>
+            <option value="none">NONE</option>
+            <option value="voicevox">VOICEVOX</option>
+            <option value="elevenlabs">ELEVENLABS</option>
+          </select>
+        </div>
+        <div class="vc-row">
+          <span class="vc-lbl">VOICE NAME</span>
+          <input class="vc-input" type="text" bind:value={voiceId} placeholder="voice id / name…" />
+        </div>
+        <div class="vc-row">
+          <span class="vc-lbl">SPEED</span>
+          <input class="modal-slider" type="range" min="0.5" max="2.0" step="0.1" bind:value={voiceSpeed} />
+          <span class="modal-slider-val">{voiceSpeed.toFixed(1)}</span>
+        </div>
+        <div class="vc-row">
+          <span class="vc-lbl">PITCH</span>
+          <input class="modal-slider" type="range" min="-12" max="12" step="1" bind:value={voicePitch} />
+          <span class="modal-slider-val">{voicePitch}</span>
+        </div>
+      </div>
       <button class="modal-close-btn" onclick={() => { showCharacterModal = false; }}>閉じる</button>
     </div>
   </div>
@@ -7986,13 +8104,40 @@ ${recent}
 .modal-window {
   background: #0d0d1a;
   border: 1px solid rgba(0, 229, 255, 0.4);
-  border-radius: 8px;
-  padding: 32px 40px;
+  border-radius: 14px;
+  padding: 36px 44px 48px;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 20px;
-  min-width: 260px;
+  width: min(600px, 96vw);
+  max-height: 92vh;
+  overflow-y: auto;
+}
+
+.modal-avatar-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(0, 229, 255, 0.15);
+  width: 100%;
+}
+
+.modal-avatar {
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid rgba(0, 229, 255, 0.5);
+  box-shadow: 0 0 20px rgba(0, 229, 255, 0.25);
+}
+
+.modal-char-name {
+  color: #e2e8f0;
+  font-size: 18px;
+  letter-spacing: 0.1em;
 }
 
 .modal-title {
@@ -8014,5 +8159,76 @@ ${recent}
 
 .modal-close-btn:hover {
   background: rgba(0, 229, 255, 0.18);
+}
+
+.modal-voice-sep {
+  width: 100%;
+  border-top: 1px solid rgba(0, 229, 255, 0.15);
+  margin-top: 4px;
+}
+
+.modal-vc-rows {
+  width: 100%;
+}
+
+.modal-slider {
+  flex: 1;
+  accent-color: #00e5ff;
+  cursor: pointer;
+}
+
+.modal-slider-val {
+  font-size: 12px;
+  color: #00e5ff;
+  min-width: 32px;
+  text-align: right;
+}
+
+/* ── Modal scoped overrides (main page は影響なし) ── */
+.modal-window .section-lbl {
+  font-size: 11px;
+  letter-spacing: 2.5px;
+  padding-bottom: 10px;
+  width: 100%;
+  text-align: left;
+}
+
+.modal-window .preset-btn {
+  font-size: 12px;
+  padding: 10px 6px;
+}
+
+.modal-window .cp-row {
+  gap: 14px;
+  padding: 5px 0;
+  width: 100%;
+}
+
+.modal-window .cp-lbl {
+  font-size: 13px;
+  width: 60px;
+  padding-top: 10px;
+}
+
+.modal-window .cp-input {
+  font-size: 14px;
+  padding: 9px 12px;
+}
+
+.modal-window .cp-textarea {
+  min-height: 84px;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.modal-window .cp-input::placeholder {
+  font-size: 13px;
+}
+
+.modal-window .modal-close-btn {
+  font-size: 13px;
+  padding: 9px 32px;
+  border-radius: 6px;
+  margin-top: 8px;
 }
 </style>
