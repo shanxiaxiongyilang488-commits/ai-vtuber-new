@@ -18,29 +18,34 @@ function shouldRememberAsLongTerm(text: string): boolean {
 
 function stripMemoryCommand(text: string): string {
   return text
-    .replace(/^(覚えて|記憶して|忘れないで|メモして|remember)[、,:\s]*/iu, '')
+    .replace(/^(覚えて|記憶して|忘れないで|メモして|remember)[。、,，.:：\s]*/iu, '')
+    .replace(/^[。、,，.:：\s]+/u, '')
+    .replace(/[。.!！\s]+$/u, '')
+    .trim();
+}
+
+function stripSentenceEnding(text: string): string {
+  return text
+    .replace(/(です|でした|だよ|だね|だな|だぞ|ですね|である|だ)[。.!！\s]*$/u, '')
     .replace(/[。.!！\s]+$/u, '')
     .trim();
 }
 
 function normalizeMemoryContent(text: string): string {
-  const content = stripMemoryCommand(text);
+  const content = stripSentenceEnding(stripMemoryCommand(text));
   const owner = 'RootSさん';
 
-  const possessiveMatch = content.match(/^(私|僕|俺|わたし|ぼく|おれ)の(.+?)は(.+?)(です|だ|である)?$/u);
+  const possessiveMatch = content.match(/^(私|僕|俺|わたし|ぼく|おれ)の(.+?)は(.+)$/u);
   if (possessiveMatch) {
-    return `${owner}の${possessiveMatch[2].trim()}は${possessiveMatch[3].trim()}`;
+    return `${owner}の${possessiveMatch[2].trim()}は${stripSentenceEnding(possessiveMatch[3])}`;
   }
 
-  const preferenceMatch = content.match(/^(私|僕|俺|わたし|ぼく|おれ)は(.+?)が好き(です|だ)?$/u);
+  const preferenceMatch = content.match(/^(私|僕|俺|わたし|ぼく|おれ)は(.+?)が好き$/u);
   if (preferenceMatch) {
     return `${owner}は${preferenceMatch[2].trim()}が好き`;
   }
 
-  return content
-    .replace(/^(私|僕|俺|わたし|ぼく|おれ)/u, owner)
-    .replace(/です$/u, '')
-    .trim();
+  return stripSentenceEnding(content.replace(/^(私|僕|俺|わたし|ぼく|おれ)/u, owner));
 }
 
 function buildMemoryTitle(text: string): string {
