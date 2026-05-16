@@ -2,7 +2,7 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { env } from '$env/dynamic/private';
 
-type Provider = 'openai' | 'gemini' | 'claude';
+type Provider = 'openai' | 'gemini' | 'claude' | 'ollama' | 'lmstudio';
 
 interface LabChatRequest {
   provider: Provider;
@@ -89,6 +89,49 @@ async function callOpenAI(
   return completion.choices[0].message.content ?? '';
 }
 
+function localMessages(systemPrompt: string, userMessage: string) {
+  return [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: userMessage },
+  ];
+}
+
+async function callOllama(systemPrompt: string, userMessage: string, model?: string): Promise<string> {
+  const actualModel = model || 'qwen2.5:3b';
+  const res = await fetch('http://localhost:11434/api/chat', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ model: actualModel, messages: localMessages(systemPrompt, userMessage), stream: false }),
+  });
+  if (!res.ok) {
+    const msg = await res.text().catch(() => `HTTP ${res.status}`);
+    throw new Error(`Ollama API error: ${msg}`);
+  }
+  const data = await res.json();
+  return data?.message?.content ?? '';
+}
+
+async function callLMStudio(systemPrompt: string, userMessage: string, model?: string): Promise<string> {
+  const actualModel = model || 'local-model';
+  const res = await fetch('http://localhost:1234/v1/chat/completions', {
+    method:  'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization:  'Bearer lm-studio',
+    },
+    body: JSON.stringify({
+      model: actualModel,
+      messages: localMessages(systemPrompt, userMessage),
+    }),
+  });
+  if (!res.ok) {
+    const msg = await res.text().catch(() => `HTTP ${res.status}`);
+    throw new Error(`LM Studio API error: ${msg}`);
+  }
+  const data = await res.json();
+  return data?.choices?.[0]?.message?.content ?? '';
+}
+
 // ================================================================
 // Gemini — Vision parts builder
 // ================================================================
@@ -156,6 +199,26 @@ export const POST: RequestHandler = async ({ request }) => {
     const text = await callOpenAI(systemPrompt, userMessage, actualModel, images);
     console.log(`[lab-chat] openai ok (${text.length} chars)`);
     return json({ text, provider: 'openai', actualModel });
+  }
+
+  // ================================================================
+  // Ollama / LM Studio
+  // ================================================================
+  if (provider === 'ollama' || provider === 'lmstudio') {
+    if (images.length > 0) {
+      console.warn(`[lab-chat] ${provider} selected with ${images.length} image(s); local text endpoint will ignore images`);
+    }
+    try {
+      const actualModel = model || (provider === 'ollama' ? 'qwen2.5:3b' : 'local-model');
+      const text = provider === 'ollama'
+        ? await callOllama(systemPrompt, userMessage, actualModel)
+        : await callLMStudio(systemPrompt, userMessage, actualModel);
+      console.log(`[lab-chat] ${provider} ok (${text.length} chars)`);
+      return json({ text, provider, actualModel });
+    } catch (e) {
+      console.error(`[lab-chat] ${provider} error:`, e);
+      throw error(503, `${provider === 'ollama' ? 'Ollama' : 'LM Studio'} への接続に失敗しました。ローカルサーバーを確認してください。`);
+    }
   }
 
   // ================================================================

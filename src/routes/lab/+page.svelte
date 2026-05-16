@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { createVoiceEngine } from '$lib/api/voiceEngine';
-  import { PROVIDER_MODELS, type AIProvider } from '$lib/config/models';
+  import { PROVIDER_MODELS, PROVIDER_OPTIONS, type AIProvider } from '$lib/config/models';
   import { sessionStore } from '$lib/stores/sessionStore';
   import AvatarViewer          from '$lib/components/AvatarViewer.svelte';
   import PNGTuberViewer        from '$lib/components/PNGTuberViewer.svelte';
@@ -84,6 +84,8 @@
   let editingName = $state(false);
   let tooltipKey = $state<string | null>(null);
   let showCharacterModal = $state(false);
+  let showPersonaInlineEditor = $state(false);
+  let devMode            = $state(false);
 
   let personality = $state<Personality>({
     trust: 76, affection: 61, lonely: 40, energy: 70,
@@ -107,6 +109,14 @@
     speechStyle: '', habits: '', sentenceEnding: '',
     angerStyle: '', affectionStyle: '', jealousyStyle: '', memo: '',
   });
+  let personaModalProfile = $state<CustomProfile>({
+    name: '', firstPerson: '', secondPerson: '', thirdPerson: '',
+    speechStyle: '', habits: '', sentenceEnding: '',
+    angerStyle: '', affectionStyle: '', jealousyStyle: '', memo: '',
+  });
+  let personaModalSnapshot = $state<{
+    profile: CustomProfile;
+  } | null>(null);
 
   type SlotKey = 'a' | 'b' | 'c';
   let customSlots = $state<Record<SlotKey, CustomProfile | null>>({ a: null, b: null, c: null });
@@ -216,7 +226,8 @@
 
   let referenceImages = $state<ReferenceImage[]>([]);
   let yamlConverting  = $state(false);
-  let visionScanning = $state(false);
+  let visionScanning  = $state(false);
+  let visionContext   = $state('');
 
   // ── Emotion Feedback ─────────────────────────────────────────
   type EmotionFeedbackEntry = {
@@ -357,13 +368,90 @@
     })()
   );
 
+  function cloneProfile(profile: CustomProfile): CustomProfile {
+    return { ...profile };
+  }
+
+  const PERSONA_EXAMPLE_VALUES = new Set([
+    '私、僕、俺など',
+    'あなた、君、お前など',
+    'あの人、彼、彼女など',
+  ]);
+
+  function cleanPersonaTerm(value: unknown): string {
+    if (typeof value !== 'string') return '';
+    const trimmed = value.trim();
+    return isPersonaExampleValue(value) ? '' : trimmed;
+  }
+
+  function getDefaultPersonaTerm(preset: PresetName, key: 'firstPerson' | 'secondPerson' | 'thirdPerson'): string {
+    if (preset === 'custom') return '';
+    return cleanPersonaTerm(CHARACTER_PROFILES[preset]?.[key]);
+  }
+
+  function isPersonaExampleValue(value: unknown): boolean {
+    if (typeof value !== 'string') return false;
+    return PERSONA_EXAMPLE_VALUES.has(value.trim().replace(/\s+/g, ''));
+  }
+
+  function cleanPersonaTermWithDefault(
+    value: unknown,
+    preset: PresetName,
+    key: 'firstPerson' | 'secondPerson' | 'thirdPerson'
+  ): string {
+    const cleaned = cleanPersonaTerm(value);
+    return cleaned || (isPersonaExampleValue(value) ? getDefaultPersonaTerm(preset, key) : '');
+  }
+
+  function sanitizePersonaTerms(profile: CustomProfile, preset: PresetName = 'custom'): CustomProfile {
+    return {
+      ...profile,
+      firstPerson:  cleanPersonaTermWithDefault(profile.firstPerson, preset, 'firstPerson'),
+      secondPerson: cleanPersonaTermWithDefault(profile.secondPerson, preset, 'secondPerson'),
+      thirdPerson:  cleanPersonaTermWithDefault(profile.thirdPerson, preset, 'thirdPerson'),
+    };
+  }
+
+  function openPersonaModal(): void {
+    personaModalProfile = sanitizePersonaTerms(cloneProfile(customProfile), activePreset);
+    personaModalSnapshot = {
+      profile: cloneProfile(personaModalProfile),
+    };
+    showCharacterModal = true;
+  }
+
+  function closePersonaModal(save: boolean): void {
+    if (save) {
+      customProfile = sanitizePersonaTerms(cloneProfile(personaModalProfile), activePreset);
+      if (customProfile.name.trim()) {
+        charName = customProfile.name.trim();
+        localStorage.setItem(LS_LAST_CHAR, charName);
+      }
+      saveCustomProfile();
+    } else if (personaModalSnapshot) {
+      customProfile = cloneProfile(personaModalSnapshot.profile);
+    }
+    personaModalSnapshot = null;
+    showCharacterModal = false;
+  }
+
+  function selectPersonaPresetInModal(preset: PresetName): void {
+    applyPreset(preset);
+    personaModalProfile = sanitizePersonaTerms(cloneProfile(customProfile), activePreset);
+  }
+
+  function duplicatePersonaToCustomInModal(): void {
+    duplicateToCustom();
+    personaModalProfile = sanitizePersonaTerms(cloneProfile(customProfile), activePreset);
+  }
+
   function selectAvatar(file: string, name: string, presetId?: PresetName) {
     selectedAvatar = file;
     charName = name;
     localStorage.setItem(LS_LAST_CHAR, name);
     if (presetId) {
       applyPreset(presetId);
-      showCharacterModal = true;
+      openPersonaModal();
     }
   }
 
@@ -590,21 +678,23 @@
   }
 
   function saveCustomProfile(): void {
+    customProfile = sanitizePersonaTerms(customProfile, activePreset);
     localStorage.setItem(LS_CUSTOM_PROFILE, JSON.stringify(customProfile));
   }
 
   function saveSlot(k: SlotKey): void {
-    customSlots[k] = { ...customProfile };
+    customSlots[k] = sanitizePersonaTerms({ ...customProfile }, activePreset);
     localStorage.setItem(LS_SLOT[k], JSON.stringify(customSlots[k]));
   }
 
   function loadSlot(k: SlotKey): void {
     const s = customSlots[k];
     if (!s) return;
+    const profile = sanitizePersonaTerms(s, activePreset);
     customProfile.name           = s.name;
-    customProfile.firstPerson    = s.firstPerson    ?? '';
-    customProfile.secondPerson   = s.secondPerson   ?? '';
-    customProfile.thirdPerson    = s.thirdPerson    ?? '';
+    customProfile.firstPerson    = profile.firstPerson;
+    customProfile.secondPerson   = profile.secondPerson;
+    customProfile.thirdPerson    = profile.thirdPerson;
     customProfile.speechStyle    = s.speechStyle;
     customProfile.habits         = s.habits;
     customProfile.sentenceEnding = s.sentenceEnding;
@@ -640,10 +730,9 @@
     if (profile) {
       const label = PRESET_LIST.find(p => p.id === name)?.label ?? name;
       customProfile.name           = label;
-      // 呼称: プロファイルに定義があればそれを使用、なければ既存値を保持
-      if (profile.firstPerson  !== undefined) customProfile.firstPerson  = profile.firstPerson;
-      if (profile.secondPerson !== undefined) customProfile.secondPerson = profile.secondPerson;
-      if (profile.thirdPerson  !== undefined) customProfile.thirdPerson  = profile.thirdPerson;
+      customProfile.firstPerson    = cleanPersonaTerm(profile.firstPerson);
+      customProfile.secondPerson   = cleanPersonaTerm(profile.secondPerson);
+      customProfile.thirdPerson    = cleanPersonaTerm(profile.thirdPerson);
       customProfile.speechStyle    = profile.speechStyle;
       customProfile.habits         = profile.habits;
       customProfile.sentenceEnding = profile.sentenceEnding;
@@ -1049,7 +1138,8 @@ function removeReferenceImage(i: number): void {
   });
 
   const data = await response.json();
-
+  const text = (data.text ?? '') as string;
+  if (text) visionContext = text;
   console.log('[Vision result]', data);
 
   visionScanning = false;
@@ -1078,8 +1168,11 @@ function removeReferenceImage(i: number): void {
         .map(m => `${m.role === 'user' ? 'ユーザー' : 'AI'}: ${m.text}`)
         .join('\n');
 
-      const refContext = referenceImages.length > 0
+      const refContext    = referenceImages.length > 0
         ? `\n[参照キャラクター]\n${referenceImages.map((r, i) => `キャラクター${i === 0 ? 'A' : 'B'}: ${r.note || r.name}`).join('\n')}`
+        : '';
+      const visionSection = visionContext
+        ? `\n[VISION解析結果]\n${visionContext}`
         : '';
 
       const sysPrompt = [
@@ -1090,12 +1183,11 @@ function removeReferenceImage(i: number): void {
         '  "pages": [',
         '    {',
         '      "layout": "4panel",',
-        '      "prompt": "ページのシーン概要（日本語可）",',
         '      "panels": [',
-        '        { "prompt": "コマ1の英語画像生成タグ（カンマ区切り）" },',
-        '        { "prompt": "コマ2の英語画像生成タグ" },',
-        '        { "prompt": "コマ3の英語画像生成タグ" },',
-        '        { "prompt": "コマ4の英語画像生成タグ" }',
+        '        { "scene": "コマ1の内容（日本語）", "dialogue": ["キャラ名: セリフ", "キャラ名: セリフ"], "prompt": "コマ1の詳細英語プロンプト" },',
+        '        { "scene": "コマ2の内容（日本語）", "dialogue": ["キャラ名: セリフ"], "prompt": "コマ2の詳細英語プロンプト" },',
+        '        { "scene": "コマ3の内容（日本語）", "dialogue": ["キャラ名: セリフ", "キャラ名: セリフ"], "prompt": "コマ3の詳細英語プロンプト" },',
+        '        { "scene": "コマ4の内容（日本語）", "dialogue": ["キャラ名: セリフ"], "prompt": "コマ4の詳細英語プロンプト" }',
         '      ]',
         '    }',
         '  ],',
@@ -1106,7 +1198,30 @@ function removeReferenceImage(i: number): void {
         '}',
         'layoutは "single" / "2panel" / "3vertical" / "4panel" から最適なものを選ぶこと。',
         'キャラクターが1人の場合はrefsのbキーを省略すること。',
-        'プロンプトは必ず英語のカンマ区切りタグで書くこと。',
+        'sceneは各コマ専用の短い説明を日本語で書くこと。全体のあらすじは各コマにコピーしないこと。',
+        'dialogueは各コマのキャラクターのセリフを文字列配列で出力すること。形式: ["キャラ名: セリフ内容", ...]',
+        '- 1〜3行の短いセリフにすること',
+        '- キャラクターの性格・関係性・感情（ギャグ、驚き、ツンデレなど）を反映すること',
+        '- セリフがないコマは空配列 [] にすること',
+        '',
+        '【prompt の書き方 — 厳守事項】',
+        'promptはGPT Image 2向けの高品質な詳細英語画像生成プロンプトとして生成すること。',
+        '短いタグ列（"surprise, one charging pod" など）は禁止。自然な英語で1〜3文の詳細な描写にすること。',
+        '',
+        '必ず以下をすべて含めること（カンマ区切りで1行にまとめること）:',
+        '1. character appearance: hair color, eye color, android/mechanical details, clothing',
+        '2. facial expression: specific emotion with physical detail (wide eyes, open mouth, raised brows, etc.)',
+        '3. pose and body language: what they are doing, hand/arm positions',
+        '4. background and setting: location, objects, environment details',
+        '5. lighting: type and quality of light (warm indoor, neon glow, soft sunlight, etc.)',
+        '6. atmosphere and mood: overall tone of the scene',
+        '7. camera composition: shot type (wide shot, medium shot, close-up, etc.)',
+        '8. style tags: anime style, highly detailed, clean lineart, consistent character design',
+        '',
+        '例（この詳細度・長さを必ず守ること）:',
+        'two adorable android cat sisters with metallic silver and dark accents, glowing cyan mechanical cat ears and cable tails, standing in a cozy futuristic cafe as they notice only one charging pod, both showing wide surprised expressions, one pointing toward the glowing pod while the other raises her hands in confusion, warm indoor lighting with soft ambient glow, detailed sci-fi background with holographic displays, medium wide shot, anime style, highly detailed, clean lineart, consistent character design',
+        '',
+        'promptはJSONの文字列値として1行で出力すること。改行（\\n）は使用しないこと。',
       ].join('\n');
 
       const provider = $sessionStore.provider === 'onair' ? 'claude' : $sessionStore.provider;
@@ -1115,13 +1230,13 @@ function removeReferenceImage(i: number): void {
       const res = await fetch('/api/lab-chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider, model, systemPrompt: sysPrompt, userMessage: contextText + refContext }),
+        body: JSON.stringify({ provider, model, systemPrompt: sysPrompt, userMessage: contextText + refContext + visionSection }),
       });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message ?? res.statusText);
       const data = await res.json();
       const raw  = (data.text ?? '') as string;
 
-      type YamlPage = { layout: string; prompt: string; panels: { prompt: string }[] };
+      type YamlPage = { layout: string; prompt?: string; panels: { scene?: string; dialogue?: string[]; prompt: string }[] };
       type YamlParsed = { pages: YamlPage[]; refs?: { a?: string; b?: string } };
       let parsed: YamlParsed;
       try {
@@ -1145,6 +1260,32 @@ function removeReferenceImage(i: number): void {
             localStorage.setItem(YAML_IMPORT_KEY, JSON.stringify({ ...yamlData, referenceImages: undefined }));
           } catch { /* quota */ }
         }
+        try {
+          const lines: string[] = ['pages:'];
+          for (const page of parsed.pages) {
+            lines.push(`  - layout: ${page.layout}`);
+            lines.push('    panels:');
+            for (const panel of page.panels) {
+              const esc = (s: string) => s.replace(/\n/g, ' ').replace(/"/g, '\\"').trim();
+              if (panel.scene) {
+                lines.push(`      - scene: "${esc(panel.scene)}"`);
+                if (panel.dialogue && panel.dialogue.length > 0) {
+                  const dlStr = JSON.stringify(panel.dialogue).replace(/\n/g, ' ').replace(/"/g, '\\"');
+                  lines.push(`        dialogue: "${dlStr}"`);
+                }
+                lines.push(`        prompt: "${esc(panel.prompt)}"`);
+              } else {
+                lines.push(`      - prompt: "${esc(panel.prompt)}"`);
+              }
+            }
+          }
+          if (parsed.refs) {
+            lines.push('refs:');
+            if (parsed.refs.a) lines.push(`  a: "${parsed.refs.a.replace(/"/g, '\\"')}"`);
+            if (parsed.refs.b) lines.push(`  b: "${parsed.refs.b.replace(/"/g, '\\"')}"`);
+          }
+          localStorage.setItem('studio-yaml', lines.join('\n').trim());
+        } catch { /* quota */ }
       }
       window.open('/studio', '_blank');
     } catch (e) {
@@ -1305,13 +1446,15 @@ function removeReferenceImage(i: number): void {
     } else {
       const cp = CHARACTER_PROFILES[activePreset];
       if (cp) {
+        const ccp = customProfile;
         lines.push('【キャラクター人格】');
-        lines.push(`話し方：${cp.speechStyle}`);
-        lines.push(`口癖・習慣表現：${cp.habits}`);
-        lines.push(`語尾の特徴：${cp.sentenceEnding}`);
-        if (emotion.anger >= 30)     lines.push(`怒りの表現：${cp.angerStyle}`);
-        if (emotion.affection >= 60) lines.push(`好意の表現：${cp.affectionStyle}`);
-        if (emotion.jealousy >= 30)  lines.push(`嫉妬の表現：${cp.jealousyStyle}`);
+        lines.push(`話し方：${ccp.speechStyle || cp.speechStyle}`);
+        lines.push(`口癖・習慣表現：${ccp.habits || cp.habits}`);
+        lines.push(`語尾の特徴：${ccp.sentenceEnding || cp.sentenceEnding}`);
+        if (emotion.anger >= 30)     lines.push(`怒りの表現：${ccp.angerStyle || cp.angerStyle}`);
+        if (emotion.affection >= 60) lines.push(`好意の表現：${ccp.affectionStyle || cp.affectionStyle}`);
+        if (emotion.jealousy >= 30)  lines.push(`嫉妬の表現：${ccp.jealousyStyle || cp.jealousyStyle}`);
+        if (ccp.memo)                lines.push(`性格メモ：${ccp.memo}`);
         lines.push('');
       }
     }
@@ -2127,11 +2270,27 @@ function removeReferenceImage(i: number): void {
   let showRightPanel = $state(true);
   let rsStartX = 0;
   let rsStartW = 0;
+  let resizeListenersActive = false;
+
+  function attachResizeListeners() {
+    if (resizeListenersActive || typeof window === 'undefined') return;
+    window.addEventListener('mousemove', onRsMove);
+    window.addEventListener('mouseup', onRsEnd);
+    resizeListenersActive = true;
+  }
+
+  function detachResizeListeners() {
+    if (!resizeListenersActive || typeof window === 'undefined') return;
+    window.removeEventListener('mousemove', onRsMove);
+    window.removeEventListener('mouseup', onRsEnd);
+    resizeListenersActive = false;
+  }
 
   function startResize(side: 'left' | 'right', e: MouseEvent) {
     resizing = side;
     rsStartX = e.clientX;
     rsStartW = side === 'left' ? leftWidth : rightWidth;
+    attachResizeListeners();
     e.preventDefault();
   }
 
@@ -2150,6 +2309,7 @@ function removeReferenceImage(i: number): void {
     localStorage.setItem(LS_LEFT,  String(Math.round(leftWidth)));
     localStorage.setItem(LS_RIGHT, String(Math.round(rightWidth)));
     resizing = null;
+    detachResizeListeners();
   }
 
   // ============================================================
@@ -2762,7 +2922,10 @@ ${recent}
     const rawCustom = localStorage.getItem(LS_CUSTOM_PROFILE);
     if (rawCustom) {
       try {
-        const cp = JSON.parse(rawCustom) as Partial<CustomProfile>;
+        const cp = sanitizePersonaTerms({
+          ...customProfile,
+          ...(JSON.parse(rawCustom) as Partial<CustomProfile>),
+        }, activePreset);
         if (cp.name           != null) customProfile.name           = cp.name;
         if (cp.firstPerson    != null) customProfile.firstPerson    = cp.firstPerson;
         if (cp.secondPerson   != null) customProfile.secondPerson   = cp.secondPerson;
@@ -2774,12 +2937,21 @@ ${recent}
         if (cp.affectionStyle != null) customProfile.affectionStyle = cp.affectionStyle;
         if (cp.jealousyStyle  != null) customProfile.jealousyStyle  = cp.jealousyStyle;
         if (cp.memo           != null) customProfile.memo           = cp.memo;
+        localStorage.setItem(LS_CUSTOM_PROFILE, JSON.stringify(customProfile));
       } catch { /* ignore */ }
     }
 
     for (const k of (['a', 'b', 'c'] as SlotKey[])) {
       const raw = localStorage.getItem(LS_SLOT[k]);
-      if (raw) { try { customSlots[k] = JSON.parse(raw); } catch { /* ignore */ } }
+      if (raw) {
+        try {
+          customSlots[k] = sanitizePersonaTerms({
+            ...customProfile,
+            ...(JSON.parse(raw) as Partial<CustomProfile>),
+          }, activePreset);
+          localStorage.setItem(LS_SLOT[k], JSON.stringify(customSlots[k]));
+        } catch { /* ignore */ }
+      }
     }
 
     const driftNow = new Date();
@@ -2856,9 +3028,17 @@ ${recent}
 
     // Avatar WebSocket 接続（Python サーバーが起動していない場合は自動リトライ）
     const stopWs = initAvatarWs();
-    return stopWs;
+    const onKeydown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && showCharacterModal) closePersonaModal(false);
+    };
+    window.addEventListener('keydown', onKeydown);
+    return () => {
+      window.removeEventListener('keydown', onKeydown);
+      stopWs();
+    };
   });
   onDestroy(() => {
+    detachResizeListeners();
     clearInterval(clockId);
     clearInterval(angerCooldownId);
     if (idleTimerId) clearTimeout(idleTimerId);
@@ -2879,7 +3059,7 @@ ${recent}
   <header class="lab-header">
     <div class="header-left">
       <div class="logo-hex">
-        <svg width="30" height="34" viewBox="0 0 32 36" aria-hidden="true">
+        <svg width="40" height="45" viewBox="0 0 32 36" aria-hidden="true">
           <polygon points="16,2 30,10 30,26 16,34 2,26 2,10"
             fill="none" stroke="#00e5ff" stroke-width="1.5"
             style="filter:drop-shadow(0 0 6px #00e5ff)"/>
@@ -2933,7 +3113,6 @@ ${recent}
     class:is-resizing={resizing !== null}
     onmousemove={onRsMove}
     onmouseup={onRsEnd}
-    onmouseleave={onRsEnd}
   >
 
     <!-- ===== LEFT: Chat Simulation ===== -->
@@ -2942,6 +3121,7 @@ ${recent}
         <span class="ph-diamond">◆</span>
         <span class="ph-text">CHAT SIMULATION</span>
         <span class="ph-line"></span>
+        {#if devMode}
         <button
           class="compare-toggle-btn"
           class:active={compareMode}
@@ -2967,6 +3147,7 @@ ${recent}
           disabled={diaryGenerating}
           title="今日の会話から絵日記を生成"
         >{diaryGenerating ? '⏳ …' : '📘 DIARY'}</button>
+        {/if}
         {#if isThinking}
           <span class="thinking-tag">PROCESSING…</span>
         {:else}
@@ -3606,7 +3787,12 @@ ${recent}
           </button>
         {/if}
 
-        <!-- Persona Editor: 全プリセット常時表示 / 人格フィールドはpreset時read-only -->
+        <button class="cp-toggle-btn" onclick={() => { showPersonaInlineEditor = !showPersonaInlineEditor; }}>
+          {showPersonaInlineEditor ? '詳細編集を非表示' : '詳細編集を表示'}
+        </button>
+
+        <!-- Persona Editor: 通常は折りたたみ / 詳細編集時のみ表示 -->
+        {#if showPersonaInlineEditor}
         <div class="custom-profile-section" id="persona-editor">
           <div class="cp-editor-hd">
             {activePreset === 'custom' ? '◈ CUSTOM PERSONA EDITOR' : '◈ CURRENT PERSONA'}
@@ -3628,7 +3814,7 @@ ${recent}
               <input
                 class="cp-input"
                 type="text"
-                placeholder="私、僕、俺 など"
+                placeholder="一人称を入力"
                 bind:value={customProfile.firstPerson}
                 oninput={saveCustomProfile}
               />
@@ -3638,7 +3824,7 @@ ${recent}
               <input
                 class="cp-input"
                 type="text"
-                placeholder="あなた、君、お前 など"
+                placeholder="二人称を入力"
                 bind:value={customProfile.secondPerson}
                 oninput={saveCustomProfile}
               />
@@ -3648,7 +3834,7 @@ ${recent}
               <input
                 class="cp-input"
                 type="text"
-                placeholder="あの人、彼、彼女 など"
+                placeholder="他人の呼び方を入力"
                 bind:value={customProfile.thirdPerson}
                 oninput={saveCustomProfile}
               />
@@ -3745,6 +3931,7 @@ ${recent}
             </div>
           {/if}
         </div>
+        {/if}
       </div>
 
       <!-- 5. PARAMETER MATRIX -->
@@ -3841,10 +4028,9 @@ ${recent}
               value={$sessionStore.provider}
               onchange={(e) => sessionStore.setProvider((e.currentTarget as HTMLSelectElement).value as AIProvider)}
             >
-              <option value="openai">OpenAI</option>
-              <option value="gemini">Gemini</option>
-              <option value="claude">Claude (開発者専用)</option>
-              <option value="onair">OnAir</option>
+              {#each PROVIDER_OPTIONS as option}
+                <option value={option.value}>{option.label}</option>
+              {/each}
             </select>
           </div>
           <div class="vc-row">
@@ -4045,7 +4231,7 @@ ${recent}
           {#each RADAR_LABELS as label, i}
             {@const lp = labelPt(i)}
             <text x={lp.x} y={lp.y} text-anchor="middle" dominant-baseline="central"
-              font-size="9.5" font-family="Consolas, monospace" fill={RADAR_COLORS[i]}
+              font-size="11.5" font-family="Consolas, monospace" fill={RADAR_COLORS[i]}
               style="filter: drop-shadow(0 0 3px {RADAR_COLORS[i]}70)"
               letter-spacing="0.5">{label}</text>
           {/each}
@@ -4386,6 +4572,7 @@ ${recent}
   </main>
 
   <!-- ==================== PROMPT MONITOR ==================== -->
+  {#if devMode}
   <footer class="prompt-monitor">
     <div class="pm-header">
       <span class="pm-diamond">◆</span>
@@ -4421,11 +4608,15 @@ ${recent}
       </div>
     </div>
   </footer>
+  {/if}
 </div>
 
 {#if showCharacterModal}
-  <div class="modal-overlay" onclick={() => { showCharacterModal = false; }}>
-    <div class="modal-window" onclick={(e) => e.stopPropagation()}>
+  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+  <div class="modal-overlay" role="presentation" onclick={() => closePersonaModal(false)}>
+    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+    <div class="modal-window" role="presentation" onclick={(e) => e.stopPropagation()}>
+      <button class="modal-x-btn" aria-label="閉じる" onclick={() => closePersonaModal(false)}>×</button>
       <div class="modal-avatar-wrap">
         <img class="modal-avatar" src={selectedAvatar} alt={charName}
           onerror={(e) => { (e.target as HTMLImageElement).src = '/avatars/default.png'; }} />
@@ -4435,106 +4626,89 @@ ${recent}
           <input type="file" accept="image/*" style="display:none" onchange={handleAvatarUpload} />
         </label>
       </div>
+
       <div class="section-lbl">PERSONA PRESETS</div>
       <div class="preset-grid">
-        {#each PRESET_LIST.filter(p => !['muryi','risea','ciel','menoa','piona','custom'].includes(p.id)) as p}
+        {#each PRESET_LIST as p}
           <button
             class="preset-btn"
             class:active={activePreset === p.id}
             style="--pc:{p.color}"
-            onclick={() => applyPreset(p.id)}
+            onclick={() => selectPersonaPresetInModal(p.id)}
           >
             {p.label}
           </button>
         {/each}
       </div>
+
+      {#if activePreset !== 'custom'}
+        <button class="cp-dup-btn cp-dup-standalone" onclick={duplicatePersonaToCustomInModal}>
+          ◈ DUPLICATE CURRENT → CUSTOM
+        </button>
+      {/if}
+
       <div class="cp-editor-hd">
-        {activePreset === 'custom' ? '◈ CUSTOM PERSONA EDITOR' : '◈ CURRENT PERSONA'}
+        ◈ PERSONA SETTINGS
       </div>
       <div class="cp-row">
         <span class="cp-lbl">NAME</span>
         <input class="cp-input" type="text" placeholder="キャラクター名"
-          bind:value={customProfile.name} oninput={saveCustomProfile}
-          disabled={activePreset !== 'custom'} />
+          bind:value={personaModalProfile.name} />
       </div>
       <div class="cp-row">
         <span class="cp-lbl">一人称</span>
-        <input class="cp-input" type="text" placeholder="私、僕、俺 など"
-          bind:value={customProfile.firstPerson} oninput={saveCustomProfile} />
+        <input class="cp-input" type="text" placeholder="一人称を入力"
+          bind:value={personaModalProfile.firstPerson} />
       </div>
       <div class="cp-row">
         <span class="cp-lbl">二人称</span>
-        <input class="cp-input" type="text" placeholder="あなた、君、お前 など"
-          bind:value={customProfile.secondPerson} oninput={saveCustomProfile} />
+        <input class="cp-input" type="text" placeholder="二人称を入力"
+          bind:value={personaModalProfile.secondPerson} />
       </div>
       <div class="cp-row">
         <span class="cp-lbl">他人</span>
-        <input class="cp-input" type="text" placeholder="あの人、彼、彼女 など"
-          bind:value={customProfile.thirdPerson} oninput={saveCustomProfile} />
+        <input class="cp-input" type="text" placeholder="他人の呼び方を入力"
+          bind:value={personaModalProfile.thirdPerson} />
       </div>
       <div class="cp-row">
         <span class="cp-lbl">口調</span>
         <textarea class="cp-input cp-textarea" placeholder="話し方・性格の説明"
-          bind:value={customProfile.speechStyle} oninput={saveCustomProfile}
-          disabled={activePreset !== 'custom'}></textarea>
+          bind:value={personaModalProfile.speechStyle}></textarea>
+      </div>
+      <div class="cp-row">
+        <span class="cp-lbl">口癖</span>
+        <input class="cp-input" type="text" placeholder="よく使う表現・口癖"
+          bind:value={personaModalProfile.habits} />
       </div>
       <div class="cp-row">
         <span class="cp-lbl">語尾</span>
         <input class="cp-input" type="text" placeholder="語尾の特徴"
-          bind:value={customProfile.sentenceEnding} oninput={saveCustomProfile}
-          disabled={activePreset !== 'custom'} />
+          bind:value={personaModalProfile.sentenceEnding} />
       </div>
       <div class="cp-row">
         <span class="cp-lbl">怒り方</span>
         <input class="cp-input" type="text" placeholder="怒った時の言い方"
-          bind:value={customProfile.angerStyle} oninput={saveCustomProfile}
-          disabled={activePreset !== 'custom'} />
+          bind:value={personaModalProfile.angerStyle} />
       </div>
       <div class="cp-row">
         <span class="cp-lbl">甘い時</span>
         <input class="cp-input" type="text" placeholder="好意・愛情表現"
-          bind:value={customProfile.affectionStyle} oninput={saveCustomProfile}
-          disabled={activePreset !== 'custom'} />
+          bind:value={personaModalProfile.affectionStyle} />
       </div>
       <div class="cp-row">
         <span class="cp-lbl">嫉妬時</span>
         <input class="cp-input" type="text" placeholder="嫉妬した時の言い方"
-          bind:value={customProfile.jealousyStyle} oninput={saveCustomProfile}
-          disabled={activePreset !== 'custom'} />
+          bind:value={personaModalProfile.jealousyStyle} />
       </div>
       <div class="cp-row">
         <span class="cp-lbl">メモ</span>
         <textarea class="cp-input cp-textarea" placeholder="その他の性格・設定メモ"
-          bind:value={customProfile.memo} oninput={saveCustomProfile}
-          disabled={activePreset !== 'custom'}></textarea>
+          bind:value={personaModalProfile.memo}></textarea>
       </div>
-      <div class="modal-voice-sep"></div>
-      <div class="section-lbl">VOICE SETTINGS</div>
-      <div class="vc-rows modal-vc-rows">
-        <div class="vc-row">
-          <span class="vc-lbl">ENGINE</span>
-          <select class="vc-select" bind:value={voiceEngine}>
-            <option value="none">NONE</option>
-            <option value="voicevox">VOICEVOX</option>
-            <option value="elevenlabs">ELEVENLABS</option>
-          </select>
-        </div>
-        <div class="vc-row">
-          <span class="vc-lbl">VOICE NAME</span>
-          <input class="vc-input" type="text" bind:value={voiceId} placeholder="voice id / name…" />
-        </div>
-        <div class="vc-row">
-          <span class="vc-lbl">SPEED</span>
-          <input class="modal-slider" type="range" min="0.5" max="2.0" step="0.1" bind:value={voiceSpeed} />
-          <span class="modal-slider-val">{voiceSpeed.toFixed(1)}</span>
-        </div>
-        <div class="vc-row">
-          <span class="vc-lbl">PITCH</span>
-          <input class="modal-slider" type="range" min="-12" max="12" step="1" bind:value={voicePitch} />
-          <span class="modal-slider-val">{voicePitch}</span>
-        </div>
+      <div class="modal-actions">
+        <button class="modal-close-btn modal-cancel-btn" onclick={() => closePersonaModal(false)}>Cancel</button>
+        <button class="modal-close-btn modal-save-btn" onclick={() => closePersonaModal(true)}>Save</button>
       </div>
-      <button class="modal-close-btn" onclick={() => { showCharacterModal = false; }}>閉じる</button>
     </div>
   </div>
 {/if}
@@ -4599,14 +4773,18 @@ ${recent}
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 20px;
+  min-height: 78px;
+  padding: 16px 28px;
   border-bottom: 1px solid var(--pborder);
-  background: rgba(2,5,18,0.85);
-  backdrop-filter: blur(12px);
+  background:
+    linear-gradient(180deg, rgba(7,18,34,0.92), rgba(2,5,18,0.86)),
+    rgba(2,5,18,0.88);
+  backdrop-filter: blur(16px);
   flex-shrink: 0;
   position: relative;
   z-index: 10;
-  gap: 16px;
+  gap: 28px;
+  box-shadow: inset 0 -1px 0 rgba(0,229,255,0.06), 0 10px 28px rgba(0,0,0,0.22);
 }
 
 .lab-header::after {
@@ -4616,44 +4794,59 @@ ${recent}
   height: 1px;
   background: linear-gradient(90deg, transparent 0%, var(--cy) 30%, var(--pu) 70%, transparent 100%);
   opacity: 0.45;
+  pointer-events: none;
 }
 
 .header-left {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 18px;
   flex-shrink: 0;
+  min-width: 0;
 }
 
 .logo-hex {
-  filter: drop-shadow(0 0 8px rgba(0,229,255,0.55));
-  animation: hex-pulse 3s ease-in-out infinite;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 52px;
+  filter: drop-shadow(0 0 7px rgba(0,229,255,0.34));
+  animation: hex-pulse 4s ease-in-out infinite;
+  flex-shrink: 0;
 }
 
-.title-group { display: flex; flex-direction: column; gap: 2px; }
+.title-group { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
 
 .main-title {
-  font-size: 18px;
-  font-weight: 900;
+  font-size: 30px;
+  font-weight: 800;
   letter-spacing: 5px;
   color: var(--cy);
-  text-shadow: 0 0 14px var(--cy-glow), 0 0 35px rgba(0,229,255,0.15);
-  line-height: 1;
+  text-shadow: 0 0 8px rgba(0,229,255,0.24);
+  line-height: 0.95;
+  margin: 0;
 }
 
 .sub-title {
-  font-size: 9px;
-  letter-spacing: 2.5px;
-  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.25;
+  letter-spacing: 2.1px;
+  color: rgba(138,180,194,0.9);
   text-transform: uppercase;
+  margin: 0;
 }
 
 .header-center {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 14px;
   flex: 1;
   min-width: 0;
+  align-self: center;
+  position: relative;
+  z-index: 1;
+  pointer-events: none;
 }
 
 .header-divider {
@@ -4663,68 +4856,98 @@ ${recent}
 }
 
 .header-tag {
-  font-size: 9px;
+  font-size: 12px;
+  line-height: 1.35;
   letter-spacing: 1.5px;
-  color: var(--dim);
+  color: rgba(138,180,194,0.62);
   white-space: nowrap;
   text-overflow: ellipsis;
   overflow: hidden;
-  max-width: 280px;
+  max-width: 360px;
+  padding: 5px 10px;
+  border: 1px solid rgba(0,229,255,0.08);
+  border-radius: 999px;
+  background: rgba(0,229,255,0.025);
 }
 
 .header-right {
   display: flex;
   align-items: center;
-  gap: 18px;
+  gap: 12px;
   flex-shrink: 0;
+  position: relative;
+  z-index: 3;
+  pointer-events: auto;
 }
 
 .sys-online {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 10px;
-  letter-spacing: 2px;
-  color: var(--green);
-  text-shadow: 0 0 8px var(--green);
+  gap: 9px;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid rgba(52,211,153,0.18);
+  border-radius: 999px;
+  background: rgba(52,211,153,0.055);
+  font-size: 12px;
+  line-height: 1;
+  letter-spacing: 1.7px;
+  color: rgba(134,239,172,0.92);
+  text-shadow: none;
+  white-space: nowrap;
 }
 
 .pulse-dot {
-  width: 7px; height: 7px;
+  width: 8px; height: 8px;
   border-radius: 50%;
   background: var(--green);
-  box-shadow: 0 0 8px var(--green);
+  box-shadow: 0 0 9px rgba(52,211,153,0.78);
   animation: dot-pulse 1.8s ease-in-out infinite;
+  flex-shrink: 0;
 }
 
 .clock {
-  font-size: 21px;
-  font-weight: 700;
-  letter-spacing: 3px;
+  font-size: 34px;
+  font-weight: 750;
+  letter-spacing: 2px;
   color: var(--cy);
-  text-shadow: 0 0 14px var(--cy-glow);
+  text-shadow: 0 0 10px rgba(0,229,255,0.2);
   font-variant-numeric: tabular-nums;
-  min-width: 80px;
+  min-width: 152px;
+  text-align: center;
+  line-height: 1;
+  padding: 0 4px;
 }
 
 .build-badge {
-  font-size: 9px;
-  letter-spacing: 1.5px;
+  font-size: 12px;
+  line-height: 1;
+  letter-spacing: 1.4px;
   color: var(--pu);
   border: 1px solid var(--pu-dim);
-  padding: 3px 8px;
-  border-radius: 2px;
+  padding: 10px 12px;
+  border-radius: 6px;
   background: var(--pu-dim);
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+  text-transform: uppercase;
 }
 
 .api-settings-btn {
-  font-size: 10px;
-  letter-spacing: 1.5px;
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  line-height: 1;
+  letter-spacing: 1.2px;
   color: var(--cy);
-  border: 1px solid var(--cy);
-  padding: 4px 10px;
-  border-radius: 2px;
-  background: transparent;
+  border: 1px solid rgba(0,229,255,0.34);
+  padding: 0 13px;
+  border-radius: 6px;
+  background: rgba(0,229,255,0.045);
   text-decoration: none;
   text-transform: uppercase;
   transition: background 0.2s, box-shadow 0.2s, color 0.2s;
@@ -4788,13 +5011,16 @@ ${recent}
   cursor: col-resize;
   position: relative;
   transition: background 0.18s;
-  z-index: 5;
+  z-index: 30;
+  pointer-events: auto;
+  touch-action: none;
 }
 
 .resize-bar::after {
   content: '';
   position: absolute;
-  inset: 0 -4px;
+  inset: 0 -10px;
+  pointer-events: auto;
 }
 
 .resize-bar:hover,
@@ -4828,7 +5054,8 @@ ${recent}
 
 .ph-diamond { color: var(--cy); font-size: 11px; }
 .ph-text {
-  font-size: 10.5px;
+  font-size: 15px;
+  line-height: 1.4;
   font-weight: 700;
   letter-spacing: 2.5px;
   color: var(--cy);
@@ -4865,7 +5092,8 @@ ${recent}
 }
 
 .section-lbl {
-  font-size: 9.5px;
+  font-size: 15px;
+  line-height: 1.4;
   letter-spacing: 2px;
   color: var(--muted);
   padding-bottom: 6px;
@@ -5025,7 +5253,8 @@ ${recent}
 }
 
 .av-thumb span {
-  font-size: 8.5px;
+  font-size: 15px;
+  line-height: 1.3;
   color: var(--text2);
   letter-spacing: 0.5px;
   white-space: nowrap;
@@ -5054,7 +5283,8 @@ ${recent}
   width: 100%;
   padding: 5px 0;
   font-family: inherit;
-  font-size: 9px;
+  font-size: 14px;
+  line-height: 1.4;
   letter-spacing: 1.5px;
   text-transform: uppercase;
   color: var(--cy);
@@ -5082,12 +5312,14 @@ ${recent}
   align-items: center;
 }
 .api-status-name {
-  font-size: 9px;
+  font-size: 15px;
+  line-height: 1.4;
   letter-spacing: 1px;
   color: var(--muted);
 }
 .api-status-val {
-  font-size: 9px;
+  font-size: 15px;
+  line-height: 1.4;
   letter-spacing: 1px;
   font-weight: 600;
 }
@@ -5101,7 +5333,8 @@ ${recent}
 }
 
 .vc-lbl {
-  font-size: 9px;
+  font-size: 15px;
+  line-height: 1.4;
   letter-spacing: 1.5px;
   color: var(--muted);
   white-space: nowrap;
@@ -5118,7 +5351,8 @@ ${recent}
   border-radius: 3px;
   color: var(--pu);
   font-family: inherit;
-  font-size: 10px;
+  font-size: 18px;
+  line-height: 1.6;
   letter-spacing: 1px;
   padding: 4px 7px;
   outline: none;
@@ -5143,7 +5377,8 @@ ${recent}
 }
 
 .stat-lbl {
-  font-size: 10px;
+  font-size: 15px;
+  line-height: 1.4;
   letter-spacing: 1.5px;
   color: var(--text2);
   width: 66px;
@@ -5169,7 +5404,8 @@ ${recent}
 .affection-bar{ background: linear-gradient(90deg, #e879f9, #f43f5e); }
 
 .stat-num {
-  font-size: 11px;
+  font-size: 15px;
+  line-height: 1.4;
   color: var(--cy);
   min-width: 28px;
   text-align: right;
@@ -5179,7 +5415,8 @@ ${recent}
 .mood-row { justify-content: space-between; }
 
 .mood-val {
-  font-size: 14px;
+  font-size: 20px;
+  line-height: 1.35;
   font-weight: 700;
   letter-spacing: 1.5px;
   transition: color 0.4s, text-shadow 0.4s;
@@ -5194,7 +5431,8 @@ ${recent}
 }
 
 .log-title {
-  font-size: 8.5px;
+  font-size: 15px;
+  line-height: 1.4;
   letter-spacing: 2px;
   color: var(--muted);
   margin-bottom: 7px;
@@ -5204,7 +5442,8 @@ ${recent}
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 10.5px;
+  font-size: 16px;
+  line-height: 1.9;
   color: var(--text2);
   padding: 3px 0;
   letter-spacing: 0.5px;
@@ -5241,13 +5480,15 @@ ${recent}
   justify-content: space-between;
 }
 .lm-label {
-  font-size: 9.5px;
+  font-size: 15px;
+  line-height: 1.4;
   letter-spacing: 1.2px;
   color: var(--cy);
   opacity: 0.75;
 }
 .lm-update-btn {
-  font-size: 8.5px;
+  font-size: 14px;
+  line-height: 1.4;
   letter-spacing: 0.8px;
   font-family: inherit;
   padding: 2px 7px;
@@ -5264,15 +5505,16 @@ ${recent}
 }
 .lm-update-btn:disabled { opacity: 0.35; cursor: default; }
 .lm-text {
-  font-size: 10px;
-  line-height: 1.7;
+  font-size: 16px;
+  line-height: 1.9;
   color: rgba(200,240,255,0.75);
   white-space: pre-wrap;
   margin: 0;
   font-family: inherit;
 }
 .lm-empty {
-  font-size: 9.5px;
+  font-size: 16px;
+  line-height: 1.6;
   color: var(--muted);
   margin: 0;
   text-align: center;
@@ -5316,14 +5558,15 @@ ${recent}
 }
 
 .slider-lbl {
-  font-size: 10.5px;
+  font-size: 15px;
   font-weight: 700;
   letter-spacing: 1.5px;
-  line-height: 1;
+  line-height: 1.3;
 }
 
 .slider-sub {
-  font-size: 9px;
+  font-size: 13px;
+  line-height: 1.4;
   color: var(--muted);
   letter-spacing: 0.5px;
 }
@@ -5372,7 +5615,8 @@ ${recent}
 }
 
 .slider-val {
-  font-size: 12.5px;
+  font-size: 15px;
+  line-height: 1.4;
   font-weight: 700;
   min-width: 28px;
   text-align: right;
@@ -5399,20 +5643,21 @@ ${recent}
 }
 
 .tt-key {
-  font-size: 10px;
+  font-size: 13px;
+  line-height: 1.4;
   font-weight: 700;
   letter-spacing: 1.5px;
   color: var(--cy);
   flex-shrink: 0;
 }
 
-.tt-sep { color: var(--muted); font-size: 10px; }
+.tt-sep { color: var(--muted); font-size: 13px; line-height: 1.4; }
 
 .tt-desc {
-  font-size: 11px;
+  font-size: 14px;
   color: var(--text2);
   letter-spacing: 0.3px;
-  line-height: 1.5;
+  line-height: 1.6;
 }
 
 /* Toggles */
@@ -5464,7 +5709,8 @@ ${recent}
 }
 
 .toggle-lbl {
-  font-size: 11px;
+  font-size: 15px;
+  line-height: 1.4;
   letter-spacing: 1px;
   color: var(--text2);
 }
@@ -5520,7 +5766,8 @@ ${recent}
 }
 
 .cp-editor-hd {
-  font-size: 10px;
+  font-size: 15px;
+  line-height: 1.4;
   letter-spacing: 2px;
   color: #a78bfa;
   margin-bottom: 12px;
@@ -5550,6 +5797,28 @@ ${recent}
   text-align: center;
 }
 
+.cp-toggle-btn {
+  width: 100%;
+  margin: 8px 0;
+  padding: 8px 12px;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.4;
+  letter-spacing: 1.2px;
+  color: rgba(0,229,255,0.78);
+  background: rgba(0,229,255,0.06);
+  border: 1px solid rgba(0,229,255,0.24);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.cp-toggle-btn:hover {
+  color: var(--cy);
+  background: rgba(0,229,255,0.12);
+  border-color: rgba(0,229,255,0.42);
+}
+
 /* Save Slots */
 .cp-slots {
   margin-top: 14px;
@@ -5561,7 +5830,8 @@ ${recent}
 }
 
 .cp-slots-hd {
-  font-size: 9px;
+  font-size: 15px;
+  line-height: 1.4;
   letter-spacing: 2px;
   color: var(--muted);
   margin-bottom: 2px;
@@ -5639,7 +5909,8 @@ ${recent}
 }
 
 .cp-lbl {
-  font-size: 12px;
+  font-size: 16px;
+  line-height: 1.4;
   letter-spacing: 0.5px;
   color: #a78bfa;
   width: 44px;
@@ -5656,10 +5927,10 @@ ${recent}
   border-radius: 4px;
   color: var(--text);
   font-family: inherit;
-  font-size: 14px;
+  font-size: 18px;
   letter-spacing: 0;
   padding: 6px 10px;
-  line-height: 1.5;
+  line-height: 1.65;
   outline: none;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
@@ -5675,12 +5946,12 @@ ${recent}
   border-color: rgba(167,139,250,0.12);
 }
 
-.cp-input::placeholder { color: var(--muted); font-size: 13px; }
+.cp-input::placeholder { color: var(--muted); font-size: 16px; }
 
 .cp-textarea {
   resize: vertical;
   min-height: 64px;
-  line-height: 1.6;
+  line-height: 1.75;
 }
 
 /* ============================================================
@@ -5831,9 +6102,9 @@ ${recent}
 }
 
 .msg-text {
-  font-size: 13px;
+  font-size: 18px;
   color: var(--text);
-  line-height: 1.65;
+  line-height: 1.85;
   letter-spacing: 0.3px;
   word-break: break-word;
 }
@@ -5855,11 +6126,11 @@ ${recent}
 
 .error-text {
   color: #fb923c !important;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .msg-time {
-  font-size: 9px;
+  font-size: 10px;
   color: var(--muted);
   margin-top: 6px;
   letter-spacing: 0.5px;
@@ -6536,11 +6807,11 @@ ${recent}
   border-radius: 4px;
   color: var(--text);
   font-family: inherit;
-  font-size: 15px;
+  font-size: 18px;
   padding: 10px 12px;
   resize: none;
   outline: none;
-  line-height: 1.5;
+  line-height: 1.55;
   min-height: 46px;
   transition: border-color 0.15s;
 }
@@ -6550,7 +6821,7 @@ ${recent}
   box-shadow: 0 0 8px rgba(0,229,255,0.1);
 }
 
-.chat-input::placeholder { color: var(--muted); font-size: 14px; }
+.chat-input::placeholder { color: var(--muted); font-size: 15px; }
 
 .reset-chat-btn {
   display: flex;
@@ -6590,7 +6861,7 @@ ${recent}
   border-radius: 4px;
   color: var(--cy);
   font-family: inherit;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 700;
   letter-spacing: 1.5px;
   cursor: pointer;
@@ -6858,24 +7129,34 @@ ${recent}
    ============================================================ */
 .layout-switch {
   display: flex;
-  border: 1px solid var(--pborder);
-  border-radius: 3px;
+  min-height: 34px;
+  border: 1px solid rgba(0,229,255,0.24);
+  border-radius: 6px;
   overflow: hidden;
   flex-shrink: 0;
+  background: rgba(0,229,255,0.035);
+  box-sizing: border-box;
+  position: relative;
+  z-index: 4;
+  pointer-events: auto;
 }
 
 .ls-btn {
   font-family: inherit;
-  font-size: 9.5px;
+  font-size: 12px;
   font-weight: 700;
-  letter-spacing: 1.5px;
-  color: var(--muted);
+  line-height: 1;
+  letter-spacing: 1.25px;
+  color: rgba(138,180,194,0.82);
   background: transparent;
   border: none;
-  padding: 4px 10px;
+  padding: 0 12px;
+  min-height: 34px;
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
-  border-right: 1px solid var(--pborder);
+  border-right: 1px solid rgba(0,229,255,0.16);
+  box-sizing: border-box;
+  pointer-events: auto;
 }
 
 .ls-btn:last-child { border-right: none; }
@@ -6886,9 +7167,9 @@ ${recent}
 }
 
 .ls-btn.active {
-  background: rgba(0,229,255,0.13);
+  background: rgba(0,229,255,0.14);
   color: var(--cy);
-  text-shadow: 0 0 8px var(--cy-glow);
+  text-shadow: 0 0 6px rgba(0,229,255,0.3);
 }
 
 /* ============================================================
@@ -7877,7 +8158,8 @@ ${recent}
 }
 
 .ef-title {
-  font-size: 9px;
+  font-size: 15px;
+  line-height: 1.4;
   letter-spacing: 2px;
   color: var(--cy);
   opacity: 0.75;
@@ -7887,7 +8169,8 @@ ${recent}
 .ef-spacer { flex: 1; }
 
 .ef-analyzing {
-  font-size: 9px;
+  font-size: 14px;
+  line-height: 1.4;
   color: #a78bfa;
   letter-spacing: 1px;
   animation: pulse-opacity 1.2s ease-in-out infinite;
@@ -7905,7 +8188,8 @@ ${recent}
   border-radius: 3px;
   color: var(--muted);
   font-family: inherit;
-  font-size: 9px;
+  font-size: 14px;
+  line-height: 1.4;
   letter-spacing: 1.5px;
   cursor: pointer;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
@@ -7923,7 +8207,8 @@ ${recent}
 }
 
 .ef-empty {
-  font-size: 9px;
+  font-size: 16px;
+  line-height: 1.6;
   color: var(--muted);
   text-align: center;
   padding: 6px 0;
@@ -7952,7 +8237,8 @@ ${recent}
 }
 
 .ef-detected {
-  font-size: 10px;
+  font-size: 16px;
+  line-height: 1.4;
   font-weight: 600;
   color: #a78bfa;
   letter-spacing: 0.5px;
@@ -7960,12 +8246,14 @@ ${recent}
 }
 
 .ef-conf {
-  font-size: 9px;
+  font-size: 14px;
+  line-height: 1.4;
   color: var(--muted);
 }
 
 .ef-dt {
-  font-size: 9px;
+  font-size: 14px;
+  line-height: 1.4;
   font-variant-numeric: tabular-nums;
   color: var(--muted);
   padding: 1px 5px;
@@ -7976,7 +8264,8 @@ ${recent}
 .ef-dt.neg { color: #f43f5e; background: rgba(244,63,94,0.1);  }
 
 .ef-fallback {
-  font-size: 8px;
+  font-size: 12px;
+  line-height: 1.4;
   letter-spacing: 1px;
   color: #fb923c;
   opacity: 0.7;
@@ -7984,13 +8273,15 @@ ${recent}
 
 .ef-ts {
   margin-left: auto;
-  font-size: 8px;
+  font-size: 12px;
+  line-height: 1.4;
   color: var(--muted);
   opacity: 0.6;
 }
 
 .ef-snippet {
-  font-size: 9px;
+  font-size: 14px;
+  line-height: 1.5;
   color: rgba(200,220,255,0.45);
   white-space: nowrap;
   overflow: hidden;
@@ -8006,7 +8297,8 @@ ${recent}
 }
 
 .ef-chip {
-  font-size: 8.5px;
+  font-size: 13px;
+  line-height: 1.4;
   padding: 1px 6px;
   border-radius: 3px;
   background: rgba(255,255,255,0.05);
@@ -8027,7 +8319,8 @@ ${recent}
 }
 
 .ef-count {
-  font-size: 8.5px;
+  font-size: 13px;
+  line-height: 1.4;
   color: var(--muted);
   letter-spacing: 0.5px;
 }
@@ -8039,7 +8332,8 @@ ${recent}
   border-radius: 3px;
   color: rgba(244,63,94,0.5);
   font-family: inherit;
-  font-size: 8px;
+  font-size: 14px;
+  line-height: 1.4;
   letter-spacing: 1px;
   cursor: pointer;
   transition: background 0.12s, color 0.12s;
@@ -8114,9 +8408,33 @@ ${recent}
   flex-direction: column;
   align-items: center;
   gap: 20px;
-  width: min(600px, 96vw);
+  width: min(900px, 96vw);
   max-height: 92vh;
   overflow-y: auto;
+  position: relative;
+}
+
+.modal-x-btn {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(0,229,255,0.28);
+  border-radius: 50%;
+  color: rgba(0,229,255,0.8);
+  background: rgba(0,229,255,0.06);
+  font: inherit;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.modal-x-btn:hover {
+  color: var(--cy);
+  background: rgba(0,229,255,0.14);
+  border-color: rgba(0,229,255,0.48);
 }
 
 .modal-avatar-wrap {
@@ -8206,7 +8524,8 @@ ${recent}
 
 /* ── Modal scoped overrides (main page は影響なし) ── */
 .modal-window .section-lbl {
-  font-size: 11px;
+  font-size: 15px;
+  line-height: 1.4;
   letter-spacing: 2.5px;
   padding-bottom: 10px;
   width: 100%;
@@ -8225,24 +8544,26 @@ ${recent}
 }
 
 .modal-window .cp-lbl {
-  font-size: 13px;
+  font-size: 16px;
+  line-height: 1.4;
   width: 60px;
   padding-top: 10px;
 }
 
 .modal-window .cp-input {
-  font-size: 14px;
+  font-size: 18px;
+  line-height: 1.65;
   padding: 9px 12px;
 }
 
 .modal-window .cp-textarea {
-  min-height: 84px;
-  font-size: 14px;
-  line-height: 1.7;
+  min-height: 150px;
+  font-size: 18px;
+  line-height: 1.75;
 }
 
 .modal-window .cp-input::placeholder {
-  font-size: 13px;
+  font-size: 16px;
 }
 
 .modal-window .modal-close-btn {
@@ -8250,5 +8571,25 @@ ${recent}
   padding: 9px 32px;
   border-radius: 6px;
   margin-top: 8px;
+}
+
+.modal-actions {
+  width: 100%;
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding-top: 8px;
+}
+
+.modal-cancel-btn {
+  color: rgba(200,240,255,0.72);
+  border-color: rgba(200,240,255,0.22);
+  background: rgba(200,240,255,0.04);
+}
+
+.modal-save-btn {
+  color: var(--cy);
+  border-color: rgba(0,229,255,0.45);
+  background: rgba(0,229,255,0.12);
 }
 </style>

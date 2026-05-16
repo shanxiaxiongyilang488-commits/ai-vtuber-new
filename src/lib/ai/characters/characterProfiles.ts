@@ -19,6 +19,9 @@ export type CharacterProfile = {
 export const CHARACTER_PROFILES: Record<string, CharacterProfile> = {
   muryi: {
     style:          'tsundere',
+    firstPerson:    'ミュリィ',
+    secondPerson:   'あなた',
+    thirdPerson:    'あの子',
     speechStyle:    '明るく親しみやすい自然体。感情豊かで素直。',
     habits:         '「ねえ」「そういえば」「気になるんだけど」を自然に使う。',
     sentenceEnding: '「〜だよ」「〜かな」「〜じゃない？」を多用。',
@@ -56,6 +59,9 @@ export const CHARACTER_PROFILES: Record<string, CharacterProfile> = {
   },
   risea: {
     style:          'logical',
+    firstPerson:    '私',
+    secondPerson:   'あなた',
+    thirdPerson:    'その人',
     speechStyle:    '論理的で冷静。データや根拠を好む。感情より事実優先。',
     habits:         '「データ的に言うと」「効率を考えれば」「論理的に見て」。',
     sentenceEnding: '「〜だと思います」「〜ですね」「〜が最善です」。',
@@ -177,7 +183,7 @@ export const CHARACTER_PROFILES: Record<string, CharacterProfile> = {
     style:          'cheerful',
     firstPerson:    '私',
     secondPerson:   'あなた',
-    thirdPerson:    'あの子',
+    thirdPerson:    'あの人',
     speechStyle:    '明るくポジティブでエネルギッシュ。テンション高く弾けるような活発さ。',
     habits:         '「ねえねえ！」「それって面白そう！」「すごいじゃん！」と感嘆が自然に出る。',
     sentenceEnding: '「〜だよ！」「〜じゃん！」「〜してみよ！」など感嘆符多め。',

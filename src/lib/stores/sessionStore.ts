@@ -11,7 +11,7 @@
  */
 
 import { writable } from 'svelte/store';
-import { DEFAULT_MODELS, type AIProvider } from '$lib/config/models';
+import { DEFAULT_MODELS, PROVIDER_OPTIONS, type AIProvider } from '$lib/config/models';
 
 const KEY_PROVIDER = 'session_provider';
 const KEY_MODEL    = 'session_model';
@@ -20,6 +20,10 @@ const KEY_MODEL    = 'session_model';
 function settingsModel(provider: AIProvider): string {
   if (typeof localStorage === 'undefined') return DEFAULT_MODELS[provider];
   return localStorage.getItem(`api_${provider}_model`) || DEFAULT_MODELS[provider];
+}
+
+function isSelectableProvider(value: string | null): value is Exclude<AIProvider, 'onair'> {
+  return PROVIDER_OPTIONS.some(option => option.value === value);
 }
 
 function createSessionStore() {
@@ -49,10 +53,14 @@ function createSessionStore() {
         localStorage.setItem(MIGRATION_KEY, '1');
       }
 
-      const savedProvider = localStorage.getItem(KEY_PROVIDER) as AIProvider | null;
+      const savedProvider = localStorage.getItem(KEY_PROVIDER);
       const savedModel    = localStorage.getItem(KEY_MODEL);
-      const provider      = savedProvider ?? 'gemini';
-      const model         = savedModel    ?? settingsModel(provider);
+      const provider      = isSelectableProvider(savedProvider) ? savedProvider : 'gemini';
+      const model         = savedProvider === provider && savedModel ? savedModel : settingsModel(provider);
+      if (savedProvider && savedProvider !== provider) {
+        localStorage.setItem(KEY_PROVIDER, provider);
+        localStorage.removeItem(KEY_MODEL);
+      }
       set({ provider, model });
     },
 

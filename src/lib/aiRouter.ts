@@ -115,7 +115,7 @@ async function claudeHandler({ prompt }: HandlerParams): Promise<string> {
 // 🟢 Local (Ollama)
 // ==============================
 //
-async function ollamaHandler({ prompt }: HandlerParams): Promise<string> {
+async function ollamaHandler({ prompt, character }: HandlerParams): Promise<string> {
   console.log("🟢 Ollama 呼び出し");
 
   const res = await fetch("http://localhost:11434/api/generate", {
@@ -124,7 +124,7 @@ async function ollamaHandler({ prompt }: HandlerParams): Promise<string> {
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      model: "qwen2.5:3b",
+      model: character.ollamaModel || "qwen2.5:3b",
       prompt: prompt,
       stream: false
     })
@@ -147,7 +147,7 @@ async function ollamaHandler({ prompt }: HandlerParams): Promise<string> {
 // ==============================
 //
 
-async function lmstudioHandler({ prompt }: HandlerParams): Promise<string> {
+async function lmstudioHandler({ prompt, character }: HandlerParams): Promise<string> {
   console.log("🟡 LM Studio 呼び出し");
 
   const res = await fetch("http://localhost:1234/v1/chat/completions", {
@@ -156,7 +156,7 @@ async function lmstudioHandler({ prompt }: HandlerParams): Promise<string> {
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      model: "local-model",
+      model: character.ollamaModel || "local-model",
       messages: [
         { role: "user", content: prompt }
       ]
