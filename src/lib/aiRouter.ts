@@ -1,26 +1,100 @@
-import OpenAI from "openai";
+import { ChatServiceFactory, runOnceText, type Message } from "@aituber-onair/chat";
 import type { Character } from "$lib/types/character";
 
 type Engine = "openai" | "gemini" | "claude" | "ollama" | "lmstudio";
+type Provider = "openai" | "gemini" | "anthropic";
 
 type HandlerParams = {
   prompt: string;
   character: Character;
+  model?: string;
 };
 
-//
-// ==============================
-// 🔵 OpenAI
-// ==============================
-//
-async function openaiHandler({ prompt, character }: HandlerParams): Promise<string> {
-  console.log("🔥 OpenAI 呼び出し開始");
+type GenerateTextParams = {
+  model?: string;
+  messages: Message[];
+};
 
-  const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY
+function detectProvider(model: string): Provider {
+  const lowerModel = model.toLowerCase();
+
+  if (lowerModel.includes("gpt") || lowerModel.includes("o4")) {
+    return "openai";
+  }
+
+  if (lowerModel.includes("gemini")) {
+    return "gemini";
+  }
+
+  if (lowerModel.includes("claude")) {
+    return "anthropic";
+  }
+
+  return "openai";
+}
+
+function getApiKey(provider: Provider): string {
+  const apiKey =
+    provider === "gemini"
+      ? process.env.GEMINI_API_KEY
+      : provider === "anthropic"
+        ? process.env.ANTHROPIC_API_KEY
+        : process.env.OPENAI_API_KEY;
+
+  if (!apiKey) {
+    throw `${provider} API key is not configured`;
+  }
+
+  return apiKey;
+}
+
+function createChat({
+  provider,
+  apiKey,
+  model
+}: {
+  provider: Provider;
+  apiKey: string;
+  model: string;
+}) {
+  const chatProvider = provider === "anthropic" ? "claude" : provider;
+  const chatService = ChatServiceFactory.createChatService(chatProvider, {
+    apiKey,
+    model
   });
 
-  const systemPrompt = `
+  return {
+    async generateText({ messages }: { messages: Message[] }): Promise<{ text: string }> {
+      return {
+        text: await runOnceText(chatService, messages)
+      };
+    }
+  };
+}
+
+export async function generateText({ model = "gpt-4o-mini", messages }: GenerateTextParams): Promise<string> {
+  try {
+    const provider = detectProvider(model);
+    const apiKey = getApiKey(provider);
+
+    const chat = createChat({
+      provider,
+      apiKey,
+      model
+    });
+
+    const result = await chat.generateText({
+      messages
+    });
+
+    return result.text;
+  } catch (error) {
+    throw error instanceof Error ? error.message : String(error);
+  }
+}
+
+function buildCharacterSystemPrompt(character: Character): string {
+  return `
 一人称は「${character.firstPerson || "私"}」を使う。
 二人称は「${character.secondPerson || "あなた"}」を使う。
 口調は「${character.catchPhrase || ""}」のように話す。
@@ -39,19 +113,24 @@ async function openaiHandler({ prompt, character }: HandlerParams): Promise<stri
 
 
 ${character.systemPrompt || ""}
-
-${prompt}
 `;
+}
 
-  const res = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
+//
+// ==============================
+// 🔵 OpenAI
+// ==============================
+//
+async function openaiHandler({ prompt, character, model }: HandlerParams): Promise<string> {
+  console.log("🔥 OpenAI 呼び出し開始");
+
+  return await generateText({
+    model: model || character.ollamaModel || "gpt-4o-mini",
     messages: [
-      { role: "system", content: systemPrompt }
-    ],
-    temperature: 0.9
+      { role: "system", content: buildCharacterSystemPrompt(character) },
+      { role: "user", content: prompt }
+    ]
   });
-
-  return res.choices[0]?.message?.content ?? "";
 }
 
 //
@@ -59,23 +138,16 @@ ${prompt}
 // 🟣 Gemini
 // ==============================
 //
-async function geminiHandler({ prompt }: HandlerParams): Promise<string> {
+async function geminiHandler({ prompt, character, model }: HandlerParams): Promise<string> {
   console.log("🔥 Gemini 呼び出し開始");
 
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${process.env.GEMINI_API_KEY}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }]
-      })
-    }
-  );
-
-  const data = await res.json();
-
-  return data?.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join("") ?? "（Gemini応答失敗）";
+  return await generateText({
+    model: model || character.ollamaModel || "gemini-2.5-flash",
+    messages: [
+      { role: "system", content: buildCharacterSystemPrompt(character) },
+      { role: "user", content: prompt }
+    ]
+  });
 }
 
 //
@@ -83,31 +155,16 @@ async function geminiHandler({ prompt }: HandlerParams): Promise<string> {
 // 🟡 Claude
 // ==============================
 //
-async function claudeHandler({ prompt }: HandlerParams): Promise<string> {
+async function claudeHandler({ prompt, character, model }: HandlerParams): Promise<string> {
   console.log("🔥 Claude 呼び出し開始");
 
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": process.env.ANTHROPIC_API_KEY ?? "",
-      "anthropic-version": "2023-06-01",
-      "content-type": "application/json"
-    },
-    body: JSON.stringify({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 200,
-      messages: [
-        {
-          role: "user",
-          content: prompt
-        }
-      ]
-    })
+  return await generateText({
+    model: model || character.ollamaModel || "claude-haiku-4-5-20251001",
+    messages: [
+      { role: "system", content: buildCharacterSystemPrompt(character) },
+      { role: "user", content: prompt }
+    ]
   });
-
-  const data = await res.json();
-
-  return data?.content?.[0]?.text ?? "（Claude応答失敗）";
 }
 
 //
@@ -189,11 +246,13 @@ const handlers: Record<Engine, (p: HandlerParams) => Promise<string>> = {
 export async function generateReply({
   engine,
   prompt,
-  character
+  character,
+  model
 }: {
   engine: Engine;
   prompt: string;
   character: Character;
+  model?: string;
 }): Promise<string> {
 
   console.log("🤖 使用AI:", engine);
@@ -204,5 +263,5 @@ export async function generateReply({
     throw new Error(`未対応エンジン: ${engine}`);
   }
 
-  return await handler({ prompt, character });
+  return await handler({ prompt, character, model });
 }

@@ -3,6 +3,7 @@ import type { RequestHandler } from './$types';
 import { muryiPersona } from '$lib/ai/personas'
 import { buildCharacterPrompt } from '$lib/ai/prompts/buildCharacterPrompt'
 import { buildMemoryContext, type BuiltMemoryPrompt, type MemoryCoreRequest } from '$lib/ai/memory-core/memoryCore';
+import { generateText } from '$lib/aiRouter';
 
 // =========================
 // 型定義
@@ -83,8 +84,8 @@ export const POST: RequestHandler = async ({ request }) => {
   });
 
   const messages = [
-    { role: 'system', content: memoryContext.systemPrompt },
-    { role: 'user', content: lastMessage || 'こんにちは！' }
+    { role: 'system' as const, content: memoryContext.systemPrompt },
+    { role: 'user' as const, content: lastMessage || 'こんにちは！' }
   ];
 
   const memoryDebug = memory?.enabled ? memoryContext.debug : undefined;
@@ -128,91 +129,23 @@ export const POST: RequestHandler = async ({ request }) => {
     return json({ text, memory: memoryDebug });
   }
 
-  const { env } = await import('$env/dynamic/private');
+  const defaultModel =
+    engine === 'gemini'
+      ? 'gemini-2.5-flash'
+      : engine === 'claude'
+        ? 'claude-haiku-4-5-20251001'
+        : 'gpt-4o-mini';
 
-  // =========================
-  // Gemini
-  // =========================
-  if (engine === 'gemini') {
-    if (!env.GEMINI_API_KEY) {
-      throw error(500, 'GEMINI_API_KEY が未設定');
-    }
+  let text: string;
 
-    const geminiModel = model || 'gemini-2.5-flash';
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${env.GEMINI_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          system_instruction: {
-            parts: [{ text: memoryContext.systemPrompt }]
-          },
-          contents: [
-            {
-              role: 'user',
-              parts: [{ text: lastMessage || 'こんにちは！' }]
-            }
-          ]
-        })
-      }
-    );
-
-    const data = await res.json();
-    const text: string = data?.candidates?.[0]?.content?.parts?.map((part: { text?: string }) => part.text ?? '').join('') ?? '';
-
-    return json({ text, memory: memoryDebug });
-  }
-
-  // =========================
-  // Claude
-  // =========================
-  if (engine === 'claude') {
-    if (!env.ANTHROPIC_API_KEY) {
-      throw error(500, 'ANTHROPIC_API_KEY が未設定');
-    }
-
-    const claudeModel = model || 'claude-haiku-4-5-20251001';
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: claudeModel,
-        max_tokens: 500,
-        system: memoryContext.systemPrompt,
-        messages: [{ role: 'user', content: lastMessage || 'こんにちは！' }]
-      })
+  try {
+    text = await generateText({
+      model: model || defaultModel,
+      messages
     });
-
-    const data = await res.json();
-    const text: string = data?.content?.map((part: { text?: string }) => part.text ?? '').join('') ?? '';
-
-    return json({ text, memory: memoryDebug });
+  } catch (err) {
+    throw error(500, String(err));
   }
-
-  // =========================
-  // OpenAI
-  // =========================
-  const { default: OpenAI } = await import('openai');
-
-  if (!env.OPENAI_API_KEY) {
-    throw error(500, 'OPENAI_API_KEY が未設定');
-  }
-
-  const openai = new OpenAI({
-    apiKey: env.OPENAI_API_KEY
-  });
-
-  const completion = await openai.chat.completions.create({
-  model: model || 'gpt-4o-mini',
-  messages: messages as any
-});
-
-  const text = completion.choices[0].message.content ?? '';
 
   return json({ text, memory: memoryDebug });
 };

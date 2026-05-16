@@ -23,6 +23,7 @@
 		"vite": "^7.3.1"
 	},
 	"dependencies": {
+		"@aituber-onair/chat": "^0.26.0",
 		"@aituber-onair/core": "^0.25.4",
 		"@mediapipe/tasks-vision": "^0.10.34",
 		"@pixiv/three-vrm": "^3.5.1",
