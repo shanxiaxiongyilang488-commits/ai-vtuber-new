@@ -1,23 +1,47 @@
 import { json } from '@sveltejs/kit';
 import { generateReply } from '$lib/aiRouter';
+import type { Character } from '$lib/types/character';
+
+type DiscussionEngine = 'openai' | 'gemini' | 'claude' | 'ollama' | 'lmstudio';
+
+type DiscussionCharacter = Partial<Character> & {
+  engine?: DiscussionEngine;
+  aiEngine?: DiscussionEngine;
+  model?: string;
+  modelName?: string;
+};
+
+function normalizeCharacter(character: DiscussionCharacter | undefined, fallbackId: 'char1' | 'char2') {
+  const engine = character?.engine ?? character?.aiEngine ?? 'openai';
+  const model = character?.modelName || character?.model || character?.ollamaModel || '';
+
+  return {
+    character: {
+      ...character,
+      id: character?.id ?? fallbackId,
+      name: character?.name ?? fallbackId,
+      systemPrompt: character?.systemPrompt ?? '',
+      aiEngine: engine === 'claude' ? 'openai' : engine,
+      voiceEngine: character?.voiceEngine ?? 'none',
+      voiceId: character?.voiceId ?? '',
+      speakerId: character?.speakerId ?? 0,
+      ollamaModel: model
+    } as Character,
+    engine,
+    model
+  };
+}
 
 export async function POST({ request }) {
   try {
     const { message, characters, turns = 6 } = await request.json();
 
-    const char1 = {
-      ...characters[0],
-      engine: characters[0]?.engine ?? "openai"
-    };
-
-    const char2 = {
-      ...characters[1],
-      engine: characters[1]?.engine ?? "openai"
-    };
-
-    if (!char1 || !char2) {
+    if (!Array.isArray(characters) || characters.length < 2) {
       return json({ message: "Character missing" }, { status: 400 });
     }
+
+    const char1 = normalizeCharacter(characters[0], 'char1');
+    const char2 = normalizeCharacter(characters[1], 'char2');
 
     let history = "";
     let messages: { speaker: string; text: string }[] = [];
@@ -92,7 +116,7 @@ export async function POST({ request }) {
       const current = isChar1 ? char1 : char2;
 
       const basePrompt = `
-${current.systemPrompt || ""}
+${current.character.systemPrompt || ""}
 
 【会話ルール】
 ・必ず最初に相手の発言へのリアクションを一言入れる（例：「それはわかるけど」「いや、それ違うでしょ」など）
@@ -126,20 +150,21 @@ ${history}
       const rawText = await generateReply({
         engine: current.engine,
         prompt,
-        character: current
+        character: current.character,
+        model: current.model || undefined
       });
 
       // 🔥 完全整形
       const finalText = refine(rawText);
 
       // 🔥 履歴
-      history += "\n" + current.name + ": " + finalText;
+      history += "\n" + current.character.name + ": " + finalText;
 
       // 🔥 UI出力
       messages = [
         ...messages,
         {
-          speaker: current.name,
+          speaker: current.character.name,
           text: finalText
         }
       ];

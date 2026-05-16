@@ -1,7 +1,37 @@
 import type { LongTermMemory, MemoryScope, MemorySource } from './types';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 const SHARED_STORAGE_KEY = 'memory-core:shared';
 const CHARACTER_STORAGE_PREFIX = 'memory-core:character:';
+const MEMORY_DIR = join(process.cwd(), 'data', 'memory');
+const SHARED_MEMORY_FILE = 'shared.json';
+
+function safeFilePart(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_-]/g, '_') || 'default';
+}
+
+function ensureMemoryDir(): void {
+  if (!existsSync(MEMORY_DIR)) {
+    mkdirSync(MEMORY_DIR, { recursive: true });
+  }
+}
+
+function readMemoryFile(fileName: string): LongTermMemory[] {
+  try {
+    const filePath = join(MEMORY_DIR, fileName);
+    if (!existsSync(filePath)) return [];
+    const parsed = JSON.parse(readFileSync(filePath, 'utf-8')) as LongTermMemory[];
+    return Array.isArray(parsed) ? parsed.map(normalizeMemory) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeMemoryFile(fileName: string, memories: LongTermMemory[]): void {
+  ensureMemoryDir();
+  writeFileSync(join(MEMORY_DIR, fileName), JSON.stringify(memories.map(normalizeMemory), null, 2));
+}
 
 function canUseLocalStorage(): boolean {
   return typeof localStorage !== 'undefined';
@@ -57,22 +87,34 @@ export function createLongTermMemory(input: {
 }
 
 export function loadSharedMemories(): LongTermMemory[] {
+  const fileMemories = readMemoryFile(SHARED_MEMORY_FILE).filter((memory) => memory.scope === 'shared');
+  if (fileMemories.length > 0 || !canUseLocalStorage()) return fileMemories;
   return loadFromKey(SHARED_STORAGE_KEY).filter((memory) => memory.scope === 'shared');
 }
 
 export function saveSharedMemories(memories: LongTermMemory[]): void {
-  saveToKey(SHARED_STORAGE_KEY, memories.map((memory) => ({ ...memory, scope: 'shared', characterId: undefined })));
+  const normalized = memories.map((memory) => ({ ...memory, scope: 'shared' as const, characterId: undefined }));
+  writeMemoryFile(SHARED_MEMORY_FILE, normalized);
+  saveToKey(SHARED_STORAGE_KEY, normalized);
 }
 
 export function loadCharacterMemories(characterId: string): LongTermMemory[] {
+  const safeCharacterId = safeFilePart(characterId);
+  const fileMemories = readMemoryFile(`character-${safeCharacterId}.json`)
+    .filter((memory) => memory.scope === 'character' && memory.characterId === characterId);
+  if (fileMemories.length > 0 || !canUseLocalStorage()) return fileMemories;
+
   return loadFromKey(`${CHARACTER_STORAGE_PREFIX}${characterId}`)
     .filter((memory) => memory.scope === 'character' && memory.characterId === characterId);
 }
 
 export function saveCharacterMemories(characterId: string, memories: LongTermMemory[]): void {
+  const safeCharacterId = safeFilePart(characterId);
+  const normalized = memories.map((memory) => ({ ...memory, scope: 'character' as const, characterId }));
+  writeMemoryFile(`character-${safeCharacterId}.json`, normalized);
   saveToKey(
     `${CHARACTER_STORAGE_PREFIX}${characterId}`,
-    memories.map((memory) => ({ ...memory, scope: 'character', characterId }))
+    normalized
   );
 }
 

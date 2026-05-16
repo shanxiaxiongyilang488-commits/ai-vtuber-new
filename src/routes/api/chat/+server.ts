@@ -2,7 +2,7 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { muryiPersona } from '$lib/ai/personas'
 import { buildCharacterPrompt } from '$lib/ai/prompts/buildCharacterPrompt'
-import { buildMemoryContext, type BuiltMemoryPrompt, type MemoryCoreRequest } from '$lib/ai/memory-core/memoryCore';
+import { buildMemoryContext, recordMemoryCoreTurn, type BuiltMemoryPrompt, type MemoryCoreRequest } from '$lib/ai/memory-core/memoryCore';
 import { generateText } from '$lib/aiRouter';
 
 // =========================
@@ -89,6 +89,18 @@ export const POST: RequestHandler = async ({ request }) => {
   ];
 
   const memoryDebug = memory?.enabled ? memoryContext.debug : undefined;
+  const saveMemoryTurn = (text: string) => {
+    if (!memory?.enabled) return;
+
+    recordMemoryCoreTurn({
+      characterId: memory.characterId,
+      userInput: lastMessage || topic || '',
+      assistantReply: text,
+      longTermMemories: memory.longTermMemories,
+      sharedMemories: memory.sharedMemories,
+      characterMemories: memory.characterMemories
+    });
+  };
 
   // =========================
   // Ollama
@@ -105,6 +117,7 @@ export const POST: RequestHandler = async ({ request }) => {
     const data = await res.json();
     const text: string = data?.message?.content ?? '';
 
+    saveMemoryTurn(text);
     return json({ text, memory: memoryDebug });
   }
 
@@ -126,6 +139,7 @@ export const POST: RequestHandler = async ({ request }) => {
     const data = await res.json();
     const text: string = data?.choices?.[0]?.message?.content ?? '';
 
+    saveMemoryTurn(text);
     return json({ text, memory: memoryDebug });
   }
 
@@ -147,5 +161,6 @@ export const POST: RequestHandler = async ({ request }) => {
     throw error(500, String(err));
   }
 
+  saveMemoryTurn(text);
   return json({ text, memory: memoryDebug });
 };

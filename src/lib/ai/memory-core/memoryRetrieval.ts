@@ -89,7 +89,7 @@ function scoreMemory(memory: LongTermMemory, queryTerms: QueryTerm[], characterI
 
 export function searchMemories(input: MemorySearchInput): MemorySearchResult[] {
   const queryTerms = buildQueryTerms(input.query);
-  const limit = Math.max(1, Math.min(3, input.limit ?? 3));
+  const limit = Math.max(1, Math.min(5, input.limit ?? 5));
   const candidates = [
     ...input.sharedMemories.filter((memory) => memory.scope === 'shared'),
     ...input.characterMemories.filter(

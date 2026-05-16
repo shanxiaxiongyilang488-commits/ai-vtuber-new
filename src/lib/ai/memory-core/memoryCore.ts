@@ -1,8 +1,24 @@
-import { loadCharacterMemories, loadSharedMemories } from './longTermMemoryStore';
+import { createLongTermMemory, loadCharacterMemories, loadSharedMemories, upsertLongTermMemory } from './longTermMemoryStore';
 import { searchMemories, splitSearchResults } from './memoryRetrieval';
 import { buildMemorySystemPrompt } from './promptBuilder';
-import { trimShortTermMessages } from './shortTermMemory';
-import type { BuiltMemoryPrompt, MemoryCoreRequest } from './types';
+import { appendShortTermMessages, createShortTermMessage, loadShortTermMessages, trimShortTermMessages } from './shortTermMemory';
+import type { BuiltMemoryPrompt, LongTermMemory, MemoryCoreRecordInput, MemoryCoreRequest, ShortTermMessage } from './types';
+
+function uniqueMemories(memories: LongTermMemory[]): LongTermMemory[] {
+  return Array.from(new Map(memories.map((memory) => [memory.id, memory])).values());
+}
+
+function mergeShortTermMessages(...groups: ShortTermMessage[][]): ShortTermMessage[] {
+  return trimShortTermMessages(groups.flat());
+}
+
+function shouldRememberAsLongTerm(text: string): boolean {
+  return /(覚えて|記憶して|忘れないで|メモして|remember)/iu.test(text);
+}
+
+function buildMemoryTitle(text: string): string {
+  return text.replace(/\s+/g, ' ').trim().slice(0, 32) || '会話からの記憶';
+}
 
 export function buildMemoryContext(input: {
   baseSystemPrompt: string;
@@ -23,14 +39,15 @@ export function buildMemoryContext(input: {
   const characterId = memory.characterId;
   const explicitShared = memory.sharedMemories ?? memory.longTermMemories?.filter((entry) => entry.scope === 'shared');
   const explicitCharacter = memory.characterMemories ?? memory.longTermMemories?.filter((entry) => entry.scope === 'character');
-  const sharedMemories = explicitShared ?? loadSharedMemories();
-  const characterMemories = explicitCharacter ?? (characterId ? loadCharacterMemories(characterId) : []);
+  const sharedMemories = uniqueMemories([...(explicitShared ?? []), ...loadSharedMemories()]);
+  const characterMemories = uniqueMemories([...(explicitCharacter ?? []), ...(characterId ? loadCharacterMemories(characterId) : [])]);
+  const shortTermMessages = mergeShortTermMessages(loadShortTermMessages(characterId), memory.shortTermMessages ?? []);
   const searchResults = searchMemories({
     query: input.userInput,
     characterId,
     sharedMemories,
     characterMemories,
-    limit: 3,
+    limit: 5,
   });
   const retrieved = splitSearchResults(searchResults);
 
@@ -41,10 +58,44 @@ export function buildMemoryContext(input: {
     characterId,
     characterName: memory.characterName,
     userInput: input.userInput,
-    shortTermMessages: trimShortTermMessages(memory.shortTermMessages ?? []),
+    shortTermMessages,
     sharedMemories: retrieved.sharedMemories,
     characterMemories: retrieved.characterMemories,
   });
+}
+
+export function recordMemoryCoreTurn(input: MemoryCoreRecordInput): void {
+  const userInput = input.userInput.trim();
+  const assistantReply = input.assistantReply.trim();
+
+  if (userInput || assistantReply) {
+    appendShortTermMessages([
+      ...(userInput ? [createShortTermMessage('user', userInput, input.characterId)] : []),
+      ...(assistantReply ? [createShortTermMessage('assistant', assistantReply, input.characterId)] : []),
+    ]);
+  }
+
+  const memories = [
+    ...(input.longTermMemories ?? []),
+    ...(input.sharedMemories ?? []),
+    ...(input.characterMemories ?? []),
+  ];
+
+  if (userInput && shouldRememberAsLongTerm(userInput)) {
+    memories.push(createLongTermMemory({
+      scope: input.characterId ? 'character' : 'shared',
+      characterId: input.characterId,
+      title: buildMemoryTitle(userInput),
+      content: userInput,
+      tags: ['chat'],
+      importance: 4,
+      source: 'chat',
+    }));
+  }
+
+  for (const memory of uniqueMemories(memories)) {
+    upsertLongTermMemory(memory);
+  }
 }
 
 export * from './types';

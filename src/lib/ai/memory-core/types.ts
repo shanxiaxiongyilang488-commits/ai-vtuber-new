@@ -68,3 +68,12 @@ export type MemoryCoreRequest = {
   sharedMemories?: LongTermMemory[];
   characterMemories?: LongTermMemory[];
 };
+
+export type MemoryCoreRecordInput = {
+  characterId?: string;
+  userInput: string;
+  assistantReply: string;
+  longTermMemories?: LongTermMemory[];
+  sharedMemories?: LongTermMemory[];
+  characterMemories?: LongTermMemory[];
+};
