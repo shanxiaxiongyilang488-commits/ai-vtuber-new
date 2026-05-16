@@ -43,6 +43,8 @@ export type BuildMemoryPromptInput = {
   debug?: boolean;
   characterId?: string;
   characterName?: string;
+  trust?: number;
+  affection?: number;
   userInput: string;
   shortTermMessages: ShortTermMessage[];
   sharedMemories: LongTermMemory[];
@@ -63,6 +65,8 @@ export type MemoryCoreRequest = {
   characterId?: string;
   characterName?: string;
   persona?: string;
+  trust?: number;
+  affection?: number;
   shortTermMessages?: ShortTermMessage[];
   longTermMemories?: LongTermMemory[];
   sharedMemories?: LongTermMemory[];

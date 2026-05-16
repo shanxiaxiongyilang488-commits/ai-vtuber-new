@@ -16,8 +16,35 @@ function shouldRememberAsLongTerm(text: string): boolean {
   return /(覚えて|記憶して|忘れないで|メモして|remember)/iu.test(text);
 }
 
+function stripMemoryCommand(text: string): string {
+  return text
+    .replace(/^(覚えて|記憶して|忘れないで|メモして|remember)[、,:\s]*/iu, '')
+    .replace(/[。.!！\s]+$/u, '')
+    .trim();
+}
+
+function normalizeMemoryContent(text: string): string {
+  const content = stripMemoryCommand(text);
+  const owner = 'RootSさん';
+
+  const possessiveMatch = content.match(/^(私|僕|俺|わたし|ぼく|おれ)の(.+?)は(.+?)(です|だ|である)?$/u);
+  if (possessiveMatch) {
+    return `${owner}の${possessiveMatch[2].trim()}は${possessiveMatch[3].trim()}`;
+  }
+
+  const preferenceMatch = content.match(/^(私|僕|俺|わたし|ぼく|おれ)は(.+?)が好き(です|だ)?$/u);
+  if (preferenceMatch) {
+    return `${owner}は${preferenceMatch[2].trim()}が好き`;
+  }
+
+  return content
+    .replace(/^(私|僕|俺|わたし|ぼく|おれ)/u, owner)
+    .replace(/です$/u, '')
+    .trim();
+}
+
 function buildMemoryTitle(text: string): string {
-  return text.replace(/\s+/g, ' ').trim().slice(0, 32) || '会話からの記憶';
+  return normalizeMemoryContent(text).replace(/\s+/g, ' ').trim().slice(0, 32) || '会話からの記憶';
 }
 
 export function buildMemoryContext(input: {
@@ -57,6 +84,8 @@ export function buildMemoryContext(input: {
     debug: memory.debug,
     characterId,
     characterName: memory.characterName,
+    trust: memory.trust,
+    affection: memory.affection,
     userInput: input.userInput,
     shortTermMessages,
     sharedMemories: retrieved.sharedMemories,
@@ -82,15 +111,19 @@ export function recordMemoryCoreTurn(input: MemoryCoreRecordInput): void {
   ];
 
   if (userInput && shouldRememberAsLongTerm(userInput)) {
+    const content = normalizeMemoryContent(userInput);
+    console.log('[memory-core] remember trigger matched:', { userInput, content });
+
     memories.push(createLongTermMemory({
-      scope: input.characterId ? 'character' : 'shared',
-      characterId: input.characterId,
-      title: buildMemoryTitle(userInput),
-      content: userInput,
+      scope: 'shared',
+      title: buildMemoryTitle(content),
+      content,
       tags: ['chat'],
       importance: 4,
       source: 'chat',
     }));
+  } else {
+    console.log('[memory-core] remember trigger skipped:', { userInput });
   }
 
   for (const memory of uniqueMemories(memories)) {

@@ -1,6 +1,7 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { env } from '$env/dynamic/private';
+import { buildMemoryContext, recordMemoryCoreTurn, type BuiltMemoryPrompt, type MemoryCoreRequest } from '$lib/ai/memory-core/memoryCore';
 
 type Provider = 'openai' | 'gemini' | 'claude' | 'ollama' | 'lmstudio';
 
@@ -9,6 +10,7 @@ interface LabChatRequest {
   model?: string;
   systemPrompt: string;
   userMessage: string;
+  memory?: MemoryCoreRequest;
 }
 
 // base64 data URL: "data:<mime>;base64,<data>"
@@ -19,7 +21,7 @@ interface ImageInput {
 // ================================================================
 // Request parsing — FormData (sendMessage) or JSON (other callers)
 // ================================================================
-async function parseRequest(request: Request): Promise<{ body: LabChatRequest; images: ImageInput[] }> {
+async function parseRequest(request: Request): Promise<{ body: LabChatRequest; images: ImageInput[]; enableMemoryByDefault: boolean }> {
   const ct = request.headers.get('content-type') ?? '';
 
   if (ct.includes('multipart/form-data')) {
@@ -49,11 +51,11 @@ async function parseRequest(request: Request): Promise<{ body: LabChatRequest; i
     if (notes.length > 0) {
       body.userMessage = `${body.userMessage}\n${notes.join(' ')}`;
     }
-    return { body, images };
+    return { body, images, enableMemoryByDefault: true };
   }
 
   const body = await request.json() as LabChatRequest;
-  return { body, images: [] };
+  return { body, images: [], enableMemoryByDefault: false };
 }
 
 // ================================================================
@@ -178,15 +180,37 @@ function claudeUserContent(userMessage: string, images: ImageInput[]) {
 // Main handler
 // ================================================================
 export const POST: RequestHandler = async ({ request }) => {
-  let parsed: { body: LabChatRequest; images: ImageInput[] };
+  let parsed: { body: LabChatRequest; images: ImageInput[]; enableMemoryByDefault: boolean };
   try {
     parsed = await parseRequest(request);
   } catch {
     throw error(400, 'Invalid request');
   }
 
-  const { body, images } = parsed;
+  const { body, images, enableMemoryByDefault } = parsed;
   const { provider, model, systemPrompt, userMessage } = body;
+  const memory = body.memory ?? { enabled: enableMemoryByDefault };
+  const memoryContext = buildMemoryContext({
+    baseSystemPrompt: systemPrompt,
+    userInput: userMessage,
+    memory,
+  });
+  const effectiveSystemPrompt = memory.enabled ? memoryContext.systemPrompt : systemPrompt;
+  const memoryDebug: BuiltMemoryPrompt['debug'] | undefined = memory.enabled ? memoryContext.debug : undefined;
+  const withMemory = (response: Record<string, unknown>, text: string) => {
+    if (memory.enabled) {
+      recordMemoryCoreTurn({
+        characterId: memory.characterId,
+        userInput: userMessage,
+        assistantReply: text,
+        longTermMemories: memory.longTermMemories,
+        sharedMemories: memory.sharedMemories,
+        characterMemories: memory.characterMemories,
+      });
+    }
+
+    return memoryDebug ? { ...response, memory: memoryDebug } : response;
+  };
 
   console.log(`[lab-chat] provider=${provider} model=${model || '(default)'} images=${images.length}`);
 
@@ -196,9 +220,9 @@ export const POST: RequestHandler = async ({ request }) => {
   if (provider === 'openai') {
     if (!env.OPENAI_API_KEY) throw error(500, 'OPENAI_API_KEY が未設定');
     const actualModel = model || 'gpt-4o-mini';
-    const text = await callOpenAI(systemPrompt, userMessage, actualModel, images);
+    const text = await callOpenAI(effectiveSystemPrompt, userMessage, actualModel, images);
     console.log(`[lab-chat] openai ok (${text.length} chars)`);
-    return json({ text, provider: 'openai', actualModel });
+    return json(withMemory({ text, provider: 'openai', actualModel }, text));
   }
 
   // ================================================================
@@ -211,10 +235,10 @@ export const POST: RequestHandler = async ({ request }) => {
     try {
       const actualModel = model || (provider === 'ollama' ? 'qwen2.5:3b' : 'local-model');
       const text = provider === 'ollama'
-        ? await callOllama(systemPrompt, userMessage, actualModel)
-        : await callLMStudio(systemPrompt, userMessage, actualModel);
+        ? await callOllama(effectiveSystemPrompt, userMessage, actualModel)
+        : await callLMStudio(effectiveSystemPrompt, userMessage, actualModel);
       console.log(`[lab-chat] ${provider} ok (${text.length} chars)`);
-      return json({ text, provider, actualModel });
+      return json(withMemory({ text, provider, actualModel }, text));
     } catch (e) {
       console.error(`[lab-chat] ${provider} error:`, e);
       throw error(503, `${provider === 'ollama' ? 'Ollama' : 'LM Studio'} への接続に失敗しました。ローカルサーバーを確認してください。`);
@@ -236,7 +260,7 @@ export const POST: RequestHandler = async ({ request }) => {
         // ペイロード構造を base64 本体を除いてログ（スパム防止）
         console.log('[lab-chat][gemini] request_summary:', JSON.stringify({
           model:           geminiModel,
-          systemPromptLen: systemPrompt.length,
+          systemPromptLen: effectiveSystemPrompt.length,
           partsCount:      userParts.length,
           imageParts:      userParts
             .filter((p: any) => p.inlineData)
@@ -248,7 +272,7 @@ export const POST: RequestHandler = async ({ request }) => {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            system_instruction: { parts: [{ text: systemPrompt }] },
+            system_instruction: { parts: [{ text: effectiveSystemPrompt }] },
             contents: [{ role: 'user', parts: userParts }],
           }),
         });
@@ -257,7 +281,7 @@ export const POST: RequestHandler = async ({ request }) => {
           const text: string = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
           if (text) {
             console.log(`[lab-chat] gemini ok (${text.length} chars)`);
-            return json({ text, provider: 'gemini', actualModel: geminiModel });
+            return json(withMemory({ text, provider: 'gemini', actualModel: geminiModel }, text));
           }
           // 空応答の場合は candidates の状態もログ
           console.warn('[lab-chat][gemini] empty text — candidates:', JSON.stringify(data?.candidates?.map((c: any) => ({
@@ -281,9 +305,9 @@ export const POST: RequestHandler = async ({ request }) => {
 
     try {
       const fallbackModel = 'gpt-4o-mini';
-      const text = await callOpenAI(systemPrompt, userMessage, fallbackModel, images);
+      const text = await callOpenAI(effectiveSystemPrompt, userMessage, fallbackModel, images);
       console.log(`[lab-chat] openai fallback ok (${text.length} chars)`);
-      return json({ text, failover: true, provider: 'openai', actualModel: fallbackModel });
+      return json(withMemory({ text, failover: true, provider: 'openai', actualModel: fallbackModel }, text));
     } catch (fallbackErr) {
       console.error('[lab-chat] openai fallback also failed:', fallbackErr);
       throw error(503, `Gemini と OpenAI の両方が失敗しました。時間をおいて再試行してください。`);
@@ -306,7 +330,7 @@ export const POST: RequestHandler = async ({ request }) => {
       body: JSON.stringify({
         model:      claudeModel,
         max_tokens: images.length > 0 ? 800 : 300,
-        system:     systemPrompt,
+        system:     effectiveSystemPrompt,
         messages:  [{ role: 'user', content: claudeUserContent(userMessage, images) }],
       }),
     });
@@ -318,7 +342,7 @@ export const POST: RequestHandler = async ({ request }) => {
     const data = await res.json();
     const text: string = data?.content?.[0]?.text ?? '';
     console.log(`[lab-chat] claude ok (${text.length} chars)`);
-    return json({ text, provider: 'claude', actualModel: claudeModel });
+    return json(withMemory({ text, provider: 'claude', actualModel: claudeModel }, text));
   }
 
   throw error(400, `Unknown provider: ${provider}`);

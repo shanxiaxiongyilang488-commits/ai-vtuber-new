@@ -1,1 +1,15 @@
-[]
+[
+  {
+    "id": "54152593-dce2-4bac-a6a0-87f9dd644e05",
+    "scope": "shared",
+    "title": "。私の好きな色は青",
+    "content": "。私の好きな色は青",
+    "tags": [
+      "chat"
+    ],
+    "importance": 4,
+    "timestamp": "2026-05-16T05:42:02.968Z",
+    "source": "chat",
+    "updatedAt": "2026-05-16T05:42:02.982Z"
+  }
+]

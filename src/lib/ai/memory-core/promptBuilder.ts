@@ -11,9 +11,30 @@ function formatMemories(memories: LongTermMemory[]): string {
     .join('\n');
 }
 
+function normalizeScore(score?: number): number | undefined {
+  if (score === undefined) return undefined;
+  return Math.max(0, Math.min(100, Number(score) || 0));
+}
+
+function buildTrustInstruction(trust?: number): string {
+  if (trust === undefined) return '- 信頼度が不明な場合は、記憶への言及は控えめにしてください。';
+  if (trust >= 75) return '- Trust が高いので、関連する記憶は自然な範囲で積極的に返答へ反映してください。';
+  if (trust >= 40) return '- Trust は中程度です。記憶は話題に強く関係する時だけさりげなく使ってください。';
+  return '- Trust が低いので、記憶への言及はかなり控えめにし、踏み込みすぎないでください。';
+}
+
+function buildAffectionInstruction(affection?: number): string {
+  if (affection === undefined) return '- 親密度が不明な場合は、温度感は自然で落ち着いた表現にしてください。';
+  if (affection >= 75) return '- Affection が高いので、記憶に触れる時は少し温かく、親しみのある表現にしてください。';
+  if (affection >= 40) return '- Affection は中程度です。記憶に触れる時も過度に甘くせず、自然な親しさに留めてください。';
+  return '- Affection が低いので、記憶に触れる時も距離感を保ち、淡々とした表現にしてください。';
+}
+
 export function buildMemorySystemPrompt(input: BuildMemoryPromptInput): BuiltMemoryPrompt {
   const base = input.baseSystemPrompt?.trim() || input.persona?.trim() || 'あなたは親しみやすいAI VTuberです。';
   const shortTermMessages = trimShortTermMessages(input.shortTermMessages);
+  const trust = normalizeScore(input.trust);
+  const affection = normalizeScore(input.affection);
   const injectedMemoryIds = [
     ...input.sharedMemories.map((memory) => memory.id),
     ...input.characterMemories.map((memory) => memory.id),
@@ -57,6 +78,8 @@ export function buildMemorySystemPrompt(input: BuildMemoryPromptInput): BuiltMem
     '- 「前回は」「さっきは」「以前あなたは」「記憶によると」のような説明的・機械的な言い方は避けてください。',
     '- 記憶に触れる場合も、キャラクターの口調のまま1〜2文に収めてください。',
     '- 記憶の内容を報告するのではなく、相手を少し理解しているように返答へ反映してください。',
+    buildTrustInstruction(trust),
+    buildAffectionInstruction(affection),
     '- 記憶にないことを事実として断定しないでください。',
     '- 古い記憶と新しい発言が矛盾する場合は、現在のユーザー発言を優先してください。',
     input.characterName ? `- あなたは「${input.characterName}」として振る舞います。` : '',

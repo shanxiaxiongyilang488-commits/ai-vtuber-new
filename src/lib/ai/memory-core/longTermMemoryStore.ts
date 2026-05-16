@@ -30,7 +30,7 @@ function readMemoryFile(fileName: string): LongTermMemory[] {
 
 function writeMemoryFile(fileName: string, memories: LongTermMemory[]): void {
   ensureMemoryDir();
-  writeFileSync(join(MEMORY_DIR, fileName), JSON.stringify(memories.map(normalizeMemory), null, 2));
+  writeFileSync(join(MEMORY_DIR, fileName), JSON.stringify(memories.map(normalizeMemory), null, 2), 'utf-8');
 }
 
 function canUseLocalStorage(): boolean {
@@ -93,9 +93,21 @@ export function loadSharedMemories(): LongTermMemory[] {
 }
 
 export function saveSharedMemories(memories: LongTermMemory[]): void {
+  console.log('[memory-core] saveSharedMemories called:', { incomingCount: memories.length });
+
+  const existing = readMemoryFile(SHARED_MEMORY_FILE).filter((memory) => memory.scope === 'shared');
   const normalized = memories.map((memory) => ({ ...memory, scope: 'shared' as const, characterId: undefined }));
-  writeMemoryFile(SHARED_MEMORY_FILE, normalized);
-  saveToKey(SHARED_STORAGE_KEY, normalized);
+  const next = normalized.length > 0
+    ? [
+        ...normalized,
+        ...existing.filter((entry) => !normalized.some((memory) => memory.id === entry.id)),
+      ]
+    : existing;
+
+  writeMemoryFile(SHARED_MEMORY_FILE, next);
+  saveToKey(SHARED_STORAGE_KEY, next);
+
+  console.log('[memory-core] shared.json saved:', { count: loadSharedMemories().length });
 }
 
 export function loadCharacterMemories(characterId: string): LongTermMemory[] {
