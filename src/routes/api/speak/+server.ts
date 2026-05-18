@@ -8,6 +8,7 @@ const FALLBACK_VOICE_ID = '21m00Tcm4TlvDq8ikWAM';
 export const POST: RequestHandler = async ({ request }) => {
   let text = '';
   let voiceId = '';
+  let voice = '';
   let provider = '';
   let voiceName = '';
 
@@ -15,6 +16,7 @@ export const POST: RequestHandler = async ({ request }) => {
     const body = await request.json();
     text = body.text ?? '';
     voiceId = body.voiceId ?? '';
+    voice = body.voice ?? body.COLAB_TTS_VOICE ?? '';
     provider = body.provider ?? '';
     voiceName = body.voiceName ?? '';
   } catch {
@@ -47,7 +49,7 @@ export const POST: RequestHandler = async ({ request }) => {
         body: JSON.stringify({
           model: 'irodori',
           input: text,
-          voice: voiceName || voiceId || 'default',
+          voice: voice || voiceName || voiceId || 'default',
           response_format: 'wav',
         }),
       });

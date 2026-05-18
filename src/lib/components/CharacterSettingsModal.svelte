@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { COLAB_TTS_VOICE_OPTIONS } from '$lib/types/character';
   import type { Character, AIEngine, VoiceEngine } from '$lib/types/character';
 
   interface Props {
@@ -18,6 +19,7 @@
   let name = $state('');
   let aiEngine = $state<AIEngine>('openai');
   let voiceEngine = $state<VoiceEngine>('none');
+  let voice = $state('irodori-tts-500m-v3');
   let voiceId = $state('');
   let speakerId = $state(1);
   let systemPrompt = $state('');
@@ -33,6 +35,7 @@
       name = character.name;
       aiEngine = character.aiEngine;
       voiceEngine = character.voiceEngine;
+      voice = character.voice ?? character.voiceId ?? 'irodori-tts-500m-v3';
       voiceId = character.voiceId != null? String(character.voiceId): '4';
       speakerId = character.speakerId ?? 1;
       systemPrompt = character.systemPrompt;
@@ -58,6 +61,7 @@
       name,
       aiEngine,
       voiceEngine,
+      voice,
       voiceId,
       speakerId,
       systemPrompt,
@@ -84,7 +88,7 @@
         const res = await fetch('/api/speak', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text, provider: 'colab-tts', voiceId })
+          body: JSON.stringify({ text, provider: 'colab-tts', voice })
         });
         if (!res.ok) { alert('Colab TTS APIエラー: ' + res.status); return; }
         await new Audio(URL.createObjectURL(await res.blob())).play();
@@ -180,8 +184,14 @@
           <option value="piper">Piper</option>
         </select>
 
-        {#if voiceEngine === 'elevenlabs' || voiceEngine === 'colab-tts'}
-          <input class="cyber-input" bind:value={voiceId} placeholder={voiceEngine === 'colab-tts' ? 'Voice name (任意)' : 'Voice ID'} />
+        {#if voiceEngine === 'elevenlabs'}
+          <input class="cyber-input" bind:value={voiceId} placeholder="Voice ID" />
+        {:else if voiceEngine === 'colab-tts'}
+          <select class="cyber-select" bind:value={voice}>
+            {#each COLAB_TTS_VOICE_OPTIONS as option}
+              <option value={option}>{option}</option>
+            {/each}
+          </select>
         {:else if voiceEngine === 'voicevox'}
           <input class="cyber-input" type="number" bind:value={speakerId} placeholder="Speaker ID (例: 1)" />
         {/if}

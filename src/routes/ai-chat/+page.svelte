@@ -124,6 +124,7 @@ async function sendMessage() {
 if (character.voiceEngine !== 'none' && reply) {
   const voice = createVoiceEngine({
     voiceEngine: character.voiceEngine as any,
+    voice: character.voice,
     voiceId: character.voiceId,
     speakerId: character.speakerId
   });

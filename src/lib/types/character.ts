@@ -8,6 +8,14 @@ export type AIEngine =
   | 'ollama'
   | 'lmstudio';
 
+export const AI_ENGINE_OPTIONS = [
+  { value: 'dummy', label: 'Dummy' },
+  { value: 'openai', label: 'OpenAI' },
+  { value: 'gemini', label: 'Gemini' },
+  { value: 'ollama', label: 'Ollama' },
+  { value: 'lmstudio', label: 'LM Studio' },
+] as const;
+
 // =======================================
 // 音声エンジン
 // =======================================
@@ -17,6 +25,26 @@ export type VoiceEngine =
   | 'colab-tts'
   | 'elevenlabs'
   | 'voicevox';
+
+export const COLAB_TTS_VOICE_OPTIONS = [
+  'irodori-tts-500m-v3',
+  'kokoro-82m',
+  'openvoice-v2',
+] as const;
+
+export const VOICE_ENGINE_OPTIONS = [
+  { value: 'none', label: 'None' },
+  { value: 'voicevox', label: 'VOICEVOX' },
+  { value: 'colab-tts', label: 'Colab TTS' },
+  { value: 'elevenlabs', label: 'ElevenLabs' },
+  { value: 'piper', label: 'Piper' },
+] as const;
+
+export const OLLAMA_MODEL_PRESETS = [
+  { value: 'qwen:0.5b', label: 'qwen:0.5b' },
+  { value: 'llama3', label: 'llama3' },
+  { value: 'mistral', label: 'mistral' },
+] as const;
 
 // =======================================
 // キャラクター型
@@ -32,10 +60,12 @@ export interface Character {
 
   // 👇 既存
   systemPrompt: string;
+  prompt?: string;
 
   aiEngine: AIEngine;
 
   voiceEngine: VoiceEngine;
+  voice?: string;
   voiceId: string;
   speakerId: number;
 

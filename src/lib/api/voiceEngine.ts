@@ -19,10 +19,11 @@ function playAudio(
 
 export function createVoiceEngine(character: {
   voiceEngine: VoiceEngine;
+  voice?: string;
   voiceId?: string;
   speakerId?: number;
 }) {
-  const { voiceEngine: engine, voiceId, speakerId } = character;
+  const { voiceEngine: engine, voice, voiceId, speakerId } = character;
 
   return {
     async speak(
@@ -57,6 +58,7 @@ export function createVoiceEngine(character: {
             body: JSON.stringify({
               text,
               provider: 'colab-tts',
+              voice,
               voiceId: voiceId || ''
             })
           });

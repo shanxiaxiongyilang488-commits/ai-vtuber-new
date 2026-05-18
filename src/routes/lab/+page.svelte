@@ -14,6 +14,7 @@
   import { CHARACTER_PROFILES } from '$lib/ai/characters/characterProfiles';
   import { buildEmotionStyleHint } from '$lib/ai/emotion/emotionStyleEngine';
   import { buildToneHints } from '$lib/ai/conversationCore/toneHints';
+  import { COLAB_TTS_VOICE_OPTIONS } from '$lib/types/character';
 
   // ============================================================
   // Types
@@ -488,6 +489,7 @@
   // ============================================================
   type VoiceEngineType = 'elevenlabs' | 'voicevox' | 'colab-tts' | 'piper' | 'none';
   let voiceEngine = $state<VoiceEngineType>('voicevox');
+  let voice       = $state('irodori-tts-500m-v3');
   let speakerId   = $state(20);
   let voiceId     = $state('');
   let voiceSpeed  = $state(1.0);
@@ -2440,6 +2442,7 @@ function removeReferenceImage(i: number): void {
       try {
         const engine = createVoiceEngine({
           voiceEngine,
+          voice,
           voiceId: voiceId || undefined,
           speakerId,
         });
@@ -3114,7 +3117,7 @@ ${recent}
           isSpeaking = true;
           if (voiceEngine !== 'none') {
             try {
-              const eng = createVoiceEngine({ voiceEngine, voiceId: voiceId || undefined, speakerId });
+              const eng = createVoiceEngine({ voiceEngine, voice, voiceId: voiceId || undefined, speakerId });
               await eng.speak(aiText, {
                 onStart: () => { isSpeaking = true; },
                 onEnd:   () => { isSpeaking = false; },
@@ -4367,6 +4370,16 @@ ${recent}
             <div class="vc-row">
               <span class="vc-lbl">SPEAKER ID</span>
               <input type="number" class="vc-input" bind:value={speakerId} min="0" max="999" />
+            </div>
+          {/if}
+          {#if voiceEngine === 'colab-tts'}
+            <div class="vc-row">
+              <span class="vc-lbl">VOICE</span>
+              <select class="vc-select" bind:value={voice}>
+                {#each COLAB_TTS_VOICE_OPTIONS as option}
+                  <option value={option}>{option}</option>
+                {/each}
+              </select>
             </div>
           {/if}
           {#if voiceEngine === 'elevenlabs'}

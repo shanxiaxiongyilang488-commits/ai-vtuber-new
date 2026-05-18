@@ -12,6 +12,7 @@
     aiEngine?: string;
     modelName?: string;
     voiceEngine: 'elevenlabs' | 'voicevox' | 'colab-tts' | 'piper' | 'none';
+    voice?: string;
     voiceId?: string;
     speakerId?: number;
     systemPrompt?: string;
@@ -202,6 +203,7 @@
         try {
           const engine = createVoiceEngine({
             voiceEngine: char.voiceEngine,
+            voice: char.voice,
             voiceId: char.voiceId,
             speakerId: char.speakerId
           });
@@ -334,6 +336,7 @@
           try {
             const engine = createVoiceEngine({
               voiceEngine: char.voiceEngine,
+              voice: char.voice,
               voiceId: char.voiceId,
               speakerId: char.speakerId
             });

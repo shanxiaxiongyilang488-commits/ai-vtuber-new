@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { AI_ENGINE_OPTIONS, VOICE_ENGINE_OPTIONS, OLLAMA_MODEL_PRESETS } from '$lib/types/character';
+  import { AI_ENGINE_OPTIONS, VOICE_ENGINE_OPTIONS, OLLAMA_MODEL_PRESETS, COLAB_TTS_VOICE_OPTIONS } from '$lib/types/character';
   import type { Character } from '$lib/types/character';
 
   interface Props {
@@ -165,6 +165,26 @@
         placeholder="例: EXAVITQu4vr4xnSDxMaL"
         disabled={disabled}
       />
+    </div>
+  {/if}
+
+  {#if character.voiceEngine === 'colab-tts'}
+    <div class="field">
+      <label class="field-label">VOICE</label>
+      <select
+        class="select"
+        value={character.voice ?? 'irodori-tts-500m-v3'}
+        onchange={(e) =>
+          onUpdate({
+            voice: (e.target as HTMLSelectElement).value
+          })
+        }
+        disabled={disabled}
+      >
+        {#each COLAB_TTS_VOICE_OPTIONS as option}
+          <option value={option}>{option}</option>
+        {/each}
+      </select>
     </div>
   {/if}
 </div>
