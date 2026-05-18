@@ -39,6 +39,13 @@ export function buildMemorySystemPrompt(input: BuildMemoryPromptInput): BuiltMem
     ...input.sharedMemories.map((memory) => memory.id),
     ...input.characterMemories.map((memory) => memory.id),
   ];
+  const retrievedMemories = [...input.sharedMemories, ...input.characterMemories].map((memory) => ({
+    id: memory.id,
+    content: memory.content,
+    importance: memory.importance,
+    tags: memory.tags,
+    timestamp: memory.timestamp,
+  }));
 
   if (input.debug) {
     const systemPrompt = [
@@ -66,6 +73,7 @@ export function buildMemorySystemPrompt(input: BuildMemoryPromptInput): BuiltMem
       debug: {
         injectedMemoryIds,
         shortTermCount: shortTermMessages.length,
+        retrievedMemories,
       },
     };
   }
@@ -99,6 +107,7 @@ export function buildMemorySystemPrompt(input: BuildMemoryPromptInput): BuiltMem
     debug: {
       injectedMemoryIds,
       shortTermCount: shortTermMessages.length,
+      retrievedMemories,
     },
   };
 }

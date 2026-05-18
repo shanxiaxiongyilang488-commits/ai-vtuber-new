@@ -49,6 +49,26 @@ export function createVoiceEngine(character: {
         return;
       }
 
+      if (engine === 'colab-tts') {
+        try {
+          const res = await fetch('/api/speak', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              text,
+              provider: 'colab-tts',
+              voiceId: voiceId || ''
+            })
+          });
+          if (!res.ok) { console.error('Colab TTS failed:', res.status); return; }
+          const url = URL.createObjectURL(await res.blob());
+          await playAudio(url, onStart, onEnd);
+        } catch (e) {
+          console.error('Colab TTS error:', e);
+        }
+        return;
+      }
+
       if (engine === 'voicevox') {
         try {
           const speaker = speakerId ?? 1;

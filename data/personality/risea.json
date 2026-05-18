@@ -1,0 +1,17 @@
+{
+  "openness": 50,
+  "warmth": 56,
+  "curiosity": 57,
+  "initiative": 55,
+  "playfulness": 56,
+  "stability": 75,
+  "lastDelta": {
+    "openness": 0,
+    "warmth": 0,
+    "curiosity": 1,
+    "initiative": 1,
+    "playfulness": 0,
+    "stability": 1
+  },
+  "updatedAt": "2026-05-17T15:56:30.358Z"
+}

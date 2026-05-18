@@ -1,5 +1,6 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
+import { env } from '$env/dynamic/private';
 import { muryiPersona } from '$lib/ai/personas'
 import { buildCharacterPrompt } from '$lib/ai/prompts/buildCharacterPrompt'
 import { buildMemoryContext, recordMemoryCoreTurn, type BuiltMemoryPrompt, type MemoryCoreRequest } from '$lib/ai/memory-core/memoryCore';
@@ -14,7 +15,7 @@ export interface ChatRequest {
   speakerName: string;
   listenerName: string;
   topic: string;
-  engine?: 'openai' | 'gemini' | 'claude' | 'ollama' | 'lmstudio';
+  engine?: 'openai' | 'gemini' | 'claude' | 'ollama' | 'lmstudio' | 'colab-ollama';
   model?: string;
   memory?: MemoryCoreRequest;
 }
@@ -89,10 +90,10 @@ export const POST: RequestHandler = async ({ request }) => {
   ];
 
   const memoryDebug = memory?.enabled ? memoryContext.debug : undefined;
-  const saveMemoryTurn = (text: string) => {
+  const saveMemoryTurn = async (text: string) => {
     if (!memory?.enabled) return;
 
-    recordMemoryCoreTurn({
+    await recordMemoryCoreTurn({
       characterId: memory.characterId,
       userInput: lastMessage || topic || '',
       assistantReply: text,
@@ -117,7 +118,40 @@ export const POST: RequestHandler = async ({ request }) => {
     const data = await res.json();
     const text: string = data?.message?.content ?? '';
 
-    saveMemoryTurn(text);
+    await saveMemoryTurn(text);
+    return json({ text, memory: memoryDebug });
+  }
+
+  // =========================
+  // Colab Ollama (OpenAI互換)
+  // =========================
+  if (engine === 'colab-ollama') {
+    const baseUrl = env.COLAB_OLLAMA_URL?.replace(/\/+$/, '');
+    const colabModel = model || env.COLAB_OLLAMA_MODEL;
+
+    if (!baseUrl) {
+      throw error(500, 'COLAB_OLLAMA_URL が未設定');
+    }
+
+    if (!colabModel) {
+      throw error(500, 'COLAB_OLLAMA_MODEL が未設定');
+    }
+
+    const res = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: colabModel, messages })
+    });
+
+    if (!res.ok) {
+      const msg = await res.text().catch(() => `HTTP ${res.status}`);
+      throw error(503, `Colab Ollama API error: ${msg}`);
+    }
+
+    const data = await res.json();
+    const text: string = data?.choices?.[0]?.message?.content ?? '';
+
+    await saveMemoryTurn(text);
     return json({ text, memory: memoryDebug });
   }
 
@@ -139,7 +173,7 @@ export const POST: RequestHandler = async ({ request }) => {
     const data = await res.json();
     const text: string = data?.choices?.[0]?.message?.content ?? '';
 
-    saveMemoryTurn(text);
+    await saveMemoryTurn(text);
     return json({ text, memory: memoryDebug });
   }
 
@@ -161,6 +195,6 @@ export const POST: RequestHandler = async ({ request }) => {
     throw error(500, String(err));
   }
 
-  saveMemoryTurn(text);
+  await saveMemoryTurn(text);
   return json({ text, memory: memoryDebug });
 };

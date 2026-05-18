@@ -28,6 +28,53 @@ export const POST: RequestHandler = async ({ request }) => {
   // SvelteKitでは process.env ではなく $env/dynamic/private を使う
   const { env } = await import('$env/dynamic/private');
 
+  // ===== Colab Irodori TTS (OpenAI audio/speech compatible) =====
+  if (provider === 'colab-tts') {
+    const baseUrl = env.COLAB_TTS_URL?.replace(/\/+$/, '');
+    if (!baseUrl) {
+      console.error('[speak] COLAB_TTS_URL が設定されていません');
+      return json({ error: 'COLAB_TTS_URL not set' }, { status: 500 });
+    }
+
+    let ttsRes: Response;
+    try {
+      ttsRes = await fetch(`${baseUrl}/v1/audio/speech`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'audio/wav',
+        },
+        body: JSON.stringify({
+          model: 'irodori',
+          input: text,
+          voice: voiceName || voiceId || 'default',
+          response_format: 'wav',
+        }),
+      });
+    } catch (e) {
+      console.error('[speak] Colab TTS fetch error:', e);
+      return json({ error: 'Colab TTS に接続できませんでした' }, { status: 502 });
+    }
+
+    if (!ttsRes.ok) {
+      const errText = await ttsRes.text().catch(() => '');
+      console.error(`[speak] Colab TTS HTTP ${ttsRes.status}:`, errText);
+      return json(
+        { error: `Colab TTS error: HTTP ${ttsRes.status}`, detail: errText },
+        { status: ttsRes.status }
+      );
+    }
+
+    const audioBuffer = await ttsRes.arrayBuffer();
+    console.log(`[speak] Colab TTS audio size=${audioBuffer.byteLength} bytes`);
+
+    return new Response(audioBuffer, {
+      headers: {
+        'Content-Type': 'audio/wav',
+      },
+    });
+  }
+
   // ===== Google TTS =====
   if (provider === 'google') {
     const googleApiKey = env.GOOGLE_TTS_API_KEY;

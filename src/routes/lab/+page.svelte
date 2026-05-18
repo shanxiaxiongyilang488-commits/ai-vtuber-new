@@ -54,6 +54,44 @@
     isGreeting?: true; // 起動挨拶フラグ（保存対象外）
   };
 
+  type MemoryViewerItem = {
+    id: string;
+    content: string;
+    importance: number;
+    tags: string[];
+    createdAt: string;
+  };
+
+  type CognitiveMonitor = {
+    retrievedMemories: MemoryViewerItem[];
+    emotionLabel: string;
+    trustDelta: number;
+    affectionDelta: number;
+    reflectionNote: string;
+  };
+
+  type ReflectionDiary = {
+    summary: string;
+    learned: string[];
+    emotion: string;
+    trust_delta: number;
+    affection_delta: number;
+    note: string;
+  };
+
+  type EvolutionKey =
+    | 'openness'
+    | 'warmth'
+    | 'curiosity'
+    | 'initiative'
+    | 'playfulness'
+    | 'stability';
+
+  type PersonalityEvolutionState = Record<EvolutionKey, number> & {
+    lastDelta: Record<EvolutionKey, number>;
+    updatedAt: string;
+  };
+
   type CustomProfile = {
     name:           string;
     firstPerson:    string;
@@ -66,6 +104,18 @@
     affectionStyle: string;
     jealousyStyle:  string;
     memo:           string;
+  };
+
+  type GeneratedPersona = {
+    name?: string;
+    firstPerson?: string;
+    secondPerson?: string;
+    thirdPerson?: string;
+    speakingStyle?: string;
+    speechStyle?: string;
+    catchphrase?: string;
+    sentenceEnding?: string;
+    angerStyle?: string;
   };
 
   type PresetName =
@@ -117,6 +167,13 @@
   let personaModalSnapshot = $state<{
     profile: CustomProfile;
   } | null>(null);
+  let personaGeneratorPrompt = $state('');
+  let personaGeneratorLoading = $state(false);
+  let personaGeneratorError = $state('');
+  let colabOllamaModels = $state<string[]>([]);
+  let colabOllamaModelsLoading = $state(false);
+  let colabOllamaModelsError = $state('');
+  let colabOllamaModelsLoaded = $state(false);
 
   type SlotKey = 'a' | 'b' | 'c';
   let customSlots = $state<Record<SlotKey, CustomProfile | null>>({ a: null, b: null, c: null });
@@ -146,6 +203,130 @@
     return new Date().toLocaleTimeString('ja-JP', { hour12: false });
   }
 
+  function getFilteredMemoryViewerItems(): MemoryViewerItem[] {
+    const query = memoryViewerQuery.trim().toLowerCase();
+    if (!query) return memoryViewerItems;
+    return memoryViewerItems.filter((memory) =>
+      memory.content.toLowerCase().includes(query) ||
+      memory.tags.some((tag) => tag.toLowerCase().includes(query))
+    );
+  }
+
+  function formatMemoryDate(value: string): string {
+    if (!value) return '—';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    return date.toLocaleString('ja-JP', {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  }
+
+  function formatDelta(value: number): string {
+    if (value > 0) return `+${value}`;
+    return String(value);
+  }
+
+  function evolutionArrow(value: number): string {
+    if (value > 0) return '↑';
+    if (value < 0) return '↓';
+    return '→';
+  }
+
+  function buildReflectionNote(input: {
+    memoryCount: number;
+    emotionLabel: string;
+    trustDelta: number;
+    affectionDelta: number;
+  }): string {
+    const memoryPart = input.memoryCount > 0
+      ? `${input.memoryCount}件の記憶を参照`
+      : '関連記憶なし';
+    const trustPart = input.trustDelta !== 0 ? `Trust ${formatDelta(input.trustDelta)}` : 'Trust 変化なし';
+    const affectionPart = input.affectionDelta !== 0 ? `Affection ${formatDelta(input.affectionDelta)}` : 'Affection 変化なし';
+    return `${memoryPart} / ${input.emotionLabel} / ${trustPart} / ${affectionPart}`;
+  }
+
+  async function loadReflectionDiary() {
+    reflectionDiaryLoading = true;
+    reflectionDiaryError = null;
+    try {
+      const res = await fetch('/api/reflection');
+      if (!res.ok) throw new Error(`REFLECTION API ${res.status}`);
+      const data = await res.json() as { reflection?: { date: string; diary: ReflectionDiary } | null };
+      reflectionDiary = data.reflection ?? null;
+    } catch (error) {
+      reflectionDiaryError = error instanceof Error ? error.message : 'REFLECTION LOAD FAILED';
+    } finally {
+      reflectionDiaryLoading = false;
+    }
+  }
+
+  async function saveReflectionDiary(input: {
+    emotionLabel: string;
+    trustDelta: number;
+    affectionDelta: number;
+    note: string;
+  }) {
+    try {
+      const res = await fetch('/api/reflection', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: messages
+            .filter((message) => !message.isGreeting)
+            .slice(-30)
+            .map((message) => ({ role: message.role, text: message.text })),
+          emotion: input.emotionLabel,
+          trust_delta: input.trustDelta,
+          affection_delta: input.affectionDelta,
+          note: input.note,
+        }),
+      });
+      if (!res.ok) return;
+      const data = await res.json() as {
+        reflection?: { date: string; diary: ReflectionDiary };
+        evolution?: PersonalityEvolutionState;
+      };
+      if (data.reflection) reflectionDiary = data.reflection;
+      if (data.evolution) personalityEvolution = data.evolution;
+    } catch (error) {
+      console.warn('[Lab] reflection diary save failed:', error);
+    }
+  }
+
+  async function loadPersonalityEvolution() {
+    personalityEvolutionLoading = true;
+    personalityEvolutionError = null;
+    try {
+      const res = await fetch('/api/personality-evolution');
+      if (!res.ok) throw new Error(`EVOLUTION API ${res.status}`);
+      const data = await res.json() as { evolution?: PersonalityEvolutionState };
+      personalityEvolution = data.evolution ?? null;
+    } catch (error) {
+      personalityEvolutionError = error instanceof Error ? error.message : 'EVOLUTION LOAD FAILED';
+    } finally {
+      personalityEvolutionLoading = false;
+    }
+  }
+
+  async function loadMemoryViewer() {
+    memoryViewerLoading = true;
+    memoryViewerError = null;
+    try {
+      const res = await fetch('/api/memory');
+      if (!res.ok) throw new Error(`MEMORY API ${res.status}`);
+      const data = await res.json() as { memories?: MemoryViewerItem[] };
+      memoryViewerItems = Array.isArray(data.memories) ? data.memories : [];
+    } catch (error) {
+      memoryViewerError = error instanceof Error ? error.message : 'MEMORY LOAD FAILED';
+    } finally {
+      memoryViewerLoading = false;
+    }
+  }
+
   let messages = $state<ChatMessage[]>([
     { role: 'ai', text: 'システム初期化完了。会話テストモードを開始します。[論理コア：安定]', time: '00:00:00' },
   ]);
@@ -164,6 +345,24 @@
   let exchangeCount    = 0;                       // 送受信ペア数（記憶更新トリガー用）
   let longMemory       = $state('');              // 長期記憶サマリー表示用
   let isMemoryUpdating = $state(false);           // 更新中インジケーター
+  let memoryViewerItems = $state<MemoryViewerItem[]>([]);
+  let memoryViewerQuery = $state('');
+  let memoryViewerLoading = $state(false);
+  let memoryViewerError = $state<string | null>(null);
+  let cognitiveMonitor = $state<CognitiveMonitor>({
+    retrievedMemories: [],
+    emotionLabel: 'neutral',
+    trustDelta: 0,
+    affectionDelta: 0,
+    reflectionNote: '—',
+  });
+  let reflectionDiary = $state<{ date: string; diary: ReflectionDiary } | null>(null);
+  let reflectionDiaryLoading = $state(false);
+  let reflectionDiaryError = $state<string | null>(null);
+  const evolutionKeys: EvolutionKey[] = ['openness', 'warmth', 'curiosity', 'initiative', 'playfulness', 'stability'];
+  let personalityEvolution = $state<PersonalityEvolutionState | null>(null);
+  let personalityEvolutionLoading = $state(false);
+  let personalityEvolutionError = $state<string | null>(null);
 
   // pin が空 = AI自動検出、pin が設定済み = 固定感情
   const pngEmotion = $derived(emotionPin || currentEmotion);
@@ -287,7 +486,7 @@
   // ============================================================
   // Voice config (independent of avatar / personality)
   // ============================================================
-  type VoiceEngineType = 'elevenlabs' | 'voicevox' | 'piper' | 'none';
+  type VoiceEngineType = 'elevenlabs' | 'voicevox' | 'colab-tts' | 'piper' | 'none';
   let voiceEngine = $state<VoiceEngineType>('voicevox');
   let speakerId   = $state(20);
   let voiceId     = $state('');
@@ -377,6 +576,20 @@
     'あなた、君、お前など',
     'あの人、彼、彼女など',
   ]);
+  const PERSONA_TERM_DEFAULTS: Partial<Record<PresetName, Pick<CustomProfile, 'firstPerson' | 'secondPerson' | 'thirdPerson'>>> = {
+    tsundere: { firstPerson: '私', secondPerson: 'あなた', thirdPerson: 'あの子' },
+    yandere:  { firstPerson: '私', secondPerson: 'あなた', thirdPerson: 'あの人' },
+    kuudere:  { firstPerson: '私', secondPerson: 'あなた', thirdPerson: 'その人' },
+    amaenbou: { firstPerson: '私', secondPerson: 'あなた', thirdPerson: 'あの人' },
+    imouto:   { firstPerson: 'わたし', secondPerson: 'お兄ちゃん', thirdPerson: 'あの人' },
+    joousama: { firstPerson: 'わたくし', secondPerson: 'あなた', thirdPerson: 'あの方' },
+    shio:     { firstPerson: '私', secondPerson: 'あなた', thirdPerson: 'その人' },
+    mukanjo:  { firstPerson: '私', secondPerson: 'あなた', thirdPerson: '対象' },
+    jealous:  { firstPerson: '私', secondPerson: 'あなた', thirdPerson: 'あの子' },
+    hogo:     { firstPerson: '私', secondPerson: 'あなた', thirdPerson: 'あの人' },
+    youkya:   { firstPerson: '私', secondPerson: 'あなた', thirdPerson: 'その人' },
+    menhera:  { firstPerson: '私', secondPerson: 'あなた', thirdPerson: 'あの子' },
+  };
 
   function cleanPersonaTerm(value: unknown): string {
     if (typeof value !== 'string') return '';
@@ -386,7 +599,7 @@
 
   function getDefaultPersonaTerm(preset: PresetName, key: 'firstPerson' | 'secondPerson' | 'thirdPerson'): string {
     if (preset === 'custom') return '';
-    return cleanPersonaTerm(CHARACTER_PROFILES[preset]?.[key]);
+    return cleanPersonaTerm(PERSONA_TERM_DEFAULTS[preset]?.[key] ?? CHARACTER_PROFILES[preset]?.[key]);
   }
 
   function isPersonaExampleValue(value: unknown): boolean {
@@ -400,7 +613,7 @@
     key: 'firstPerson' | 'secondPerson' | 'thirdPerson'
   ): string {
     const cleaned = cleanPersonaTerm(value);
-    return cleaned || (isPersonaExampleValue(value) ? getDefaultPersonaTerm(preset, key) : '');
+    return cleaned || getDefaultPersonaTerm(preset, key);
   }
 
   function sanitizePersonaTerms(profile: CustomProfile, preset: PresetName = 'custom'): CustomProfile {
@@ -410,6 +623,45 @@
       secondPerson: cleanPersonaTermWithDefault(profile.secondPerson, preset, 'secondPerson'),
       thirdPerson:  cleanPersonaTermWithDefault(profile.thirdPerson, preset, 'thirdPerson'),
     };
+  }
+
+  function getPresetDisplayLabel(preset: PresetName): string {
+    return PRESET_LIST.find(p => p.id === preset)?.label
+      ?? AVATARS.find(av => av.presetId === preset)?.name
+      ?? preset;
+  }
+
+  async function generatePersonaWithAI(): Promise<void> {
+    const prompt = personaGeneratorPrompt.trim();
+    if (!prompt || personaGeneratorLoading) return;
+
+    personaGeneratorLoading = true;
+    personaGeneratorError = '';
+    try {
+      const res = await fetch('/api/persona-generator', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt
+        })
+      });
+      const data = await res.json() as GeneratedPersona & { message?: string };
+      if (!res.ok) throw new Error(data.message ?? `API Error ${res.status}`);
+      const generated = data;
+
+      personaModalProfile.name = cleanPersonaTerm(generated.name) || personaModalProfile.name;
+      personaModalProfile.firstPerson = cleanPersonaTerm(generated.firstPerson) || personaModalProfile.firstPerson;
+      personaModalProfile.secondPerson = cleanPersonaTerm(generated.secondPerson) || personaModalProfile.secondPerson;
+      personaModalProfile.thirdPerson = cleanPersonaTerm(generated.thirdPerson) || personaModalProfile.thirdPerson;
+      personaModalProfile.speechStyle = cleanPersonaTerm(generated.speakingStyle ?? generated.speechStyle) || personaModalProfile.speechStyle;
+      personaModalProfile.habits = cleanPersonaTerm(generated.catchphrase) || personaModalProfile.habits;
+      personaModalProfile.sentenceEnding = cleanPersonaTerm(generated.sentenceEnding) || personaModalProfile.sentenceEnding;
+      personaModalProfile.angerStyle = cleanPersonaTerm(generated.angerStyle) || personaModalProfile.angerStyle;
+    } catch (error) {
+      personaGeneratorError = error instanceof Error ? error.message : 'JSON の生成または解析に失敗しました。';
+    } finally {
+      personaGeneratorLoading = false;
+    }
   }
 
   function openPersonaModal(): void {
@@ -438,6 +690,7 @@
   function selectPersonaPresetInModal(preset: PresetName): void {
     applyPreset(preset);
     personaModalProfile = sanitizePersonaTerms(cloneProfile(customProfile), activePreset);
+    personaGeneratorError = '';
   }
 
   function duplicatePersonaToCustomInModal(): void {
@@ -492,11 +745,49 @@
     : '#cce8f0'
   );
 
-  let battery = $derived(
-    Math.min(100, Math.round(personality.energy * 0.65 + personality.trust * 0.35))
-  );
+  type BatteryDrainReason = 'chat_reply' | 'proactive_reply' | 'image_analysis' | 'manga_generation';
+  let battery = $state(72);
+
+  function consumeAndroidBattery(amount = 1, reason: BatteryDrainReason = 'chat_reply'): void {
+    if (!toggles.androidMode || amount <= 0) return;
+    battery = clamp(battery - amount);
+    console.log(`[Lab] battery -${amount}% (${reason}) => ${battery}%`);
+  }
+
+  function getAndroidBatteryWarning(): string {
+    if (!toggles.androidMode) return '';
+    if (battery <= 0) return ' [BATTERY:0% / スリープモードへ移行します]';
+    if (battery <= 5) return ' [BATTERY低下 / スリープ移行予告]';
+    if (battery <= 10) return ' [BATTERY警告 / 残量が危険域です]';
+    if (battery <= 20) return ' [BATTERY低下 / 充電を推奨します]';
+    if (battery <= 30) return ' [BATTERY注意 / 残量が少なくなっています]';
+    return '';
+  }
 
   let memorySyncOk = $derived(personality.trust >= 50);
+  let autoNightMode = $derived(
+    (() => {
+      void currentTime;
+      const h = new Date().getHours();
+      return h >= 23 || h < 5;
+    })()
+  );
+  let autoSpecialMode = $derived(
+    emotion.trust >= 70 ||
+    emotion.affection >= 70 ||
+    longMemory.trim().length > 0 ||
+    memoryViewerItems.length > 0
+  );
+  let effectiveToggles = $derived({
+    ...toggles,
+    nightMode: autoNightMode,
+    specialMode: autoSpecialMode,
+    autoTalk: true,
+  });
+
+  function wantsShortReply(text: string): boolean {
+    return /短く|一言で|簡潔に|要点だけ|結論だけ|まとめて/.test(text);
+  }
 
   // ============================================================
   // Radar Chart — larger: CX/CY=125, R=90, viewBox 250×250
@@ -728,11 +1019,11 @@
     // Custom Persona Editor へ自動反映
     const profile = CHARACTER_PROFILES[name];
     if (profile) {
-      const label = PRESET_LIST.find(p => p.id === name)?.label ?? name;
+      const label = getPresetDisplayLabel(name);
       customProfile.name           = label;
-      customProfile.firstPerson    = cleanPersonaTerm(profile.firstPerson);
-      customProfile.secondPerson   = cleanPersonaTerm(profile.secondPerson);
-      customProfile.thirdPerson    = cleanPersonaTerm(profile.thirdPerson);
+      customProfile.firstPerson    = cleanPersonaTerm(profile.firstPerson)  || getDefaultPersonaTerm(name, 'firstPerson');
+      customProfile.secondPerson   = cleanPersonaTerm(profile.secondPerson) || getDefaultPersonaTerm(name, 'secondPerson');
+      customProfile.thirdPerson    = cleanPersonaTerm(profile.thirdPerson)  || getDefaultPersonaTerm(name, 'thirdPerson');
       customProfile.speechStyle    = profile.speechStyle;
       customProfile.habits         = profile.habits;
       customProfile.sentenceEnding = profile.sentenceEnding;
@@ -759,7 +1050,7 @@
 
   function duplicateToCustom() {
     const profile = CHARACTER_PROFILES[activePreset];
-    const label   = PRESET_LIST.find(p => p.id === activePreset)?.label ?? activePreset;
+    const label   = getPresetDisplayLabel(activePreset);
     if (profile) {
       customProfile.name           = label;
       customProfile.firstPerson    = '';
@@ -1420,9 +1711,9 @@ function removeReferenceImage(i: number): void {
   }
 
   // ============================================================
-  function buildLabSystemPrompt(): string {
+  function buildLabSystemPrompt(userInput = ''): string {
     const p = personality;
-    const t = toggles;
+    const t = { ...effectiveToggles, shortChat: wantsShortReply(userInput) };
     const lines: string[] = [];
 
     lines.push(`あなたは「${charName}」というAIキャラクターです。`);
@@ -1655,7 +1946,7 @@ function removeReferenceImage(i: number): void {
    */
   function generateResponse(input: string): string {
     const p = personality;
-    const t = toggles;
+    const t = { ...effectiveToggles, shortChat: wantsShortReply(input) };
 
     // 入力の短縮表示用（応答文に埋め込む時に長くなりすぎないように）
     const inp = input.length > 18 ? input.slice(0, 18) + '…' : input;
@@ -1999,6 +2290,8 @@ function removeReferenceImage(i: number): void {
       if (elapsedMin >= 1440) bond = clamp(bond - 3);
     }
     addMemory('user', text);
+    const turnStartTrust = emotion.trust;
+    const turnStartAffection = emotion.affection;
     updateEmotion(text);
     isThinking = true;
 
@@ -2009,16 +2302,19 @@ function removeReferenceImage(i: number): void {
 
     const _reqStart = Date.now();
     let aiText: string;
+    let responseMemoryDebug: {
+      retrievedMemories?: Array<Omit<MemoryViewerItem, 'createdAt'> & { timestamp?: string; createdAt?: string }>;
+    } | undefined;
     try {
       let res: Response;
       if ($sessionStore.provider === 'onair') {
         res = await fetch('/api/onair', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: text }),
+          body: JSON.stringify({ message: wantsShortReply(text) ? `${text}\n\n短く、要点だけで返答してください。` : text }),
         });
       } else {
-        let _sysPrompt = buildLabSystemPrompt();
+        let _sysPrompt = buildLabSystemPrompt(text);
         if (referenceImages.length > 0) {
           const _noteList = referenceImages
             .map((r, i) => `画像${i + 1}「${r.note || r.name}」`)
@@ -2059,6 +2355,7 @@ function removeReferenceImage(i: number): void {
         failoverNotice = 'Gemini 失敗 → OpenAI へ自動切替しました';
         setTimeout(() => { failoverNotice = null; }, 5000);
       }
+      responseMemoryDebug = data.memory;
       aiText = $sessionStore.provider === 'onair' ? data.reply : data.text;
       lastResponseMs   = Date.now() - _reqStart;
       lastSentImages   = referenceImages.length;
@@ -2080,9 +2377,37 @@ function removeReferenceImage(i: number): void {
       return;
     }
 
-    messages = [...messages, { role: 'ai', text: aiText, time: getTime(), avatar: selectedAvatar, imagePrompt: toggles.imagePromptMode ? buildImagePrompt() : undefined }];
+    consumeAndroidBattery(1, 'chat_reply');
+    aiText = `${aiText}${getAndroidBatteryWarning()}`;
+    messages = [...messages, { role: 'ai', text: aiText, time: getTime(), avatar: selectedAvatar, imagePrompt: undefined }];
     addMemory('assistant', aiText);
     updateEmotionFromReply(aiText);
+    const aiEmotion = analyzeEmotionTS(aiText).emotion;
+    const retrievedMemories = (responseMemoryDebug?.retrievedMemories ?? []).map((memory) => ({
+      id: memory.id,
+      content: memory.content,
+      importance: memory.importance,
+      tags: memory.tags,
+      createdAt: memory.createdAt ?? memory.timestamp ?? '',
+    }));
+    cognitiveMonitor = {
+      retrievedMemories,
+      emotionLabel: aiEmotion,
+      trustDelta: emotion.trust - turnStartTrust,
+      affectionDelta: emotion.affection - turnStartAffection,
+      reflectionNote: buildReflectionNote({
+        memoryCount: retrievedMemories.length,
+        emotionLabel: aiEmotion,
+        trustDelta: emotion.trust - turnStartTrust,
+        affectionDelta: emotion.affection - turnStartAffection,
+      }),
+    };
+    void saveReflectionDiary({
+      emotionLabel: cognitiveMonitor.emotionLabel,
+      trustDelta: cognitiveMonitor.trustDelta,
+      affectionDelta: cognitiveMonitor.affectionDelta,
+      note: cognitiveMonitor.reflectionNote,
+    });
     // Fire-and-forget: never awaited, never breaks chat
     if (emotionFeedbackEnabled) applyEmotionFeedbackAsync(aiText);
     if (reconciliationPending) {
@@ -2156,11 +2481,9 @@ function removeReferenceImage(i: number): void {
   ];
 
   const PRESET_LIST: { id: PresetName; label: string; color: string }[] = [
-    { id: 'muryi',    label: 'ミュリィ',  color: '#00e5ff' },
     { id: 'tsundere', label: 'ツンデレ',  color: '#fb923c' },
     { id: 'yandere',  label: 'ヤンデレ',  color: '#f43f5e' },
     { id: 'kuudere',  label: 'クーデレ',  color: '#818cf8' },
-    { id: 'risea',    label: 'リセア',    color: '#34d399' },
     { id: 'amaenbou', label: '甘えん坊',  color: '#f9a8d4' },
     { id: 'imouto',   label: '妹系',      color: '#fbbf24' },
     { id: 'joousama', label: '女王様',    color: '#c084fc' },
@@ -2168,23 +2491,14 @@ function removeReferenceImage(i: number): void {
     { id: 'mukanjo',  label: '無感情AI',  color: '#94a3b8' },
     { id: 'jealous',  label: '嫉妬深い',  color: '#dc2626' },
     { id: 'hogo',     label: '保護者',    color: '#059669' },
-    { id: 'youkya',   label: '陽キャ',    color: '#f97316' },
+    { id: 'youkya',   label: '隠キャ',    color: '#f97316' },
     { id: 'menhera',  label: 'メンヘラ',  color: '#e879f9' },
-    { id: 'ciel',     label: 'シエル',    color: '#93c5fd' },
-    { id: 'menoa',    label: 'メノア',    color: '#86efac' },
-    { id: 'piona',    label: 'ピオナ',    color: '#fbbf24' },
     { id: 'custom',   label: 'Custom',    color: '#a78bfa' },
   ];
 
   const TOGGLE_LIST = [
     { key: 'androidMode' as const, label: 'Android演出 ON', icon: '⚡' },
-    { key: 'nightMode'   as const, label: '深夜モード',       icon: '🌙' },
-    { key: 'specialMode' as const, label: '特別対応 ON',     icon: '★' },
-    { key: 'shortChat'   as const, label: '短文会話モード',   icon: '◻' },
-    { key: 'autoTalk'        as const, label: '自発会話モード',        icon: '◈' },
-    { key: 'imagePromptMode' as const, label: 'Image Prompt Mode',    icon: '◼' },
-    { key: 'referenceMode'   as const, label: 'Reference Mode',        icon: '◧' },
-    { key: 'mangaMode'       as const, label: '漫画モード',              icon: '⬛' },
+    { key: 'mangaMode'   as const, label: '漫画制作モード', icon: '⬛' },
   ];
 
   const PARAM_CHIPS = [
@@ -2612,7 +2926,6 @@ ${recent}
     if (idleTimerId) clearTimeout(idleTimerId);
     idleTimerId    = null;
     proactiveArmed = false;
-    if (!toggles.autoTalk) return;
 
     // クールダウン中なら残り時間 + ランダム遅延を上乗せ
     const elapsed = Date.now() - lastProactiveAt;
@@ -2758,7 +3071,7 @@ ${recent}
 
   async function proactiveTalk() {
     // 多重ガード: autoTalk OFF / AI思考中 / 入力フォーカス中 / 入力テキストあり / タイマー未起動
-    if (!toggles.autoTalk || isThinking || isInputFocused || inputText.trim() || !proactiveArmed) return;
+    if (isThinking || isInputFocused || inputText.trim() || !proactiveArmed) return;
     // クールダウンチェック（blur/focusによるタイマー再起動でも10分は発話しない）
     if (lastProactiveAt > 0 && Date.now() - lastProactiveAt < COOLDOWN_MS) {
       proactiveArmed = false;
@@ -2792,6 +3105,7 @@ ${recent}
         const aiText: string = ($sessionStore.provider === 'onair' ? data.reply : data.text) ?? '';
         if (aiText) {
           messages = [...messages, { role: 'ai', text: aiText, time: getTime(), avatar: selectedAvatar }];
+          consumeAndroidBattery(1, 'proactive_reply');
           localStorage.setItem(LS_LAST_MOOD,       detectMood(aiText));
           localStorage.setItem(LS_RECENT_PROGRESS, aiText.length > 50 ? aiText.slice(0, 50) + '…' : aiText);
           setTimeout(() => chatEl?.scrollTo({ top: chatEl.scrollHeight, behavior: 'smooth' }), 50);
@@ -2821,15 +3135,6 @@ ${recent}
     isThinking = false;
     // タイマーは再起動しない（次のユーザー入力まで自発発話は停止）
   }
-
-  // autoTalk トグルの変化を監視
-  $effect(() => {
-    if (toggles.autoTalk) {
-      resetIdleTimer();
-    } else {
-      if (idleTimerId) { clearTimeout(idleTimerId); idleTimerId = null; }
-    }
-  });
 
   /** 長期記憶テキストをパースして構造化 */
   function parseLongMemory(text: string): { preferences: string; project: string; topics: string } {
@@ -2875,6 +3180,56 @@ ${recent}
         return `前回（${timeExpr}）は「${topic}」について話していましたね。${mood && progress ? `${mood}雰囲気で「${progress}」という感じでした。` : ''}今日も続きをしますか？ [記憶ログ：拡張参照完了]`;
     }
   }
+
+  function modelOptionsFor(provider: AIProvider): readonly string[] {
+    if (provider !== 'colab-ollama') return PROVIDER_MODELS[provider];
+
+    const currentModel = $sessionStore.model;
+    if (currentModel && !colabOllamaModels.includes(currentModel)) {
+      return [currentModel, ...colabOllamaModels];
+    }
+
+    return colabOllamaModels;
+  }
+
+  async function loadColabOllamaModels(force = false): Promise<void> {
+    if (colabOllamaModelsLoading) return;
+    if (colabOllamaModelsLoaded && !force) {
+      if (colabOllamaModels.length > 0 && (!$sessionStore.model || !colabOllamaModels.includes($sessionStore.model))) {
+        sessionStore.setModel(colabOllamaModels[0]);
+      }
+      return;
+    }
+
+    colabOllamaModelsLoading = true;
+    colabOllamaModelsError = '';
+
+    try {
+      const res = await fetch('/api/colab-ollama-models');
+      if (!res.ok) {
+        const msg = await res.text().catch(() => `HTTP ${res.status}`);
+        throw new Error(msg);
+      }
+
+      const models = await res.json() as string[];
+      colabOllamaModels = models;
+      colabOllamaModelsLoaded = true;
+
+      if (models.length > 0 && (!$sessionStore.model || !models.includes($sessionStore.model))) {
+        sessionStore.setModel(models[0]);
+      }
+    } catch (e) {
+      colabOllamaModelsError = e instanceof Error ? e.message : String(e);
+    } finally {
+      colabOllamaModelsLoading = false;
+    }
+  }
+
+  $effect(() => {
+    if ($sessionStore.provider === 'colab-ollama') {
+      void loadColabOllamaModels();
+    }
+  });
 
   // ============================================================
   // Clock
@@ -2968,6 +3323,9 @@ ${recent}
 
     // ① 長期記憶を先に読み込み（greeting 生成に使うため最初に）
     longMemory = localStorage.getItem(LS_LONG_MEMORY) ?? '';
+    loadMemoryViewer();
+    loadReflectionDiary();
+    loadPersonalityEvolution();
 
     // ② 前回のメタ情報から起動挨拶メッセージを組み立てる（まだ配置しない）
     const savedTopic    = localStorage.getItem(LS_LAST_TOPIC);
@@ -3053,7 +3411,7 @@ ${recent}
 <!-- ============================================================
      ROOT
      ============================================================ -->
-<div class="lab" class:night-mode={toggles.nightMode}>
+<div class="lab" class:night-mode={effectiveToggles.nightMode}>
 
   <!-- ==================== HEADER ==================== -->
   <header class="lab-header">
@@ -3981,13 +4339,15 @@ ${recent}
               <span class="toggle-track"><span class="toggle-thumb"></span></span>
               <span class="toggle-lbl">{item.label}</span>
             </label>
-            {#if item.key === 'mangaMode'}
-              <button class="studio-btn" onclick={() => window.open('/studio', '_blank')}>
-                ◼ Open Image Studio
-              </button>
-            {/if}
           {/each}
         </div>
+      </div>
+
+      <div class="ctrl-section">
+        <div class="section-lbl">QUICK ACTIONS</div>
+        <button class="studio-btn" onclick={() => window.open('/studio', '_blank')}>
+          ◼ Open Image Studio
+        </button>
       </div>
 
       <!-- 7. VOICE CONFIG -->
@@ -3999,6 +4359,7 @@ ${recent}
             <select class="vc-select" bind:value={voiceEngine}>
               <option value="none">NONE</option>
               <option value="voicevox">VOICEVOX</option>
+              <option value="colab-tts">COLAB TTS</option>
               <option value="elevenlabs">ELEVENLABS</option>
             </select>
           </div>
@@ -4039,12 +4400,26 @@ ${recent}
               class="vc-select"
               value={$sessionStore.model}
               onchange={(e) => sessionStore.setModel((e.currentTarget as HTMLSelectElement).value)}
+              disabled={$sessionStore.provider === 'colab-ollama' && colabOllamaModelsLoading}
             >
-              {#each PROVIDER_MODELS[$sessionStore.provider] as m}
+              {#if $sessionStore.provider === 'colab-ollama' && colabOllamaModelsLoading}
+                <option value="">Loading Colab models...</option>
+              {:else if $sessionStore.provider === 'colab-ollama' && modelOptionsFor($sessionStore.provider).length === 0}
+                <option value="">COLAB_OLLAMA_MODEL fallback</option>
+              {/if}
+              {#each modelOptionsFor($sessionStore.provider) as m}
                 <option value={m}>{m}</option>
               {/each}
             </select>
           </div>
+          {#if $sessionStore.provider === 'colab-ollama' && colabOllamaModelsError}
+            <div class="vc-row">
+              <span class="vc-lbl">COLAB</span>
+              <button class="api-check-btn" onclick={() => void loadColabOllamaModels(true)}>
+                Retry model load
+              </button>
+            </div>
+          {/if}
         </div>
         <button class="api-check-btn" onclick={checkAPIStatus} disabled={checkingAPI}>
           {checkingAPI ? 'Checking…' : 'Check API Status'}
@@ -4078,31 +4453,6 @@ ${recent}
           <span class="stat-lbl">Battery</span>
           <div class="bar-wrap"><div class="bar battery-bar" style="width:{battery}%"></div></div>
           <span class="stat-num">{battery}%</span>
-        </div>
-        <div class="stat-row">
-          <span class="stat-lbl">Trust</span>
-          <div class="bar-wrap"><div class="bar trust-bar" style="width:{emotion.trust}%"></div></div>
-          <span class="stat-num">{emotion.trust}</span>
-        </div>
-        <div class="stat-row">
-          <span class="stat-lbl">Affection</span>
-          <div class="bar-wrap"><div class="bar affection-bar" style="width:{emotion.affection}%"></div></div>
-          <span class="stat-num">{emotion.affection}</span>
-        </div>
-        <div class="stat-row">
-          <span class="stat-lbl">Focus</span>
-          <div class="bar-wrap"><div class="bar trust-bar" style="width:{emotion.focus}%"></div></div>
-          <span class="stat-num">{emotion.focus}</span>
-        </div>
-        <div class="stat-row">
-          <span class="stat-lbl">Anger</span>
-          <div class="bar-wrap"><div class="bar" style="width:{emotion.anger}%; background:#f43f5e"></div></div>
-          <span class="stat-num">{emotion.anger}</span>
-        </div>
-        <div class="stat-row">
-          <span class="stat-lbl">Bond</span>
-          <div class="bar-wrap"><div class="bar" style="width:{bond}%; background:#f59e0b"></div></div>
-          <span class="stat-num">{bond}</span>
         </div>
       </div>
 
@@ -4179,8 +4529,8 @@ ${recent}
           Android Mode {toggles.androidMode ? 'ACTIVE' : 'STANDBY'}
         </div>
         <div class="log-entry">
-          <span class="ld {toggles.specialMode ? 'special' : 'off'}"></span>
-          Special Mode {toggles.specialMode ? 'ON' : 'OFF'}
+          <span class="ld {effectiveToggles.specialMode ? 'special' : 'off'}"></span>
+          Adaptive Response {effectiveToggles.specialMode ? 'AUTO' : 'STANDBY'}
         </div>
       </div>
 
@@ -4205,6 +4555,204 @@ ${recent}
           <pre class="lm-text">{longMemory}</pre>
         {:else}
           <p class="lm-empty">— 記憶なし（5回会話後に自動生成）—</p>
+        {/if}
+      </div>
+
+      <div class="memory-viewer-block">
+        <div class="mv-tabs">
+          <button
+            class="mv-tab active"
+            onclick={loadMemoryViewer}
+            disabled={memoryViewerLoading}
+          >MEMORY</button>
+          <span class="mv-count">{memoryViewerItems.length}</span>
+        </div>
+
+        <div class="mv-search-row">
+          <input
+            class="mv-search"
+            type="search"
+            bind:value={memoryViewerQuery}
+            placeholder="SEARCH CONTENT / TAGS"
+          />
+          <button
+            class="mv-refresh"
+            onclick={loadMemoryViewer}
+            disabled={memoryViewerLoading}
+            title="記憶一覧を再読み込み"
+          >{memoryViewerLoading ? '...' : '↻'}</button>
+        </div>
+
+        {#if memoryViewerError}
+          <p class="mv-empty">{memoryViewerError}</p>
+        {:else if memoryViewerLoading && memoryViewerItems.length === 0}
+          <p class="mv-empty">LOADING MEMORY...</p>
+        {:else if getFilteredMemoryViewerItems().length === 0}
+          <p class="mv-empty">— MEMORY EMPTY —</p>
+        {:else}
+          <div class="mv-list">
+            {#each getFilteredMemoryViewerItems() as memory (memory.id)}
+              <div class="mv-entry">
+                <div class="mv-entry-top">
+                  <span class="mv-importance">IMP {memory.importance}</span>
+                  <span class="mv-date">{formatMemoryDate(memory.createdAt)}</span>
+                </div>
+                <div class="mv-content">{memory.content}</div>
+                {#if memory.tags.length > 0}
+                  <div class="mv-tags">
+                    {#each memory.tags as tag}
+                      <span class="mv-tag">#{tag}</span>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+
+      <div class="cognitive-monitor-block">
+        <div class="cm-header">
+          <span class="cm-tab active">COGNITIVE MONITOR</span>
+          <span class="cm-sub">LAST RESPONSE</span>
+        </div>
+
+        <div class="cm-grid">
+          <div class="cm-cell">
+            <span class="cm-label">Emotion Label</span>
+            <span class="cm-value">{cognitiveMonitor.emotionLabel}</span>
+          </div>
+          <div class="cm-cell">
+            <span class="cm-label">Trust Delta</span>
+            <span class:pos={cognitiveMonitor.trustDelta > 0} class:neg={cognitiveMonitor.trustDelta < 0} class="cm-value">
+              {formatDelta(cognitiveMonitor.trustDelta)}
+            </span>
+          </div>
+          <div class="cm-cell">
+            <span class="cm-label">Affection Delta</span>
+            <span class:pos={cognitiveMonitor.affectionDelta > 0} class:neg={cognitiveMonitor.affectionDelta < 0} class="cm-value">
+              {formatDelta(cognitiveMonitor.affectionDelta)}
+            </span>
+          </div>
+        </div>
+
+        <div class="cm-section">
+          <div class="cm-section-label">Retrieved Memories</div>
+          {#if cognitiveMonitor.retrievedMemories.length === 0}
+            <p class="cm-empty">— NO RETRIEVED MEMORY —</p>
+          {:else}
+            <div class="cm-memory-list">
+              {#each cognitiveMonitor.retrievedMemories as memory (memory.id)}
+                <div class="cm-memory-entry">
+                  <span class="cm-memory-imp">IMP {memory.importance}</span>
+                  <span class="cm-memory-text">{memory.content}</span>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </div>
+
+        <div class="cm-section">
+          <div class="cm-section-label">Reflection Note</div>
+          <p class="cm-note">{cognitiveMonitor.reflectionNote}</p>
+        </div>
+      </div>
+
+      <div class="reflection-diary-block">
+        <div class="rd-header">
+          <span class="rd-tab active">REFLECTION DIARY</span>
+          <button
+            class="rd-refresh"
+            onclick={loadReflectionDiary}
+            disabled={reflectionDiaryLoading}
+            title="最新の日記を再読み込み"
+          >{reflectionDiaryLoading ? '...' : '↻'}</button>
+        </div>
+
+        {#if reflectionDiaryError}
+          <p class="rd-empty">{reflectionDiaryError}</p>
+        {:else if reflectionDiaryLoading && !reflectionDiary}
+          <p class="rd-empty">LOADING DIARY...</p>
+        {:else if !reflectionDiary}
+          <p class="rd-empty">— REFLECTION EMPTY —</p>
+        {:else}
+          <div class="rd-date">{reflectionDiary.date}</div>
+          <div class="rd-section">
+            <span class="rd-label">Summary</span>
+            <p class="rd-text">{reflectionDiary.diary.summary}</p>
+          </div>
+          <div class="rd-section">
+            <span class="rd-label">Learned</span>
+            {#if reflectionDiary.diary.learned.length === 0}
+              <p class="rd-text muted">—</p>
+            {:else}
+              <div class="rd-learned-list">
+                {#each reflectionDiary.diary.learned as item}
+                  <span class="rd-learned">{item}</span>
+                {/each}
+              </div>
+            {/if}
+          </div>
+          <div class="rd-metrics">
+            <div class="rd-metric">
+              <span class="rd-label">Emotion</span>
+              <span class="rd-value">{reflectionDiary.diary.emotion}</span>
+            </div>
+            <div class="rd-metric">
+              <span class="rd-label">Trust Δ</span>
+              <span class:pos={reflectionDiary.diary.trust_delta > 0} class:neg={reflectionDiary.diary.trust_delta < 0} class="rd-value">
+                {formatDelta(reflectionDiary.diary.trust_delta)}
+              </span>
+            </div>
+            <div class="rd-metric">
+              <span class="rd-label">Affection Δ</span>
+              <span class:pos={reflectionDiary.diary.affection_delta > 0} class:neg={reflectionDiary.diary.affection_delta < 0} class="rd-value">
+                {formatDelta(reflectionDiary.diary.affection_delta)}
+              </span>
+            </div>
+          </div>
+          <div class="rd-section">
+            <span class="rd-label">Note</span>
+            <p class="rd-note">{reflectionDiary.diary.note}</p>
+          </div>
+        {/if}
+      </div>
+
+      <div class="personality-evolution-block">
+        <div class="pe-header">
+          <span class="pe-tab active">PERSONALITY EVOLUTION</span>
+          <button
+            class="pe-refresh"
+            onclick={loadPersonalityEvolution}
+            disabled={personalityEvolutionLoading}
+            title="人格進化データを再読み込み"
+          >{personalityEvolutionLoading ? '...' : '↻'}</button>
+        </div>
+
+        {#if personalityEvolutionError}
+          <p class="pe-empty">{personalityEvolutionError}</p>
+        {:else if personalityEvolutionLoading && !personalityEvolution}
+          <p class="pe-empty">LOADING EVOLUTION...</p>
+        {:else if !personalityEvolution}
+          <p class="pe-empty">— EVOLUTION EMPTY —</p>
+        {:else}
+          <div class="pe-list">
+            {#each evolutionKeys as key}
+              <div class="pe-row">
+                <span class="pe-name">{key}</span>
+                <div class="pe-bar-track">
+                  <div class="pe-bar-fill" style="width:{personalityEvolution[key]}%"></div>
+                </div>
+                <span class="pe-value">{personalityEvolution[key]}</span>
+                <span
+                  class:pos={personalityEvolution.lastDelta[key] > 0}
+                  class:neg={personalityEvolution.lastDelta[key] < 0}
+                  class="pe-arrow"
+                >{evolutionArrow(personalityEvolution.lastDelta[key])}</span>
+              </div>
+            {/each}
+          </div>
+          <div class="pe-updated">{formatMemoryDate(personalityEvolution.updatedAt)}</div>
         {/if}
       </div>
 
@@ -4315,7 +4863,7 @@ ${recent}
             </div>
             <div class="dbg-row">
               <span class="dbg-lbl">NIGHT</span>
-              <span class="dbg-val {toggles.nightMode ? 'dbg-hi' : ''}">{toggles.nightMode ? 'ON' : 'OFF'}</span>
+              <span class="dbg-val {effectiveToggles.nightMode ? 'dbg-hi' : ''}">{effectiveToggles.nightMode ? 'AUTO' : 'OFF'}</span>
             </div>
           </div>
         {/if}
@@ -4592,7 +5140,7 @@ ${recent}
       {/each}
       <div class="param-chip hi">
         <span class="pk">mode</span><span class="peq">=</span>
-        <span class="pv">{toggles.specialMode ? 'special' : toggles.nightMode ? 'night' : 'normal'}</span>
+        <span class="pv">{effectiveToggles.specialMode ? 'adaptive' : effectiveToggles.nightMode ? 'night' : 'normal'}</span>
       </div>
       <div class="param-chip hi">
         <span class="pk">emotion</span><span class="peq">=</span>
@@ -4645,6 +5193,36 @@ ${recent}
         <button class="cp-dup-btn cp-dup-standalone" onclick={duplicatePersonaToCustomInModal}>
           ◈ DUPLICATE CURRENT → CUSTOM
         </button>
+      {/if}
+
+      {#if activePreset === 'custom'}
+        <div class="persona-generator">
+          <div class="persona-generator-hd">✨ AI PERSONA GENERATOR</div>
+          <div class="persona-generator-row">
+            <input
+              class="cp-input persona-generator-input"
+              type="text"
+              placeholder="例: ミュリィをギャルっぽくしたい"
+              bind:value={personaGeneratorPrompt}
+              onkeydown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  void generatePersonaWithAI();
+                }
+              }}
+            />
+            <button
+              class="persona-generator-btn"
+              disabled={personaGeneratorLoading || !personaGeneratorPrompt.trim()}
+              onclick={() => void generatePersonaWithAI()}
+            >
+              {personaGeneratorLoading ? '生成中...' : '✨ AIで生成'}
+            </button>
+          </div>
+          {#if personaGeneratorError}
+            <div class="persona-generator-error">{personaGeneratorError}</div>
+          {/if}
+        </div>
       {/if}
 
       <div class="cp-editor-hd">
@@ -5519,6 +6097,542 @@ ${recent}
   margin: 0;
   text-align: center;
   padding: 2px 0;
+}
+
+.memory-viewer-block {
+  border: 1px solid rgba(0,229,255,0.12);
+  border-radius: 4px;
+  background: rgba(0,229,255,0.025);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mv-tabs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mv-tab {
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.4;
+  letter-spacing: 1.2px;
+  padding: 3px 9px;
+  border: 1px solid rgba(0,229,255,0.24);
+  border-radius: 3px;
+  background: rgba(0,229,255,0.06);
+  color: rgba(0,229,255,0.72);
+  cursor: pointer;
+}
+
+.mv-tab.active {
+  color: var(--cy);
+  background: rgba(0,229,255,0.12);
+  box-shadow: inset 0 -1px 0 rgba(0,229,255,0.55);
+}
+
+.mv-tab:hover:not(:disabled),
+.mv-refresh:hover:not(:disabled) {
+  background: rgba(0,229,255,0.16);
+  color: rgba(0,229,255,0.95);
+}
+
+.mv-tab:disabled,
+.mv-refresh:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.mv-count {
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--muted);
+  margin-left: auto;
+}
+
+.mv-search-row {
+  display: flex;
+  gap: 6px;
+}
+
+.mv-search {
+  min-width: 0;
+  flex: 1;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.4;
+  padding: 5px 7px;
+  border: 1px solid rgba(0,229,255,0.16);
+  border-radius: 3px;
+  background: rgba(0,0,0,0.22);
+  color: rgba(220,250,255,0.86);
+  outline: none;
+}
+
+.mv-search:focus {
+  border-color: rgba(0,229,255,0.45);
+  box-shadow: 0 0 8px rgba(0,229,255,0.14);
+}
+
+.mv-refresh {
+  width: 30px;
+  flex: 0 0 30px;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.4;
+  border: 1px solid rgba(0,229,255,0.2);
+  border-radius: 3px;
+  background: rgba(0,229,255,0.06);
+  color: rgba(0,229,255,0.72);
+  cursor: pointer;
+}
+
+.mv-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  max-height: 240px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.mv-entry {
+  border: 1px solid rgba(0,229,255,0.1);
+  border-radius: 4px;
+  background: rgba(0,0,0,0.18);
+  padding: 7px 8px;
+}
+
+.mv-entry-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.mv-importance {
+  font-size: 12px;
+  line-height: 1.3;
+  color: rgba(255,208,90,0.85);
+}
+
+.mv-date {
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--muted);
+}
+
+.mv-content {
+  font-size: 15px;
+  line-height: 1.55;
+  color: rgba(220,250,255,0.82);
+  overflow-wrap: anywhere;
+}
+
+.mv-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.mv-tag {
+  font-size: 12px;
+  line-height: 1.3;
+  color: rgba(0,229,255,0.62);
+}
+
+.mv-empty {
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--muted);
+  margin: 0;
+  text-align: center;
+  padding: 6px 0;
+}
+
+.cognitive-monitor-block {
+  border: 1px solid rgba(167,139,250,0.18);
+  border-radius: 4px;
+  background: rgba(167,139,250,0.025);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cm-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cm-tab {
+  font-size: 14px;
+  line-height: 1.4;
+  letter-spacing: 1.1px;
+  padding: 3px 9px;
+  border: 1px solid rgba(167,139,250,0.28);
+  border-radius: 3px;
+  color: rgba(210,195,255,0.84);
+  background: rgba(167,139,250,0.08);
+}
+
+.cm-tab.active {
+  box-shadow: inset 0 -1px 0 rgba(167,139,250,0.6);
+}
+
+.cm-sub {
+  margin-left: auto;
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--muted);
+}
+
+.cm-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.cm-cell {
+  min-width: 0;
+  border: 1px solid rgba(0,229,255,0.08);
+  border-radius: 4px;
+  background: rgba(0,0,0,0.16);
+  padding: 6px 7px;
+}
+
+.cm-cell:first-child {
+  grid-column: 1 / -1;
+}
+
+.cm-label,
+.cm-section-label {
+  display: block;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--muted);
+  letter-spacing: 0.7px;
+  margin-bottom: 3px;
+}
+
+.cm-value {
+  display: block;
+  font-size: 16px;
+  line-height: 1.35;
+  color: rgba(220,250,255,0.86);
+  overflow-wrap: anywhere;
+}
+
+.cm-value.pos { color: rgba(74,222,128,0.9); }
+.cm-value.neg { color: rgba(244,63,94,0.9); }
+
+.cm-section {
+  border-top: 1px solid rgba(0,229,255,0.08);
+  padding-top: 7px;
+}
+
+.cm-memory-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-height: 130px;
+  overflow: auto;
+}
+
+.cm-memory-entry {
+  display: grid;
+  grid-template-columns: 46px 1fr;
+  gap: 6px;
+  align-items: start;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.cm-memory-imp {
+  color: rgba(255,208,90,0.82);
+}
+
+.cm-memory-text {
+  color: rgba(220,250,255,0.78);
+  overflow-wrap: anywhere;
+}
+
+.cm-empty,
+.cm-note {
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--muted);
+  margin: 0;
+}
+
+.cm-note {
+  color: rgba(210,195,255,0.78);
+}
+
+.reflection-diary-block {
+  border: 1px solid rgba(74,222,128,0.16);
+  border-radius: 4px;
+  background: rgba(74,222,128,0.02);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rd-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rd-tab {
+  font-size: 14px;
+  line-height: 1.4;
+  letter-spacing: 1.1px;
+  padding: 3px 9px;
+  border: 1px solid rgba(74,222,128,0.24);
+  border-radius: 3px;
+  color: rgba(150,245,190,0.84);
+  background: rgba(74,222,128,0.06);
+}
+
+.rd-tab.active {
+  box-shadow: inset 0 -1px 0 rgba(74,222,128,0.5);
+}
+
+.rd-refresh {
+  width: 30px;
+  margin-left: auto;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.4;
+  border: 1px solid rgba(74,222,128,0.22);
+  border-radius: 3px;
+  background: rgba(74,222,128,0.06);
+  color: rgba(150,245,190,0.8);
+  cursor: pointer;
+}
+
+.rd-refresh:hover:not(:disabled) {
+  background: rgba(74,222,128,0.14);
+  color: rgba(180,255,210,0.95);
+}
+
+.rd-refresh:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.rd-date {
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--muted);
+  letter-spacing: 0.8px;
+}
+
+.rd-section {
+  border-top: 1px solid rgba(0,229,255,0.07);
+  padding-top: 7px;
+}
+
+.rd-label {
+  display: block;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--muted);
+  letter-spacing: 0.7px;
+  margin-bottom: 3px;
+}
+
+.rd-text,
+.rd-note,
+.rd-empty {
+  font-size: 14px;
+  line-height: 1.55;
+  color: rgba(220,250,255,0.78);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.rd-text.muted,
+.rd-empty {
+  color: var(--muted);
+}
+
+.rd-empty {
+  text-align: center;
+  padding: 6px 0;
+}
+
+.rd-learned-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.rd-learned {
+  font-size: 13px;
+  line-height: 1.45;
+  color: rgba(220,250,255,0.76);
+  overflow-wrap: anywhere;
+}
+
+.rd-metrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.rd-metric:first-child {
+  grid-column: 1 / -1;
+}
+
+.rd-metric {
+  border: 1px solid rgba(0,229,255,0.08);
+  border-radius: 4px;
+  background: rgba(0,0,0,0.16);
+  padding: 6px 7px;
+  min-width: 0;
+}
+
+.rd-value {
+  display: block;
+  font-size: 15px;
+  line-height: 1.35;
+  color: rgba(220,250,255,0.86);
+  overflow-wrap: anywhere;
+}
+
+.rd-value.pos { color: rgba(74,222,128,0.9); }
+.rd-value.neg { color: rgba(244,63,94,0.9); }
+
+.rd-note {
+  color: rgba(150,245,190,0.78);
+}
+
+.personality-evolution-block {
+  border: 1px solid rgba(255,208,90,0.18);
+  border-radius: 4px;
+  background: rgba(255,208,90,0.025);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pe-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pe-tab {
+  font-size: 14px;
+  line-height: 1.4;
+  letter-spacing: 1.1px;
+  padding: 3px 9px;
+  border: 1px solid rgba(255,208,90,0.26);
+  border-radius: 3px;
+  color: rgba(255,222,130,0.86);
+  background: rgba(255,208,90,0.07);
+}
+
+.pe-tab.active {
+  box-shadow: inset 0 -1px 0 rgba(255,208,90,0.55);
+}
+
+.pe-refresh {
+  width: 30px;
+  margin-left: auto;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.4;
+  border: 1px solid rgba(255,208,90,0.24);
+  border-radius: 3px;
+  background: rgba(255,208,90,0.06);
+  color: rgba(255,222,130,0.82);
+  cursor: pointer;
+}
+
+.pe-refresh:hover:not(:disabled) {
+  background: rgba(255,208,90,0.14);
+  color: rgba(255,235,170,0.98);
+}
+
+.pe-refresh:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.pe-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.pe-row {
+  display: grid;
+  grid-template-columns: 74px 1fr 28px 18px;
+  align-items: center;
+  gap: 7px;
+}
+
+.pe-name {
+  font-size: 12px;
+  line-height: 1.35;
+  color: rgba(220,250,255,0.74);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pe-bar-track {
+  height: 6px;
+  border: 1px solid rgba(255,208,90,0.14);
+  border-radius: 3px;
+  background: rgba(0,0,0,0.24);
+  overflow: hidden;
+}
+
+.pe-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, rgba(255,208,90,0.35), rgba(74,222,128,0.82));
+  box-shadow: 0 0 7px rgba(255,208,90,0.28);
+}
+
+.pe-value {
+  font-size: 12px;
+  line-height: 1.35;
+  color: rgba(255,222,130,0.86);
+  text-align: right;
+}
+
+.pe-arrow {
+  font-size: 14px;
+  line-height: 1.2;
+  color: var(--muted);
+  text-align: center;
+}
+
+.pe-arrow.pos { color: rgba(74,222,128,0.92); }
+.pe-arrow.neg { color: rgba(244,63,94,0.9); }
+
+.pe-updated,
+.pe-empty {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+  margin: 0;
+}
+
+.pe-empty {
+  text-align: center;
+  padding: 6px 0;
 }
 
 /* Radar chart */
@@ -8564,6 +9678,62 @@ ${recent}
 
 .modal-window .cp-input::placeholder {
   font-size: 16px;
+}
+
+.persona-generator {
+  width: 100%;
+  border: 1px solid rgba(167,139,250,0.24);
+  border-radius: 6px;
+  background: rgba(167,139,250,0.045);
+  padding: 12px;
+}
+
+.persona-generator-hd {
+  font-size: 13px;
+  line-height: 1.4;
+  letter-spacing: 1.5px;
+  color: #c4b5fd;
+  margin-bottom: 8px;
+}
+
+.persona-generator-row {
+  display: flex;
+  gap: 10px;
+}
+
+.persona-generator-input {
+  min-width: 0;
+}
+
+.persona-generator-btn {
+  flex: 0 0 auto;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+  letter-spacing: 0.5px;
+  padding: 9px 14px;
+  border: 1px solid rgba(167,139,250,0.42);
+  border-radius: 5px;
+  color: #d8b4fe;
+  background: rgba(167,139,250,0.1);
+  cursor: pointer;
+}
+
+.persona-generator-btn:hover:not(:disabled) {
+  border-color: rgba(167,139,250,0.72);
+  background: rgba(167,139,250,0.18);
+}
+
+.persona-generator-btn:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.persona-generator-error {
+  margin-top: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #fb7185;
 }
 
 .modal-window .modal-close-btn {

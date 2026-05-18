@@ -1,4 +1,5 @@
-import { createLongTermMemory, loadCharacterMemories, loadSharedMemories, upsertLongTermMemory } from './longTermMemoryStore';
+import { createLongTermMemory, loadCharacterMemories, loadSharedMemories, saveSharedMemories, upsertLongTermMemory } from './longTermMemoryStore';
+import { shouldRemember } from './memoryClassifier';
 import { searchMemories, splitSearchResults } from './memoryRetrieval';
 import { buildMemorySystemPrompt } from './promptBuilder';
 import { appendShortTermMessages, createShortTermMessage, loadShortTermMessages, trimShortTermMessages } from './shortTermMemory';
@@ -12,13 +13,37 @@ function mergeShortTermMessages(...groups: ShortTermMessage[][]): ShortTermMessa
   return trimShortTermMessages(groups.flat());
 }
 
+const REMEMBER_TRIGGER_PATTERN = /(覚えておいて|記憶しておいて|メモしておいて|覚えて|記憶して|メモして|忘れないで|remember)/iu;
+
+function findRememberTrigger(text: string): { index: number; trigger: string } | undefined {
+  const match = REMEMBER_TRIGGER_PATTERN.exec(text);
+  if (!match) return undefined;
+  return { index: match.index, trigger: match[0] };
+}
+
 function shouldRememberAsLongTerm(text: string): boolean {
-  return /(覚えて|記憶して|忘れないで|メモして|remember)/iu.test(text);
+  return findRememberTrigger(text) !== undefined;
+}
+
+function shouldForgetLongTerm(text: string): boolean {
+  return /^忘れて/u.test(text.trim());
 }
 
 function stripMemoryCommand(text: string): string {
+  const rememberTrigger = findRememberTrigger(text);
+  const content = rememberTrigger
+    ? text.slice(rememberTrigger.index + rememberTrigger.trigger.length)
+    : text;
+
+  return content
+    .replace(/^[。、,，.:：\s]+/u, '')
+    .replace(/[。.!！\s]+$/u, '')
+    .trim();
+}
+
+function stripForgetCommand(text: string): string {
   return text
-    .replace(/^(覚えて|記憶して|忘れないで|メモして|remember)[。、,，.:：\s]*/iu, '')
+    .replace(/^忘れて[。、,，.:：\s]*/u, '')
     .replace(/^[。、,，.:：\s]+/u, '')
     .replace(/[。.!！\s]+$/u, '')
     .trim();
@@ -33,23 +58,18 @@ function stripSentenceEnding(text: string): string {
 
 function normalizeMemoryContent(text: string): string {
   const content = stripSentenceEnding(stripMemoryCommand(text));
-  const owner = 'RootSさん';
 
   const possessiveMatch = content.match(/^(私|僕|俺|わたし|ぼく|おれ)の(.+?)は(.+)$/u);
   if (possessiveMatch) {
-    return `${owner}の${possessiveMatch[2].trim()}は${stripSentenceEnding(possessiveMatch[3])}`;
+    return `${possessiveMatch[1]}の${possessiveMatch[2].trim()}は${stripSentenceEnding(possessiveMatch[3])}`;
   }
 
   const preferenceMatch = content.match(/^(私|僕|俺|わたし|ぼく|おれ)は(.+?)が好き$/u);
   if (preferenceMatch) {
-    return `${owner}は${preferenceMatch[2].trim()}が好き`;
+    return `${preferenceMatch[1]}は${preferenceMatch[2].trim()}が好き`;
   }
 
-  return stripSentenceEnding(content.replace(/^(私|僕|俺|わたし|ぼく|おれ)/u, owner));
-}
-
-function buildMemoryTitle(text: string): string {
-  return normalizeMemoryContent(text).replace(/\s+/g, ' ').trim().slice(0, 32) || '会話からの記憶';
+  return stripSentenceEnding(content);
 }
 
 export function buildMemoryContext(input: {
@@ -98,7 +118,7 @@ export function buildMemoryContext(input: {
   });
 }
 
-export function recordMemoryCoreTurn(input: MemoryCoreRecordInput): void {
+export async function recordMemoryCoreTurn(input: MemoryCoreRecordInput): Promise<void> {
   const userInput = input.userInput.trim();
   const assistantReply = input.assistantReply.trim();
 
@@ -115,13 +135,28 @@ export function recordMemoryCoreTurn(input: MemoryCoreRecordInput): void {
     ...(input.characterMemories ?? []),
   ];
 
-  if (userInput && shouldRememberAsLongTerm(userInput)) {
+  const rememberTriggered = userInput ? shouldRememberAsLongTerm(userInput) : false;
+  const shouldAutoRemember = userInput && !rememberTriggered && !shouldForgetLongTerm(userInput)
+    ? await shouldRemember(userInput)
+    : false;
+
+  if (userInput && shouldForgetLongTerm(userInput)) {
+    const content = normalizeMemoryContent(stripForgetCommand(userInput));
+    const existingSharedMemories = loadSharedMemories();
+    const nextSharedMemories = existingSharedMemories.filter(
+      (memory) => memory.title !== content && memory.content !== content
+    );
+    const deletedCount = existingSharedMemories.length - nextSharedMemories.length;
+
+    saveSharedMemories(nextSharedMemories);
+    console.log('[memory-core] forget command processed:', { content, deletedCount });
+  } else if (userInput && (rememberTriggered || shouldAutoRemember)) {
     const content = normalizeMemoryContent(userInput);
-    console.log('[memory-core] remember trigger matched:', { userInput, content });
+    console.log('[memory-core] remember trigger matched:', { userInput, content, auto: shouldAutoRemember });
 
     memories.push(createLongTermMemory({
       scope: 'shared',
-      title: buildMemoryTitle(content),
+      title: content,
       content,
       tags: ['chat'],
       importance: 4,

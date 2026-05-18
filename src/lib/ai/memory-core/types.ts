@@ -56,6 +56,7 @@ export type BuiltMemoryPrompt = {
   debug: {
     injectedMemoryIds: string[];
     shortTermCount: number;
+    retrievedMemories?: Pick<LongTermMemory, 'id' | 'content' | 'importance' | 'tags' | 'timestamp'>[];
   };
 };
 

@@ -1,8 +1,11 @@
-import { ChatServiceFactory, runOnceText, type Message } from "@aituber-onair/chat";
 import type { Character } from "$lib/types/character";
 
-type Engine = "openai" | "gemini" | "claude" | "ollama" | "lmstudio";
+type Engine = "openai" | "gemini" | "claude" | "ollama" | "lmstudio" | "colab-ollama";
 type Provider = "openai" | "gemini" | "anthropic";
+type Message = {
+  role: "system" | "user" | "assistant";
+  content: string;
+};
 
 type HandlerParams = {
   prompt: string;
@@ -48,28 +51,79 @@ function getApiKey(provider: Provider): string {
   return apiKey;
 }
 
-function createChat({
-  provider,
-  apiKey,
-  model
-}: {
-  provider: Provider;
-  apiKey: string;
-  model: string;
-}) {
-  const chatProvider = provider === "anthropic" ? "claude" : provider;
-  const chatService = ChatServiceFactory.createChatService(chatProvider, {
-    apiKey,
-    model
+async function parseJsonResponse(res: Response, provider: Provider): Promise<any> {
+  if (!res.ok) {
+    const msg = await res.text().catch(() => `HTTP ${res.status}`);
+    throw new Error(`${provider} API error: ${msg}`);
+  }
+
+  return await res.json();
+}
+
+async function callOpenAI(apiKey: string, model: string, messages: Message[]): Promise<string> {
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({ model, messages })
   });
 
-  return {
-    async generateText({ messages }: { messages: Message[] }): Promise<{ text: string }> {
-      return {
-        text: await runOnceText(chatService, messages)
-      };
-    }
-  };
+  const data = await parseJsonResponse(res, "openai");
+  return data?.choices?.[0]?.message?.content ?? "";
+}
+
+async function callGemini(apiKey: string, model: string, messages: Message[]): Promise<string> {
+  const systemPrompt = messages.find((message) => message.role === "system")?.content ?? "";
+  const contents = messages
+    .filter((message) => message.role !== "system")
+    .map((message) => ({
+      role: message.role === "assistant" ? "model" : "user",
+      parts: [{ text: message.content }]
+    }));
+
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      ...(systemPrompt ? { system_instruction: { parts: [{ text: systemPrompt }] } } : {}),
+      contents
+    })
+  });
+
+  const data = await parseJsonResponse(res, "gemini");
+  return data?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+}
+
+async function callAnthropic(apiKey: string, model: string, messages: Message[]): Promise<string> {
+  const systemPrompt = messages.find((message) => message.role === "system")?.content ?? "";
+  const claudeMessages = messages
+    .filter((message) => message.role !== "system")
+    .map((message) => ({
+      role: message.role === "assistant" ? "assistant" : "user",
+      content: message.content
+    }));
+
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01"
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 300,
+      ...(systemPrompt ? { system: systemPrompt } : {}),
+      messages: claudeMessages
+    })
+  });
+
+  const data = await parseJsonResponse(res, "anthropic");
+  return data?.content?.[0]?.text ?? "";
 }
 
 export async function generateText({ model = "gpt-4o-mini", messages }: GenerateTextParams): Promise<string> {
@@ -77,17 +131,15 @@ export async function generateText({ model = "gpt-4o-mini", messages }: Generate
     const provider = detectProvider(model);
     const apiKey = getApiKey(provider);
 
-    const chat = createChat({
-      provider,
-      apiKey,
-      model
-    });
+    if (provider === "gemini") {
+      return await callGemini(apiKey, model, messages);
+    }
 
-    const result = await chat.generateText({
-      messages
-    });
+    if (provider === "anthropic") {
+      return await callAnthropic(apiKey, model, messages);
+    }
 
-    return result.text;
+    return await callOpenAI(apiKey, model, messages);
   } catch (error) {
     throw error instanceof Error ? error.message : String(error);
   }
@@ -227,6 +279,48 @@ async function lmstudioHandler({ prompt, character }: HandlerParams): Promise<st
 
 //
 // ==============================
+// 🟢 Colab Ollama (OpenAI compatible)
+// ==============================
+//
+async function colabOllamaHandler({ prompt, character, model }: HandlerParams): Promise<string> {
+  console.log("🟢 Colab Ollama 呼び出し");
+
+  const baseUrl = process.env.COLAB_OLLAMA_URL?.replace(/\/+$/, "");
+  const actualModel = model || process.env.COLAB_OLLAMA_MODEL || character.ollamaModel;
+
+  if (!baseUrl) {
+    throw new Error("COLAB_OLLAMA_URL が未設定");
+  }
+
+  if (!actualModel) {
+    throw new Error("COLAB_OLLAMA_MODEL が未設定");
+  }
+
+  const res = await fetch(`${baseUrl}/v1/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: actualModel,
+      messages: [
+        { role: "system", content: buildCharacterSystemPrompt(character) },
+        { role: "user", content: prompt }
+      ]
+    })
+  });
+
+  if (!res.ok) {
+    const msg = await res.text().catch(() => `HTTP ${res.status}`);
+    throw new Error(`Colab Ollama API error: ${msg}`);
+  }
+
+  const data = await res.json();
+  return data?.choices?.[0]?.message?.content ?? "";
+}
+
+//
+// ==============================
 // 🔥 ハンドラー一覧
 // ==============================
 //
@@ -236,6 +330,7 @@ const handlers: Record<Engine, (p: HandlerParams) => Promise<string>> = {
   claude: claudeHandler,
   ollama: ollamaHandler,
   lmstudio: lmstudioHandler,
+  "colab-ollama": colabOllamaHandler,
 };
 
 //

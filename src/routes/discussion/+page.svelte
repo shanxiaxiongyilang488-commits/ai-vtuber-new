@@ -11,7 +11,7 @@
     avatar: string;
     aiEngine?: string;
     modelName?: string;
-    voiceEngine: 'elevenlabs' | 'voicevox' | 'piper' | 'none';
+    voiceEngine: 'elevenlabs' | 'voicevox' | 'colab-tts' | 'piper' | 'none';
     voiceId?: string;
     speakerId?: number;
     systemPrompt?: string;

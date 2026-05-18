@@ -3,7 +3,7 @@ import type { RequestHandler } from './$types';
 import { env } from '$env/dynamic/private';
 import { buildMemoryContext, recordMemoryCoreTurn, type BuiltMemoryPrompt, type MemoryCoreRequest } from '$lib/ai/memory-core/memoryCore';
 
-type Provider = 'openai' | 'gemini' | 'claude' | 'ollama' | 'lmstudio';
+type Provider = 'openai' | 'gemini' | 'claude' | 'ollama' | 'lmstudio' | 'colab-ollama';
 
 interface LabChatRequest {
   provider: Provider;
@@ -134,6 +134,29 @@ async function callLMStudio(systemPrompt: string, userMessage: string, model?: s
   return data?.choices?.[0]?.message?.content ?? '';
 }
 
+async function callColabOllama(systemPrompt: string, userMessage: string, model?: string): Promise<string> {
+  const baseUrl = env.COLAB_OLLAMA_URL?.replace(/\/+$/, '');
+  const actualModel = model || env.COLAB_OLLAMA_MODEL;
+
+  if (!baseUrl) throw new Error('COLAB_OLLAMA_URL が未設定');
+  if (!actualModel) throw new Error('COLAB_OLLAMA_MODEL が未設定');
+
+  const res = await fetch(`${baseUrl}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: actualModel,
+      messages: localMessages(systemPrompt, userMessage),
+    }),
+  });
+  if (!res.ok) {
+    const msg = await res.text().catch(() => `HTTP ${res.status}`);
+    throw new Error(`Colab Ollama API error: ${msg}`);
+  }
+  const data = await res.json();
+  return data?.choices?.[0]?.message?.content ?? '';
+}
+
 // ================================================================
 // Gemini — Vision parts builder
 // ================================================================
@@ -197,9 +220,9 @@ export const POST: RequestHandler = async ({ request }) => {
   });
   const effectiveSystemPrompt = memory.enabled ? memoryContext.systemPrompt : systemPrompt;
   const memoryDebug: BuiltMemoryPrompt['debug'] | undefined = memory.enabled ? memoryContext.debug : undefined;
-  const withMemory = (response: Record<string, unknown>, text: string) => {
+  const withMemory = async (response: Record<string, unknown>, text: string) => {
     if (memory.enabled) {
-      recordMemoryCoreTurn({
+      await recordMemoryCoreTurn({
         characterId: memory.characterId,
         userInput: userMessage,
         assistantReply: text,
@@ -222,7 +245,7 @@ export const POST: RequestHandler = async ({ request }) => {
     const actualModel = model || 'gpt-4o-mini';
     const text = await callOpenAI(effectiveSystemPrompt, userMessage, actualModel, images);
     console.log(`[lab-chat] openai ok (${text.length} chars)`);
-    return json(withMemory({ text, provider: 'openai', actualModel }, text));
+    return json(await withMemory({ text, provider: 'openai', actualModel }, text));
   }
 
   // ================================================================
@@ -238,10 +261,28 @@ export const POST: RequestHandler = async ({ request }) => {
         ? await callOllama(effectiveSystemPrompt, userMessage, actualModel)
         : await callLMStudio(effectiveSystemPrompt, userMessage, actualModel);
       console.log(`[lab-chat] ${provider} ok (${text.length} chars)`);
-      return json(withMemory({ text, provider, actualModel }, text));
+      return json(await withMemory({ text, provider, actualModel }, text));
     } catch (e) {
       console.error(`[lab-chat] ${provider} error:`, e);
       throw error(503, `${provider === 'ollama' ? 'Ollama' : 'LM Studio'} への接続に失敗しました。ローカルサーバーを確認してください。`);
+    }
+  }
+
+  // ================================================================
+  // Colab Ollama (OpenAI互換)
+  // ================================================================
+  if (provider === 'colab-ollama') {
+    if (images.length > 0) {
+      console.warn(`[lab-chat] ${provider} selected with ${images.length} image(s); OpenAI-compatible Colab endpoint will ignore images`);
+    }
+    try {
+      const actualModel = model || env.COLAB_OLLAMA_MODEL;
+      const text = await callColabOllama(effectiveSystemPrompt, userMessage, actualModel);
+      console.log(`[lab-chat] ${provider} ok (${text.length} chars)`);
+      return json(await withMemory({ text, provider, actualModel }, text));
+    } catch (e) {
+      console.error(`[lab-chat] ${provider} error:`, e);
+      throw error(503, 'Colab Ollama への接続に失敗しました。COLAB_OLLAMA_URL / COLAB_OLLAMA_MODEL と Colab 側の公開URLを確認してください。');
     }
   }
 
@@ -281,7 +322,7 @@ export const POST: RequestHandler = async ({ request }) => {
           const text: string = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
           if (text) {
             console.log(`[lab-chat] gemini ok (${text.length} chars)`);
-            return json(withMemory({ text, provider: 'gemini', actualModel: geminiModel }, text));
+            return json(await withMemory({ text, provider: 'gemini', actualModel: geminiModel }, text));
           }
           // 空応答の場合は candidates の状態もログ
           console.warn('[lab-chat][gemini] empty text — candidates:', JSON.stringify(data?.candidates?.map((c: any) => ({
@@ -307,7 +348,7 @@ export const POST: RequestHandler = async ({ request }) => {
       const fallbackModel = 'gpt-4o-mini';
       const text = await callOpenAI(effectiveSystemPrompt, userMessage, fallbackModel, images);
       console.log(`[lab-chat] openai fallback ok (${text.length} chars)`);
-      return json(withMemory({ text, failover: true, provider: 'openai', actualModel: fallbackModel }, text));
+      return json(await withMemory({ text, failover: true, provider: 'openai', actualModel: fallbackModel }, text));
     } catch (fallbackErr) {
       console.error('[lab-chat] openai fallback also failed:', fallbackErr);
       throw error(503, `Gemini と OpenAI の両方が失敗しました。時間をおいて再試行してください。`);
@@ -342,7 +383,7 @@ export const POST: RequestHandler = async ({ request }) => {
     const data = await res.json();
     const text: string = data?.content?.[0]?.text ?? '';
     console.log(`[lab-chat] claude ok (${text.length} chars)`);
-    return json(withMemory({ text, provider: 'claude', actualModel: claudeModel }, text));
+    return json(await withMemory({ text, provider: 'claude', actualModel: claudeModel }, text));
   }
 
   throw error(400, `Unknown provider: ${provider}`);

@@ -34,6 +34,7 @@
       aiEngine = character.aiEngine;
       voiceEngine = character.voiceEngine;
       voiceId = character.voiceId != null? String(character.voiceId): '4';
+      speakerId = character.speakerId ?? 1;
       systemPrompt = character.systemPrompt;
       avatarPreview = character.avatar ?? null;
       ollamaModel = character.ollamaModel ?? '';
@@ -57,11 +58,8 @@
       name,
       aiEngine,
       voiceEngine,
-      voiceId:
-      voiceEngine === 'voicevox'
-    ? Number(voiceId || 4)
-    : voiceId,
-      
+      voiceId,
+      speakerId,
       systemPrompt,
       ollamaModel,
       avatar: avatarPreview ?? character.avatar
@@ -81,6 +79,14 @@
           body: JSON.stringify({ text, voiceId })
         });
         if (!res.ok) { alert('ElevenLabs APIエラー: ' + res.status); return; }
+        await new Audio(URL.createObjectURL(await res.blob())).play();
+      } else if (voiceEngine === 'colab-tts') {
+        const res = await fetch('/api/speak', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, provider: 'colab-tts', voiceId })
+        });
+        if (!res.ok) { alert('Colab TTS APIエラー: ' + res.status); return; }
         await new Audio(URL.createObjectURL(await res.blob())).play();
       } else if (voiceEngine === 'voicevox') {
         const spId = speakerId || 1;
@@ -169,12 +175,13 @@
         <select class="cyber-select" bind:value={voiceEngine}>
           <option value="none">なし</option>
           <option value="voicevox">VOICEVOX</option>
+          <option value="colab-tts">Colab TTS</option>
           <option value="elevenlabs">ElevenLabs</option>
           <option value="piper">Piper</option>
         </select>
 
-        {#if voiceEngine === 'elevenlabs'}
-          <input class="cyber-input" bind:value={voiceId} placeholder="Voice ID" />
+        {#if voiceEngine === 'elevenlabs' || voiceEngine === 'colab-tts'}
+          <input class="cyber-input" bind:value={voiceId} placeholder={voiceEngine === 'colab-tts' ? 'Voice name (任意)' : 'Voice ID'} />
         {:else if voiceEngine === 'voicevox'}
           <input class="cyber-input" type="number" bind:value={speakerId} placeholder="Speaker ID (例: 1)" />
         {/if}

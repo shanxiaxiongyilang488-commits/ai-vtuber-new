@@ -14,6 +14,7 @@ export type AIEngine =
 export type VoiceEngine =
   | 'none'
   | 'piper'
+  | 'colab-tts'
   | 'elevenlabs'
   | 'voicevox';
 
