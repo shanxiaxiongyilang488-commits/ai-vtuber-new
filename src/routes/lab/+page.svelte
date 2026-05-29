@@ -11,6 +11,7 @@
   import { addSpecialMemory, getSpecialMemoryHint } from '$lib/ai/memory/specialMemory';
   import { recordTalk, getAnniversaryHint, computeDailyDrift, shouldApplyDrift, markDriftApplied } from '$lib/ai/memory/anniversaryMemory';
   import { recordVisit, getHabitHint } from '$lib/ai/memory/habitMemory';
+  import { saveImageMemory } from '$lib/ai/memory/imageMemory';
   import { CHARACTER_PROFILES } from '$lib/ai/characters/characterProfiles';
   import { buildEmotionStyleHint } from '$lib/ai/emotion/emotionStyleEngine';
   import { buildToneHints } from '$lib/ai/conversationCore/toneHints';
@@ -2275,6 +2276,10 @@ function removeReferenceImage(i: number): void {
   }
 
   async function generateImageFromLabChat(prompt: string): Promise<void> {
+    const provider = 'openai';
+    const model = 'gpt-image-2';
+    const selectedModel = 'openai/GPT Image 2';
+
     try {
       const res = await fetch('/api/studio/generate', {
         method: 'POST',
@@ -2282,8 +2287,8 @@ function removeReferenceImage(i: number): void {
         body: JSON.stringify({
           prompt,
           size: '1024x1024',
-          model: 'gpt-image-2',
-          selectedModel: 'openai/GPT Image 2',
+          model,
+          selectedModel,
         }),
       });
 
@@ -2292,6 +2297,15 @@ function removeReferenceImage(i: number): void {
       const data = await res.json();
       const imageUrl = typeof data?.url === 'string' ? data.url : '';
       if (!imageUrl) throw new Error('No image URL');
+
+      void saveImageMemory({
+        imageUrl,
+        imagePrompt: prompt,
+        provider,
+        model,
+      }).catch((error) => {
+        console.warn('[Lab] image memory save failed:', error);
+      });
 
       messages = [
         ...messages,
