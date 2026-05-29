@@ -4,7 +4,7 @@ import OpenAI from 'openai';
 import { env } from '$env/dynamic/private';
 
 export const POST: RequestHandler = async ({ request }) => {
-  const { basePrompt, refDescription } = await request.json();
+  const { basePrompt, refDescription, locale = 'ja' } = await request.json();
 
   if (!env.OPENAI_API_KEY) {
     throw error(500, 'OPENAI_API_KEY 未設定');
@@ -15,27 +15,29 @@ export const POST: RequestHandler = async ({ request }) => {
   });
 
   const systemPrompt = `
-You are an expert prompt engineer for image generation.
+あなたは画像生成用プロンプトを整える専門AIです。
 
-Your job:
-- Take a base prompt and character description
-- Generate a FINAL prompt that ensures:
-  - same character identity
-  - consistent face, hair, outfit
-  - no redesign
-  - no variation
+必須条件:
+- locale は必ず ${locale === 'ja' ? 'ja' : 'ja'} として扱う
+- 出力は日本語のみ
+- 入力された基本プロンプトとキャラクター説明を統合する
+- キャラクターの同一性、顔、髪型、衣装を維持する
+- キャラクターを再デザインしない
+- 画面内にメタデータ、UIキャプション、注釈、説明ラベルを描く場合は日本語のみ
+- Point、Error、Concern、Scene、Prompt、Panel、Caption、Metadata などの英語UIラベルを出力しない
+- 英語フォールバックを使わない
 
-Return ONLY the final prompt.
+最終プロンプト本文だけを返してください。
 `;
 
   const userPrompt = `
-Character description:
+キャラクター説明:
 ${refDescription}
 
-Base prompt:
+基本プロンプト:
 ${basePrompt}
 
-Generate a strict, stable image prompt.
+日本語固定の安定した画像生成プロンプトを生成してください。
 `;
 
   const res = await openai.chat.completions.create({

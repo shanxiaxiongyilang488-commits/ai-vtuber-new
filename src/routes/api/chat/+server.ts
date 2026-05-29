@@ -159,7 +159,7 @@ export const POST: RequestHandler = async ({ request }) => {
   // LM Studio
   // =========================
   if (engine === 'lmstudio') {
-    const lmModel = model || 'local-model';
+    const lmModel = model || 'qwen/qwen3-4b';
 
     const res = await fetch('http://localhost:1234/v1/chat/completions', {
       method: 'POST',

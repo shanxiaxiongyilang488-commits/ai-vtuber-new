@@ -20,7 +20,7 @@ export const PROVIDER_MODELS: Record<AIProvider, readonly string[]> = {
   claude:   ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-6'],
   ollama:   ['qwen2.5:3b', 'llama3.2:3b'],
   'colab-ollama': [],
-  lmstudio: ['local-model'],
+  lmstudio: ['qwen/qwen3-4b'],
   onair:    [],
 };
 
@@ -30,6 +30,6 @@ export const DEFAULT_MODELS: Record<AIProvider, string> = {
   claude:   'claude-haiku-4-5-20251001',
   ollama:   'qwen2.5:3b',
   'colab-ollama': '',
-  lmstudio: 'local-model',
+  lmstudio: 'qwen/qwen3-4b',
   onair:    '',
 };

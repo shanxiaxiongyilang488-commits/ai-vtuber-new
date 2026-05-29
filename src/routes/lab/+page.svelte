@@ -51,6 +51,7 @@
     text: string;
     time: string;
     avatar?: string;
+    imageUrl?: string;
     imagePrompt?: string;
     isGreeting?: true; // 起動挨拶フラグ（保存対象外）
   };
@@ -2269,6 +2270,42 @@ function removeReferenceImage(i: number): void {
   // ============================================================
   // Chat
   // ============================================================
+  function isImageGenerationRequest(text: string): boolean {
+    return text.includes('\u63cf\u3044\u3066');
+  }
+
+  async function generateImageFromLabChat(prompt: string): Promise<void> {
+    try {
+      const res = await fetch('/api/studio/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt,
+          size: '1024x1024',
+          model: 'gpt-image-2',
+          selectedModel: 'openai/GPT Image 2',
+        }),
+      });
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const data = await res.json();
+      const imageUrl = typeof data?.url === 'string' ? data.url : '';
+      if (!imageUrl) throw new Error('No image URL');
+
+      messages = [
+        ...messages,
+        { role: 'ai', text: 'IMAGE GENERATED', time: getTime(), avatar: selectedAvatar, imageUrl, imagePrompt: prompt },
+      ];
+    } catch (err) {
+      console.error('[Lab] image generation fail:', err);
+      messages = [...messages, { role: 'error', text: 'Image generation failed.', time: getTime() }];
+    } finally {
+      isThinking = false;
+      setTimeout(() => chatEl?.scrollTo({ top: chatEl.scrollHeight, behavior: 'smooth' }), 50);
+    }
+  }
+
   async function sendYonkomaPrompt() {
     yonkomaGenerating = true;
     inputText = 'この画像のキャラを使って4コマ漫画のYAMLを作って。\nギャグ寄り、キャラの個性を活かして。';
@@ -2281,6 +2318,11 @@ function removeReferenceImage(i: number): void {
     if (!text || isThinking) return;
     inputText = '';
     messages = [...messages, { role: 'user', text, time: getTime() }];
+    if (isImageGenerationRequest(text)) {
+      isThinking = true;
+      await generateImageFromLabChat(text);
+      return;
+    }
     const lastTalkAt = localStorage.getItem(LS_LAST_TALK_AT);
     if (lastTalkAt) {
       const elapsedMin = (Date.now() - new Date(lastTalkAt).getTime()) / 60_000;
@@ -3608,6 +3650,9 @@ ${recent}
                   {/each}
                 {:else}
                   <div class="msg-text">{msg.text}</div>
+                {/if}
+                {#if msg.imageUrl}
+                  <img class="msg-image" src={msg.imageUrl} alt={msg.imagePrompt ?? 'generated image'} />
                 {/if}
                 {#if msg.imagePrompt}
                   <div class="img-prompt-box">
@@ -7234,6 +7279,15 @@ ${recent}
   line-height: 1.85;
   letter-spacing: 0.3px;
   word-break: break-word;
+}
+
+.msg-image {
+  display: block;
+  width: min(100%, 420px);
+  margin-top: 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(0,229,255,0.25);
+  background: rgba(0,0,0,0.18);
 }
 
 .error-bubble {

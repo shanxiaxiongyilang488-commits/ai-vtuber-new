@@ -265,7 +265,7 @@ async function lmstudioHandler({ prompt, character }: HandlerParams): Promise<st
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      model: character.ollamaModel || "local-model",
+      model: character.ollamaModel || "qwen/qwen3-4b",
       messages: [
         { role: "user", content: prompt }
       ]

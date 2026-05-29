@@ -2,12 +2,25 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { env } from '$env/dynamic/private';
 import { buildMemoryContext, recordMemoryCoreTurn, type BuiltMemoryPrompt, type MemoryCoreRequest } from '$lib/ai/memory-core/memoryCore';
+import { chatClaude, CLAUDE_DEFAULT_MODEL } from '$lib/providers/claude';
+import { chatColabOllama } from '$lib/providers/colab';
+import { chatGemini, GEMINI_DEFAULT_MODEL } from '$lib/providers/gemini';
+import { chatLMStudio, LM_STUDIO_DEFAULT_MODEL as PROVIDER_LM_STUDIO_DEFAULT_MODEL } from '$lib/providers/lmstudio';
+import { chatOllama, OLLAMA_DEFAULT_MODEL } from '$lib/providers/ollama';
+import { chatOpenAI, OPENAI_DEFAULT_MODEL } from '$lib/providers/openai';
+import { extractReplyText, logEmptyReply } from '$lib/providers/types';
 
 type Provider = 'openai' | 'gemini' | 'claude' | 'ollama' | 'lmstudio' | 'colab-ollama';
+const LM_STUDIO_BASE_URL = 'http://127.0.0.1:1234/v1';
+const LM_STUDIO_API_KEY = 'lm-studio';
+const LM_STUDIO_DEFAULT_MODEL = 'qwen/qwen3-4b';
+const OLLAMA_TIMEOUT_MS = 120000;
 
 interface LabChatRequest {
   provider: Provider;
   model?: string;
+  temperature?: number;
+  max_tokens?: number;
   systemPrompt: string;
   userMessage: string;
   memory?: MemoryCoreRequest;
@@ -16,6 +29,7 @@ interface LabChatRequest {
 // base64 data URL: "data:<mime>;base64,<data>"
 interface ImageInput {
   dataUrl: string;
+  name?: string;
 }
 
 // ================================================================
@@ -29,6 +43,8 @@ async function parseRequest(request: Request): Promise<{ body: LabChatRequest; i
     const body: LabChatRequest = {
       provider:     (fd.get('provider') as Provider) ?? 'gemini',
       model:        (fd.get('model') as string | null) ?? undefined,
+      temperature:  Number(fd.get('temperature') ?? 0.7),
+      max_tokens:   Number(fd.get('max_tokens') ?? 2048),
       systemPrompt: (fd.get('systemPrompt') as string) ?? '',
       userMessage:  (fd.get('userMessage') as string) ?? '',
     };
@@ -40,7 +56,7 @@ async function parseRequest(request: Request): Promise<{ body: LabChatRequest; i
       const mime = file.type || 'image/jpeg';
       console.log(`[lab-chat] parse image[${i}]: name=${file.name} type=${file.type || '(none)'} size=${buf.byteLength}B b64len=${b64.length} mime_used=${mime}`);
       if (!b64) { console.warn(`[lab-chat] image[${i}] skipped — empty base64`); continue; }
-      images.push({ dataUrl: `data:${mime};base64,${b64}` });
+      images.push({ dataUrl: `data:${mime};base64,${b64}`, name: file.name });
     }
     // Bug 4 fix: note_i をユーザーメッセージへ付加
     const notes: string[] = [];
@@ -87,8 +103,19 @@ async function callOpenAI(
       { role: 'system', content: systemPrompt },
       { role: 'user',   content: openAIUserContent(userMessage, images) as any },
     ],
+    ...(images.length > 0 ? { max_tokens: 2400 } : {}),
   });
   return completion.choices[0].message.content ?? '';
+}
+
+function logVisionText(provider: string, images: ImageInput[], text: string): void {
+  if (images.length === 0) return;
+  const preview = text.replace(/\s+/g, ' ').slice(0, 200);
+  images.forEach((img, i) => {
+    console.log(`[vision] ${img.name ?? `image_${i}`} analysis length=${text.length}`);
+    console.log(`[vision] preview=${preview}`);
+  });
+  console.log(`[lab-chat] ${provider} vision ok (${text.length} chars) preview=${preview}`);
 }
 
 function localMessages(systemPrompt: string, userMessage: string) {
@@ -98,40 +125,78 @@ function localMessages(systemPrompt: string, userMessage: string) {
   ];
 }
 
-async function callOllama(systemPrompt: string, userMessage: string, model?: string): Promise<string> {
-  const actualModel = model || 'qwen2.5:3b';
-  const res = await fetch('http://localhost:11434/api/chat', {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ model: actualModel, messages: localMessages(systemPrompt, userMessage), stream: false }),
-  });
-  if (!res.ok) {
-    const msg = await res.text().catch(() => `HTTP ${res.status}`);
-    throw new Error(`Ollama API error: ${msg}`);
-  }
-  const data = await res.json();
-  return data?.message?.content ?? '';
+function isOllamaTimeout(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const cause = err.cause as { code?: unknown; name?: unknown } | undefined;
+  return (
+    err.name === 'TimeoutError' ||
+    cause?.name === 'HeadersTimeoutError' ||
+    cause?.code === 'UND_ERR_HEADERS_TIMEOUT'
+  );
 }
 
-async function callLMStudio(systemPrompt: string, userMessage: string, model?: string): Promise<string> {
-  const actualModel = model || 'local-model';
-  const res = await fetch('http://localhost:1234/v1/chat/completions', {
-    method:  'POST',
+async function callOllama(systemPrompt: string, userMessage: string, model?: string): Promise<string> {
+  const actualModel = model || 'qwen2.5:3b';
+  console.log('[OLLAMA REQUEST START]');
+
+  try {
+    const res = await fetch('http://127.0.0.1:11434/api/chat', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(OLLAMA_TIMEOUT_MS),
+      body:    JSON.stringify({ model: actualModel, messages: localMessages(systemPrompt, userMessage), stream: false }),
+    });
+    if (!res.ok) {
+      const msg = await res.text().catch(() => `HTTP ${res.status}`);
+      throw new Error(`Ollama API error: ${msg}`);
+    }
+    const data = await res.json();
+    console.log('[OLLAMA RESPONSE OK]');
+    const replyText = extractReplyText(data);
+    if (!replyText.trim()) logEmptyReply('OLLAMA_LEGACY', data);
+    return replyText;
+  } catch (err) {
+    if (isOllamaTimeout(err)) {
+      console.log('[OLLAMA TIMEOUT]');
+      return '生成中...';
+    }
+
+    throw err;
+  }
+}
+
+async function callLMStudio(
+  systemPrompt: string,
+  userMessage: string,
+  model?: string,
+  temperature = 0.7,
+  maxTokens = 2048,
+): Promise<string> {
+  const actualModel = model || LM_STUDIO_DEFAULT_MODEL;
+  const res = await fetch(`${LM_STUDIO_BASE_URL}/chat/completions`, {
+    method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization:  'Bearer lm-studio',
+      Authorization: `Bearer ${LM_STUDIO_API_KEY}`,
     },
     body: JSON.stringify({
       model: actualModel,
       messages: localMessages(systemPrompt, userMessage),
+      temperature,
+      max_tokens: maxTokens,
+      stream: false,
     }),
   });
+
   if (!res.ok) {
     const msg = await res.text().catch(() => `HTTP ${res.status}`);
     throw new Error(`LM Studio API error: ${msg}`);
   }
+
   const data = await res.json();
-  return data?.choices?.[0]?.message?.content ?? '';
+  const replyText = extractReplyText(data);
+  if (!replyText.trim()) logEmptyReply('LM_STUDIO_LEGACY', data);
+  return replyText;
 }
 
 async function callColabOllama(systemPrompt: string, userMessage: string, model?: string): Promise<string> {
@@ -154,7 +219,9 @@ async function callColabOllama(systemPrompt: string, userMessage: string, model?
     throw new Error(`Colab Ollama API error: ${msg}`);
   }
   const data = await res.json();
-  return data?.choices?.[0]?.message?.content ?? '';
+  const replyText = extractReplyText(data);
+  if (!replyText.trim()) logEmptyReply('COLAB_OLLAMA_LEGACY', data);
+  return replyText;
 }
 
 // ================================================================
@@ -212,6 +279,8 @@ export const POST: RequestHandler = async ({ request }) => {
 
   const { body, images, enableMemoryByDefault } = parsed;
   const { provider, model, systemPrompt, userMessage } = body;
+  const temperature = Number.isFinite(body.temperature) ? body.temperature : 0.7;
+  const maxTokens = Number.isFinite(body.max_tokens) ? body.max_tokens : 2048;
   const memory = body.memory ?? { enabled: enableMemoryByDefault };
   const memoryContext = buildMemoryContext({
     baseSystemPrompt: systemPrompt,
@@ -235,6 +304,8 @@ export const POST: RequestHandler = async ({ request }) => {
     return memoryDebug ? { ...response, memory: memoryDebug } : response;
   };
 
+  console.log('[PROVIDER]', provider);
+  console.log('[FINAL MODEL]', model || '(default)');
   console.log(`[lab-chat] provider=${provider} model=${model || '(default)'} images=${images.length}`);
 
   // ================================================================
@@ -242,9 +313,16 @@ export const POST: RequestHandler = async ({ request }) => {
   // ================================================================
   if (provider === 'openai') {
     if (!env.OPENAI_API_KEY) throw error(500, 'OPENAI_API_KEY が未設定');
-    const actualModel = model || 'gpt-4o-mini';
-    const text = await callOpenAI(effectiveSystemPrompt, userMessage, actualModel, images);
+    const actualModel = model || OPENAI_DEFAULT_MODEL;
+    const text = await chatOpenAI({
+      apiKey: env.OPENAI_API_KEY,
+      systemPrompt: effectiveSystemPrompt,
+      userMessage,
+      model: actualModel,
+      images,
+    });
     console.log(`[lab-chat] openai ok (${text.length} chars)`);
+    logVisionText('openai', images, text);
     return json(await withMemory({ text, provider: 'openai', actualModel }, text));
   }
 
@@ -256,15 +334,18 @@ export const POST: RequestHandler = async ({ request }) => {
       console.warn(`[lab-chat] ${provider} selected with ${images.length} image(s); local text endpoint will ignore images`);
     }
     try {
-      const actualModel = model || (provider === 'ollama' ? 'qwen2.5:3b' : 'local-model');
+      const actualModel = model || (provider === 'ollama' ? OLLAMA_DEFAULT_MODEL : PROVIDER_LM_STUDIO_DEFAULT_MODEL);
       const text = provider === 'ollama'
-        ? await callOllama(effectiveSystemPrompt, userMessage, actualModel)
-        : await callLMStudio(effectiveSystemPrompt, userMessage, actualModel);
-      console.log(`[lab-chat] ${provider} ok (${text.length} chars)`);
-      return json(await withMemory({ text, provider, actualModel }, text));
+        ? await chatOllama({ systemPrompt: effectiveSystemPrompt, userMessage, model: actualModel })
+        : await chatLMStudio({ systemPrompt: effectiveSystemPrompt, userMessage, model: actualModel, temperature, maxTokens });
+      const replyText = typeof text === 'string' ? text : String(text ?? '');
+      console.log(`[lab-chat] ${provider} ok (${replyText.length} chars)`);
+      return json(await withMemory({ text: replyText, replyText, provider, actualModel }, replyText));
     } catch (e) {
       console.error(`[lab-chat] ${provider} error:`, e);
-      throw error(503, `${provider === 'ollama' ? 'Ollama' : 'LM Studio'} への接続に失敗しました。ローカルサーバーを確認してください。`);
+      throw error(503, provider === 'lmstudio'
+        ? 'LM Studio Offline'
+        : 'Ollama への接続に失敗しました。ローカルサーバーを確認してください。');
     }
   }
 
@@ -277,9 +358,15 @@ export const POST: RequestHandler = async ({ request }) => {
     }
     try {
       const actualModel = model || env.COLAB_OLLAMA_MODEL;
-      const text = await callColabOllama(effectiveSystemPrompt, userMessage, actualModel);
-      console.log(`[lab-chat] ${provider} ok (${text.length} chars)`);
-      return json(await withMemory({ text, provider, actualModel }, text));
+      const text = await chatColabOllama({
+        baseUrl: env.COLAB_OLLAMA_URL,
+        systemPrompt: effectiveSystemPrompt,
+        userMessage,
+        model: actualModel,
+      });
+      const replyText = typeof text === 'string' ? text : String(text ?? '');
+      console.log(`[lab-chat] ${provider} ok (${replyText.length} chars)`);
+      return json(await withMemory({ text: replyText, replyText, provider, actualModel }, replyText));
     } catch (e) {
       console.error(`[lab-chat] ${provider} error:`, e);
       throw error(503, 'Colab Ollama への接続に失敗しました。COLAB_OLLAMA_URL / COLAB_OLLAMA_MODEL と Colab 側の公開URLを確認してください。');
@@ -294,13 +381,25 @@ export const POST: RequestHandler = async ({ request }) => {
 
     if (env.GEMINI_API_KEY) {
       try {
-        const geminiModel = model || 'gemini-2.0-flash';
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${env.GEMINI_API_KEY}`;
+        const geminiModel = model || GEMINI_DEFAULT_MODEL;
+        const text = await chatGemini({
+          apiKey: env.GEMINI_API_KEY,
+          systemPrompt: effectiveSystemPrompt,
+          userMessage,
+          model: geminiModel,
+          images,
+        });
+        console.log(`[lab-chat] gemini ok (${text.length} chars)`);
+        logVisionText('gemini', images, text);
+        return json(await withMemory({ text, provider: 'gemini', actualModel: geminiModel }, text));
+
+        const legacyGeminiModel = model || 'gemini-2.0-flash';
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${legacyGeminiModel}:generateContent?key=${env.GEMINI_API_KEY}`;
 
         const userParts = geminiUserParts(userMessage, images);
         // ペイロード構造を base64 本体を除いてログ（スパム防止）
         console.log('[lab-chat][gemini] request_summary:', JSON.stringify({
-          model:           geminiModel,
+          model:           legacyGeminiModel,
           systemPromptLen: effectiveSystemPrompt.length,
           partsCount:      userParts.length,
           imageParts:      userParts
@@ -315,6 +414,7 @@ export const POST: RequestHandler = async ({ request }) => {
           body: JSON.stringify({
             system_instruction: { parts: [{ text: effectiveSystemPrompt }] },
             contents: [{ role: 'user', parts: userParts }],
+            generationConfig: images.length > 0 ? { maxOutputTokens: 2400 } : undefined,
           }),
         });
         if (res.ok) {
@@ -322,7 +422,8 @@ export const POST: RequestHandler = async ({ request }) => {
           const text: string = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
           if (text) {
             console.log(`[lab-chat] gemini ok (${text.length} chars)`);
-            return json(await withMemory({ text, provider: 'gemini', actualModel: geminiModel }, text));
+            logVisionText('gemini', images, text);
+            return json(await withMemory({ text, provider: 'gemini', actualModel: legacyGeminiModel }, text));
           }
           // 空応答の場合は candidates の状態もログ
           console.warn('[lab-chat][gemini] empty text — candidates:', JSON.stringify(data?.candidates?.map((c: any) => ({
@@ -345,9 +446,16 @@ export const POST: RequestHandler = async ({ request }) => {
     console.warn(`[lab-chat] gemini failed (${geminiFailReason}) — trying OpenAI fallback`);
 
     try {
-      const fallbackModel = 'gpt-4o-mini';
-      const text = await callOpenAI(effectiveSystemPrompt, userMessage, fallbackModel, images);
+      const fallbackModel = OPENAI_DEFAULT_MODEL;
+      const text = await chatOpenAI({
+        apiKey: env.OPENAI_API_KEY,
+        systemPrompt: effectiveSystemPrompt,
+        userMessage,
+        model: fallbackModel,
+        images,
+      });
       console.log(`[lab-chat] openai fallback ok (${text.length} chars)`);
+      logVisionText('openai fallback', images, text);
       return json(await withMemory({ text, failover: true, provider: 'openai', actualModel: fallbackModel }, text));
     } catch (fallbackErr) {
       console.error('[lab-chat] openai fallback also failed:', fallbackErr);
@@ -360,28 +468,14 @@ export const POST: RequestHandler = async ({ request }) => {
   // ================================================================
   if (provider === 'claude') {
     if (!env.ANTHROPIC_API_KEY) throw error(500, 'ANTHROPIC_API_KEY が未設定');
-    const claudeModel = model || 'claude-haiku-4-5-20251001';
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method:  'POST',
-      headers: {
-        'x-api-key':         env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-        'content-type':      'application/json',
-      },
-      body: JSON.stringify({
-        model:      claudeModel,
-        max_tokens: images.length > 0 ? 800 : 300,
-        system:     effectiveSystemPrompt,
-        messages:  [{ role: 'user', content: claudeUserContent(userMessage, images) }],
-      }),
+    const claudeModel = model || CLAUDE_DEFAULT_MODEL;
+    const text = await chatClaude({
+      apiKey: env.ANTHROPIC_API_KEY,
+      systemPrompt: effectiveSystemPrompt,
+      userMessage,
+      model: claudeModel,
+      images,
     });
-    if (!res.ok) {
-      const msg = await res.text().catch(() => `HTTP ${res.status}`);
-      console.error('[lab-chat] claude error:', msg);
-      throw error(res.status, `Claude API error: ${msg}`);
-    }
-    const data = await res.json();
-    const text: string = data?.content?.[0]?.text ?? '';
     console.log(`[lab-chat] claude ok (${text.length} chars)`);
     return json(await withMemory({ text, provider: 'claude', actualModel: claudeModel }, text));
   }

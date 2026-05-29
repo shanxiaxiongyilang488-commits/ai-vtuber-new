@@ -1,0 +1,8 @@
+{
+  "summary": "AI: システム初期化完了。会話テストモードを開始します。[論理コア：安定] / User: ミュリィ、このイページのマンガから続きのページのマンガを作ってみて / AI: [scene]  \nバッテリー共有が始まり、二人は装置から温かな光に包まれる。周囲はエレクトロな輝きに満ちている。カフェの他の顧客も興味津々で見守る。\n\n[panel]  \nキャラクター1とキャラクター2が笑顔でお互いの手をしっかり握り合っている。装置から放たれる光が彼女たちの顔を優しく照らし、充電の進行状況が表示されている。\n\n[prompt]  \n1girl, 1girl, ミュリィ, short silver hair, pink and silver twin-tails, cyan eyes, pink eyes, android...",
+  "learned": [],
+  "emotion": "joy",
+  "trust_delta": 10,
+  "affection_delta": 0,
+  "note": "関連記憶なし / joy / Trust 変化なし / Affection 変化なし"
+}

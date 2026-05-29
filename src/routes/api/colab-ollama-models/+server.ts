@@ -1,31 +1,47 @@
-import { json, error } from '@sveltejs/kit';
+import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { env } from '$env/dynamic/private';
-
-type OllamaTagsResponse = {
-  models?: Array<{
-    name?: unknown;
-  }>;
-};
+import { listColabModels } from '$lib/providers/colab';
 
 export const GET: RequestHandler = async () => {
   const baseUrl = env.COLAB_OLLAMA_URL?.replace(/\/+$/, '');
 
   if (!baseUrl) {
-    throw error(500, 'COLAB_OLLAMA_URL が未設定');
+    return json(
+      {
+        error: 'COLAB_OLLAMA_URL が未設定',
+        details: { envName: 'COLAB_OLLAMA_URL' }
+      },
+      { status: 500 }
+    );
   }
 
-  const res = await fetch(`${baseUrl}/api/tags`);
+  const tagsUrl = `${baseUrl}/api/tags`;
 
-  if (!res.ok) {
-    const msg = await res.text().catch(() => `HTTP ${res.status}`);
-    throw error(503, `Colab Ollama tags API error: ${msg}`);
+  try {
+    const models = await listColabModels(baseUrl);
+
+    return json(models);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error ? err.stack : undefined;
+
+    console.error('Failed to fetch Colab Ollama models', {
+      url: tagsUrl,
+      message,
+      stack
+    });
+
+    return json(
+      {
+        error: 'Colab Ollama models fetch failed',
+        details: {
+          url: tagsUrl,
+          message,
+          stack
+        }
+      },
+      { status: 503 }
+    );
   }
-
-  const data = await res.json() as OllamaTagsResponse;
-  const models = (data.models ?? [])
-    .map((model) => model.name)
-    .filter((name): name is string => typeof name === 'string' && name.trim().length > 0);
-
-  return json(models);
 };

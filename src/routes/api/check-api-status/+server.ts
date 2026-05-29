@@ -2,7 +2,15 @@ import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { env } from '$env/dynamic/private';
 
-type StatusResult = 'OK' | 'Missing API Key' | 'Unauthorized' | 'Quota' | 'Error';
+type StatusResult =
+  | 'OK'
+  | 'Missing API Key'
+  | 'Unauthorized'
+  | 'Quota'
+  | 'Error'
+  | 'LM Studio Offline'
+  | 'Ollama OK'
+  | 'Ollama Offline';
 
 async function checkOpenAI(): Promise<StatusResult> {
   if (!env.OPENAI_API_KEY) return 'Missing API Key';
@@ -52,11 +60,33 @@ async function checkClaude(): Promise<StatusResult> {
   }
 }
 
+async function checkLMStudio(): Promise<StatusResult> {
+  try {
+    const res = await fetch('http://127.0.0.1:1234/v1/models', {
+      headers: { Authorization: 'Bearer lm-studio' },
+    });
+    return res.ok ? 'OK' : 'LM Studio Offline';
+  } catch {
+    return 'LM Studio Offline';
+  }
+}
+
+async function checkOllama(): Promise<StatusResult> {
+  try {
+    const res = await fetch('http://127.0.0.1:11434/api/tags');
+    return res.ok ? 'Ollama OK' : 'Ollama Offline';
+  } catch {
+    return 'Ollama Offline';
+  }
+}
+
 export const GET: RequestHandler = async () => {
-  const [openai, gemini, claude] = await Promise.all([
+  const [openai, gemini, claude, lmstudio, ollama] = await Promise.all([
     checkOpenAI(),
     checkGemini(),
     checkClaude(),
+    checkLMStudio(),
+    checkOllama(),
   ]);
-  return json({ openai, gemini, claude });
+  return json({ openai, gemini, claude, lmstudio, ollama });
 };

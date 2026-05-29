@@ -41,7 +41,7 @@
 
   let local = $state<ApiSection>({
     key: '',
-    model: 'local-model',
+    model: 'qwen/qwen3-4b',
     baseUrl: 'http://localhost:1234',
     status: 'not_tested',
   });
@@ -64,7 +64,7 @@
     gemini.model = g('api_gemini_model') || DEFAULT_MODELS.gemini;
 
     local.baseUrl = g('api_local_url') || 'http://localhost:1234';
-    local.model   = g('api_local_model') || 'local-model';
+    local.model   = g('api_local_model') || 'qwen/qwen3-4b';
 
     falKey = g('api_fal_key');
   }
@@ -362,7 +362,7 @@
           <input
             type="text"
             class="input"
-            placeholder="local-model"
+            placeholder="qwen/qwen3-4b"
             bind:value={local.model}
           />
         </label>

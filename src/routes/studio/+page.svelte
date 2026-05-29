@@ -1,8 +1,11 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
+
   // ============================================================
   // State
   // ============================================================
   type ImageSize = '1024x1024' | '1792x1024' | '1024x1792';
+  const UI_LOCALE = 'ja' as const;
 
   let size          = $state<ImageSize>('1024x1024');
   let generating    = $state(false);
@@ -16,6 +19,7 @@
   let storyText     = $state('');
   let characterLock = true;
   let generatedPanels: string[] = [];
+  let mangaPageMode = $state<1 | 2>(1);
 
   type RefImage = {
     thumb:     string;    // display thumbnail (THUMB_PX) — UI only
@@ -45,40 +49,37 @@
     names: [],
   });
 
-  type LayoutId = 'single' | '2panel' | '4panel' | 'vertical3' | 'free';
+  type LayoutId = 'single' | '2panel' | 'vertical3' | 'free' | 'free_page';
+  type PanelSize = 'small' | 'medium' | 'large' | 'splash';
 
   const LAYOUTS: { id: LayoutId; label: string; count: number | null }[] = [
     { id: 'single',    label: '1枚絵',   count: 1    },
     { id: '2panel',    label: '2コマ',   count: 2    },
-    { id: '4panel',    label: '4コマ',   count: 4    },
     { id: 'vertical3', label: '3コマ',   count: 3    },
-    { id: 'free',      label: 'Free',    count: null },
+    { id: 'free_page', label: 'Free Page', count: null },
+    { id: 'free',      label: 'Free',      count: null },
   ];
-  const MAX_PANELS_PER_PAGE = 4;
+  const RECOMMENDED_MAX_PANELS_PER_PAGE = 8;
 
-  function normalizeLayoutId(raw: string | null | undefined, fallback: LayoutId = '4panel'): LayoutId {
-    if (raw === 'single' || raw === '2panel' || raw === '4panel' || raw === 'vertical3' || raw === 'free') return raw;
+  function normalizeLayoutId(raw: string | null | undefined, fallback: LayoutId = 'free_page'): LayoutId {
+    if (raw === 'free_page') return 'free_page';
+    if (raw === 'single' || raw === '2panel' || raw === 'vertical3' || raw === 'free') return raw;
     if (raw === '3vertical') return 'vertical3';
     return fallback;
   }
 
   function layoutForPanelCount(count: number): LayoutId {
-    if (count <= 1) return 'single';
-    if (count === 2) return '2panel';
-    if (count === 3) return 'vertical3';
-    if (count <= MAX_PANELS_PER_PAGE) return '4panel';
-    return 'free';
+    return 'free_page';
   }
 
   function gridColumnsForPanelCount(count: number): number {
-    return count <= 1 ? 1 : 2;
+    if (count <= 1) return 1;
+    if (count <= 4) return 2;
+    return 3;
   }
 
   function gridRowsForPanelCount(count: number): number {
-    if (count <= 1) return 1;
-    if (count === 2) return 1;
-    if (count <= MAX_PANELS_PER_PAGE) return 2;
-    return Math.ceil(count / 2);
+    return Math.ceil(Math.max(1, count) / gridColumnsForPanelCount(count));
   }
 
   // ── Bubble text region (precise coordinate-based text correction) ──
@@ -89,6 +90,9 @@
     w:    number;   // width,     0-1 normalized to slot width
     h:    number;   // height,    0-1 normalized to slot height
     text: string;   // replacement text drawn inside the masked region
+    font?: MangaFont;
+    fontSize?: number;
+    bold?: boolean;
   };
 
   function dialogueToBubbleTexts(dialogue: string): string[] {
@@ -103,16 +107,25 @@
   function makeDialogueRegions(dialogue: string): TextRegion[] {
     const texts = dialogueToBubbleTexts(dialogue);
     const count = Math.max(1, texts.length);
+    const topMin = 0.05;
+    const topMax = 0.20;
+    const bubbleW = 0.42;
+    const bubbleH = count > 2 ? 0.105 : 0.12;
+    const leftX = 0.05;
+    const rightX = 0.53;
     return texts.map((text, i) => {
-      const compact = count > 1;
-      const w = compact ? 0.54 : 0.68;
-      const h = compact ? 0.16 : 0.18;
-      const x = count === 1 ? 0.16 : (i % 2 === 0 ? 0.08 : 0.38);
-      const y = Math.min(0.76, 0.08 + i * 0.19);
+      const row = Math.floor(i / 2);
+      const y = Math.min(topMax, topMin + row * 0.075);
       return {
         id: Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
-        x, y, w, h,
+        x: i % 2 === 0 ? leftX : rightX,
+        y,
+        w: bubbleW,
+        h: bubbleH,
         text,
+        font: overlayFont,
+        fontSize: overlaySize,
+        bold: overlayBold,
       };
     });
   }
@@ -125,6 +138,7 @@
   type PanelSlot = {
     scene:       string;
     prompt:      string;
+    panelSize?:   PanelSize;
     negativePrompt?: string;
     model?:       StudioModelId;
     imageUrl:    string | null;
@@ -134,19 +148,29 @@
     dialoguePos?: 'top' | 'center' | 'bottom';       // kept: bakeDialogueText compat
     textRegions?: TextRegion[];                       // NEW: precise bubble regions
   };
-  const emptySlot = (): PanelSlot => ({ scene: '', prompt: '', negativePrompt: '', model: undefined, imageUrl: null, videoUrl: null, generating: false, dialogue: '', dialoguePos: 'top', textRegions: [] });
+  const emptySlot = (): PanelSlot => ({ scene: '', prompt: '', panelSize: 'medium', negativePrompt: '', model: undefined, imageUrl: null, videoUrl: null, generating: false, dialogue: '', dialoguePos: 'top', textRegions: [] });
 
-  type Page = { id: string; prompt: string; layout: LayoutId; panels: PanelSlot[] };
+  type Page = { id: string; prompt: string; layout: LayoutId; panelCount: number; panels: PanelSlot[]; pageYaml: string; resultUrl: string | null };
   const createPage = (): Page => ({
     id: Date.now().toString() + Math.random().toString(36).slice(2, 6),
     prompt: '',
-    layout: '4panel',
-    panels: [emptySlot(), emptySlot(), emptySlot(), emptySlot()],
+    layout: 'free_page',
+    panelCount: 1,
+    panels: [emptySlot()],
+    pageYaml: '',
+    resultUrl: null,
   });
 
   let pages       = $state<Page[]>([createPage()]);
   let activePage  = $state(0);
   let activePanel = $state<number | null>(null);
+  let selectedPanelIndex = $state<number | null>(null);
+  let currentPagePanels = $derived(pages[activePage]?.panels ?? []);
+  let currentPageYaml = $derived(pages[activePage] ? serializeStudioPageToYaml(pages[activePage], activePage) : '');
+  let currentPageResultUrl = $derived(pages[activePage]?.resultUrl ?? null);
+  let pagePanelWarnings = $derived(pages
+    .map((page, index) => ({ page: index + 1, panelCount: page.panels.length }))
+    .filter(item => item.panelCount === 0));
 
   function currentStoryInput(): string {
     return storyText.trim() || pages[0]?.prompt.trim() || pages[activePage]?.prompt.trim() || '';
@@ -157,6 +181,14 @@
     panelsPerPage?: number;
     totalPanels?: number;
     instruction: string;
+  };
+
+  type PagePanelBudget = {
+    page: number;
+    min: number;
+    max: number;
+    target: number;
+    beats: string[];
   };
 
   function parseStoryCount(raw: string | undefined): number | undefined {
@@ -185,21 +217,86 @@
     const pageCount = parseStoryCount(pageMatch?.[1]);
     const panelsPerPage = parseStoryCount(perPageMatch?.[1]);
     const explicitKoma = komaMatches.map(m => parseStoryCount(m[1])).find((n): n is number => typeof n === 'number');
-    const resolvedPanelsPerPage = panelsPerPage ?? (pageCount && explicitKoma === MAX_PANELS_PER_PAGE ? explicitKoma : undefined);
+    const resolvedPanelsPerPage = panelsPerPage;
     const totalPanels = resolvedPanelsPerPage && pageCount
       ? resolvedPanelsPerPage * pageCount
       : (!pageCount ? explicitKoma : undefined);
 
     const lines: string[] = [];
     if (pageCount) lines.push(`- STORY内の明示指定により、ページ数は必ず ${pageCount} ページにすること。`);
-    if (resolvedPanelsPerPage) lines.push(`- STORY内の明示指定により、1ページあたり必ず ${resolvedPanelsPerPage} コマにすること。`);
-    if (totalPanels) lines.push(`- STORY内の明示指定により、YAML全体の panels 合計は必ず ${totalPanels} 件にすること。AIの推測で増減しないこと。`);
-    if (explicitKoma === MAX_PANELS_PER_PAGE || resolvedPanelsPerPage === MAX_PANELS_PER_PAGE) {
-      lines.push('- 4コマ指定があるため、4コマ単位で「起・承・転・結」を自動設計すること。');
-      lines.push('- 4コマの場合、panel 1=起、panel 2=承、panel 3=転、panel 4=結として連続する内容にすること。');
-    }
+    if (resolvedPanelsPerPage) lines.push(`- STORY内に1ページあたり ${resolvedPanelsPerPage} コマの希望がある。pageTargetPanelsへ反映し、必要以上に増やさないこと。`);
+    if (totalPanels) lines.push(`- STORY内に合計 ${totalPanels} コマの希望がある。pageTargetPanelsへ反映し、会話だけの小コマで超過させないこと。`);
+    if (!resolvedPanelsPerPage && !totalPanels) lines.push(`- コマ数指定がない場合は、1ページあたり3〜6コマを推奨し、${RECOMMENDED_MAX_PANELS_PER_PAGE}コマ程度を目安にすること。`);
 
     return { pageCount, panelsPerPage: resolvedPanelsPerPage, totalPanels, instruction: lines.join('\n') };
+  }
+
+  function clampPanelCount(value: number, min: number, max: number): number {
+    return Math.max(min, Math.min(max, Math.round(value)));
+  }
+
+  function distributePanelTargets(totalPanels: number, pageCount: number, min: number, max: number): number[] {
+    const safePages = Math.max(1, pageCount);
+    const result = Array.from({ length: safePages }, () => min);
+    let remaining = Math.max(0, totalPanels - min * safePages);
+    for (let i = 0; i < result.length && remaining > 0; i++) {
+      const add = Math.min(max - result[i], remaining);
+      result[i] += add;
+      remaining -= add;
+    }
+    return result.map(n => clampPanelCount(n, min, max));
+  }
+
+  function buildPagePanelBudgets(pageCount: number, constraints: StoryPanelConstraints): PagePanelBudget[] {
+    const isLongForm = pageCount > 2;
+    const baseMin = isLongForm ? 2 : 3;
+    const baseMax = pageCount === 1 ? 6 : isLongForm ? 6 : 5;
+    let targets: number[];
+
+    if (constraints.panelsPerPage) {
+      const target = clampPanelCount(constraints.panelsPerPage, 1, baseMax);
+      targets = Array.from({ length: pageCount }, () => target);
+    } else if (constraints.totalPanels) {
+      const explicitMin = Math.max(1, Math.min(baseMin, Math.floor(constraints.totalPanels / pageCount) || 1));
+      targets = distributePanelTargets(constraints.totalPanels, pageCount, explicitMin, baseMax);
+    } else {
+      targets = pageCount === 1 ? [5] : Array.from({ length: pageCount }, (_, i) => i === pageCount - 1 ? 4 : 5);
+    }
+
+    const beatsByPage = pageCount === 1
+      ? [['導入', '展開', '見せ場またはオチ']]
+      : [
+          ['導入', '状況説明', '転換'],
+          ['エスカレーション', '見せ場', '余韻またはオチ'],
+        ];
+
+    return Array.from({ length: pageCount }, (_, i) => {
+      const hasExplicitPanelBudget = Boolean(constraints.panelsPerPage || constraints.totalPanels);
+      const rawTarget = targets[i] ?? targets[targets.length - 1] ?? 4;
+      const target = clampPanelCount(rawTarget, hasExplicitPanelBudget ? 1 : baseMin, baseMax);
+      const min = hasExplicitPanelBudget && target < baseMin ? target : baseMin;
+      const max = hasExplicitPanelBudget ? Math.max(target, min) : baseMax;
+      return {
+        page: i + 1,
+        min,
+        max,
+        target,
+        beats: beatsByPage[i] ?? ['導入', '展開', '見せ場'],
+      };
+    });
+  }
+
+  function panelBudgetInstruction(budgets: PagePanelBudget[]): string {
+    const lines = budgets.map(b => `page ${b.page}: target ${b.target} panels / allowed ${b.min}-${b.max} panels / beats: ${b.beats.join(' → ')}`);
+    return `[panel budgeting]
+- YAMLを書く前に、必ずページごとのpanel配分計画を内部で作ること。
+- pageTargetPanels:
+${lines.map(line => `  - ${line}`).join('\n')}
+- 1ページ漫画は3〜6 panels、2ページ漫画は各ページ3〜5 panels、長編は各ページ2〜6 panelsを基準にすること。
+- 必要以上にpanelを増やさないこと。会話だけでpanelを増やさず、同じ場所・同じ行動・近い感情のsceneは1 panelへ統合すること。
+- panel数が上限を超えそうな場合は、近いsceneをmergeし、会話のみpanelを統合し、小コマを削減し、必要ならmontage化すること。
+- 大コマOK、1コマ演出OK、splash panel OK。panel密度より漫画テンポを優先すること。
+- オチや見せ場は large または splash にまとめ、細かい説明panelを増やさないこと。`;
   }
 
   let referenceImages = $state<RefImage[]>([]);
@@ -355,13 +452,16 @@
 
   // ── Multi-page YAML state ─────────────────────────────────
   type ParsedYamlPage = {
+    page?: number;
     layout: string;
+    panelCount?: number;
     story_summary?: string;
     prompt: string;
-    panels: Array<{ scene: string; dialogue: string; prompt: string; negativePrompt?: string; model?: StudioModelId }>;
+    panels: Array<{ panel?: number; size?: PanelSize; scene: string; dialogue: string; prompt: string; negativePrompt?: string; model?: StudioModelId }>;
   };
   let parsedYamlPages = $state<ParsedYamlPage[]>([]);
   let generatingYaml  = $state(false);
+  let panelCountWarning = $state('');
 
   // ── Character Vision profiles ─────────────────────────────
   let charProfiles   = $state<string[]>([]);
@@ -484,11 +584,13 @@
   let proPresetName = $state('');
 
   let layout    = $derived(pages[activePage].layout);
-  let panels    = $derived(pages[activePage].panels);
+  let panels    = $derived(currentPagePanels);
   let gridCols  = $derived(gridColumnsForPanelCount(panels.length));
   let gridRows  = $derived(gridRowsForPanelCount(panels.length));
   let gridStyle = $derived(
-    layout === 'free'
+    layout === 'free_page'
+      ? `grid-template-columns: repeat(4, minmax(0, 1fr)); grid-auto-rows: minmax(120px, 1fr);`
+      : layout === 'free'
       ? `grid-template-columns: repeat(${gridCols}, 1fr);`
       : `grid-template-columns: repeat(${gridCols}, 1fr); grid-template-rows: repeat(${gridRows}, 1fr);`
   );
@@ -497,20 +599,23 @@ async function buildPrompt(basePrompt: string, refDescription: string) {
   const res = await fetch('/api/prompt', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' }, // ← 追加
-  body: JSON.stringify({ basePrompt, refDescription })
+  body: JSON.stringify({ basePrompt, refDescription, locale: UI_LOCALE })
 });
 
   const data = await res.json();
   const charLock = [
-    'use the uploaded reference images as the highest priority',
-    'strictly preserve character identity',
-    'maintain exact hair colors and hairstyles',
-    'maintain exact facial features',
-    'maintain exact costume design',
-    'do not redesign the characters',
-    'consistent appearance across all panels',
-  ].join(', ');
-  return `${data.prompt}, ${charLock}`;
+    '参照画像を最優先にする',
+    'キャラクターの同一性を厳密に維持する',
+    '髪色と髪型を正確に維持する',
+    '顔立ちを正確に維持する',
+    '衣装デザインを正確に維持する',
+    'キャラクターを再デザインしない',
+    'すべてのコマで外見を一貫させる',
+    'locale=ja',
+    '画面内のメタデータ、キャプション、注釈、ラベルは日本語のみ',
+    'Point、Error、Concern、Scene、Prompt、Panel などの英語UIラベルを画像内に描かない',
+  ].join('、');
+  return `${data.prompt}。${charLock}`;
 }
 
 
@@ -548,18 +653,18 @@ async function buildPrompt(basePrompt: string, refDescription: string) {
     const profileCtx = charProfiles.map(p => p.trim()).filter(Boolean).join(' ');
     const charDesc   = [profileCtx, refCtx].filter(Boolean).join('. ');
     const refDesc    = charDesc
-      ? `use these characters exactly:\n${charDesc}\nsame face, same hair, same outfit, do not redesign`
-      : 'use the reference image character exactly, same face, same hair, same outfit';
+      ? `locale=ja\n以下のキャラクターを正確に使用する:\n${charDesc}\n同じ顔、同じ髪型、同じ衣装を維持し、再デザインしない。`
+      : 'locale=ja\n参照画像のキャラクターを正確に使用し、同じ顔、同じ髪型、同じ衣装を維持する。';
     const enhanced = await buildPrompt(injectRefs(p), refDesc);
     console.log('[studio] callGenerateImage final prompt preview:', enhanced.slice(0, 200));
     const res = await fetch('/api/studio/generate', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ prompt: enhanced, size: s, model: apiModel, provider, editMode, selectedModel: modelOverride ?? selectedStudioModel, refImages }),
+      body:    JSON.stringify({ prompt: enhanced, size: s, model: apiModel, provider, editMode, selectedModel: modelOverride ?? selectedStudioModel, refImages, locale: UI_LOCALE }),
     });
     if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.message ?? `HTTP ${res.status}`); }
     const data = await res.json();
-    if (!data.url) throw new Error('No image data returned.');
+    if (!data.url) throw new Error('画像データが返されませんでした。');
     return data.url as string;
   }
 
@@ -573,11 +678,11 @@ async function buildPrompt(basePrompt: string, refDescription: string) {
     const res = await fetch('/api/studio/generate-video', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ prompt: injectRefs(p), model: studioVideoModel, duration: videoDuration, aspectRatio: videoAspect }),
+      body:    JSON.stringify({ prompt: injectRefs(p), model: studioVideoModel, duration: videoDuration, aspectRatio: videoAspect, locale: UI_LOCALE }),
     });
     if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.message ?? `HTTP ${res.status}`); }
     const data = await res.json();
-    if (!data.url) throw new Error('No video data returned.');
+    if (!data.url) throw new Error('動画データが返されませんでした。');
     return data.url as string;
   }
 
@@ -620,7 +725,7 @@ async function buildPrompt(basePrompt: string, refDescription: string) {
         }
       }
     } catch (e) {
-      errorMsg = e instanceof Error ? e.message : 'Generation failed.';
+      errorMsg = e instanceof Error ? e.message : '生成に失敗しました。';
     } finally {
       generating = false;
     }
@@ -629,6 +734,7 @@ async function buildPrompt(basePrompt: string, refDescription: string) {
   async function generatePanel(i: number) {
     const p = panels[i];
     if (!p.prompt.trim() || p.generating) return;
+    pages[activePage] = { ...pages[activePage], pageYaml: serializeStudioPageToYaml(pages[activePage], activePage), resultUrl: null };
     panels[i] = { ...p, generating: true, imageUrl: null, videoUrl: null };
     try {
       const dlg = p.dialogue.trim();
@@ -651,47 +757,73 @@ async function buildPrompt(basePrompt: string, refDescription: string) {
     await generatePanel(panelIndex);
   }
 
+  function buildPanelPrompt(src: PanelSlot): string {
+    const dlg = speechBubbleMode && src.dialogue?.trim()
+      ? `, speech bubble with Japanese text "${src.dialogue.trim()}", manga speech balloon, clear legible text inside bubble`
+      : '';
+    const neg = src.negativePrompt?.trim();
+    return `${src.prompt.trim()}${dlg}${neg ? `, avoid: ${neg}` : ''}`;
+  }
+
+  async function renderAndStorePageResult(pageIdx: number): Promise<string | null> {
+    if (!pages[pageIdx]?.panels.some(panel => panel.imageUrl)) return null;
+    const canvas = await renderPageToCanvas(pages[pageIdx]);
+    const url = canvas.toDataURL('image/png');
+    pages[pageIdx] = { ...pages[pageIdx], panelCount: pages[pageIdx].panels.length, pageYaml: serializeStudioPageToYaml(pages[pageIdx], pageIdx), resultUrl: url };
+    return url;
+  }
+
+  async function generatePagePanels(pageIdx: number, totalPanels: number, doneStart: number): Promise<number> {
+    if (!pages[pageIdx]) return doneStart;
+    pages[pageIdx] = { ...pages[pageIdx], panelCount: pages[pageIdx].panels.length, pageYaml: serializeStudioPageToYaml(pages[pageIdx], pageIdx), resultUrl: null };
+    let done = doneStart;
+    const n = pages[pageIdx].panels.length;
+
+    for (let i = 0; i < n; i++) {
+      const src = pages[pageIdx].panels[i];
+      pages[pageIdx].panels[i] = {
+        ...pages[pageIdx].panels[i],
+        generating: true, imageUrl: null, videoUrl: null,
+      };
+      if (!src.prompt.trim()) {
+        pages[pageIdx].panels[i] = { ...pages[pageIdx].panels[i], generating: false };
+        done++;
+        batchProgress = { done, total: totalPanels };
+        continue;
+      }
+      try {
+        const url = await callGenerateImage(buildPanelPrompt(src), size, src.model);
+        pages[pageIdx].panels[i] = ensureDialogueRegions({ ...pages[pageIdx].panels[i], generating: false, imageUrl: url });
+      } catch (e) {
+        pages[pageIdx].panels[i] = { ...pages[pageIdx].panels[i], generating: false };
+        errorMsg = `P${pageIdx + 1}コマ${i + 1}: ${e instanceof Error ? e.message : '生成失敗'}`;
+      }
+      done++;
+      batchProgress = { done, total: totalPanels };
+    }
+
+    await renderAndStorePageResult(pageIdx);
+    return done;
+  }
+
   async function generateBatch(): Promise<void> {
     if (batchGenerating) return;
 
-    // ── Multi-page path: YAML has explicit page structure ────
+    // ── Multi-page path: each page is generated and composited independently. ────
     if (parsedYamlPages.length > 0) {
       syncPagesFromYaml();
-      const targetPages = pages.filter(pg => pg.panels.length > 0);
-      const totalPanels = targetPages.reduce((s, pg) => s + pg.panels.length, 0);
+      const pageIndexes = pages.map((pg, idx) => ({ pg, idx })).filter(({ pg }) => pg.panels.length > 0).map(({ idx }) => idx);
+      const totalPanels = pageIndexes.reduce((s, idx) => s + pages[idx].panels.length, 0);
       if (totalPanels === 0) { errorMsg = 'YAMLにプロンプトがありません。'; return; }
       batchGenerating = true;
       batchProgress   = { done: 0, total: totalPanels };
       errorMsg        = '';
 
-      for (let pageIdx = 0; pageIdx < targetPages.length; pageIdx++) {
-        const n = pages[pageIdx].panels.length;
-
-        for (let i = 0; i < n; i++) {
-          const src = pages[pageIdx].panels[i];
-          pages[pageIdx].panels[i] = {
-            ...pages[pageIdx].panels[i],
-            generating: true, imageUrl: null, videoUrl: null,
-          };
-          if (!src.prompt.trim()) {
-            pages[pageIdx].panels[i] = { ...pages[pageIdx].panels[i], generating: false };
-            batchProgress = { done: batchProgress.done + 1, total: totalPanels };
-            continue;
-          }
-          try {
-            const dlg = speechBubbleMode && src.dialogue?.trim()
-              ? `, speech bubble with Japanese text "${src.dialogue.trim()}", manga speech balloon, clear legible text inside bubble`
-              : '';
-            const neg = src.negativePrompt?.trim();
-            const url = await callGenerateImage((src.prompt.trim() + dlg) + (neg ? `, avoid: ${neg}` : ''), size, src.model);
-            pages[pageIdx].panels[i] = ensureDialogueRegions({ ...pages[pageIdx].panels[i], generating: false, imageUrl: url });
-          } catch (e) {
-            pages[pageIdx].panels[i] = { ...pages[pageIdx].panels[i], generating: false };
-            errorMsg = `P${pageIdx + 1}コマ${i + 1}: ${e instanceof Error ? e.message : '生成失敗'}`;
-          }
-          batchProgress = { done: batchProgress.done + 1, total: totalPanels };
-        }
+      let done = 0;
+      for (const pageIdx of pageIndexes) {
+        done = await generatePagePanels(pageIdx, totalPanels, done);
       }
+      previewUrl = pages[activePage]?.resultUrl ?? null;
       batchGenerating = false;
       return;
     }
@@ -738,19 +870,30 @@ async function buildPrompt(basePrompt: string, refDescription: string) {
       }
 
       try {
-        const batchDlg = speechBubbleMode && src.dialogue?.trim()
-          ? `, speech bubble with Japanese text "${src.dialogue.trim()}", manga speech balloon, clear legible text inside bubble`
-          : '';
-        const neg = pages[activePage].panels[i].negativePrompt?.trim();
-        const url = await callGenerateImage(src.prompt.trim() + batchDlg + (neg ? `, avoid: ${neg}` : ''), size, pages[activePage].panels[i].model);
+        const url = await callGenerateImage(buildPanelPrompt(pages[activePage].panels[i]), size, pages[activePage].panels[i].model);
         pages[activePage].panels[i] = ensureDialogueRegions({ ...pages[activePage].panels[i], generating: false, imageUrl: url });
       } catch (e) {
         pages[activePage].panels[i] = { ...pages[activePage].panels[i], generating: false };
-        errorMsg = `Panel ${i + 1}: ${e instanceof Error ? e.message : '生成失敗'}`;
+        errorMsg = `コマ ${i + 1}: ${e instanceof Error ? e.message : '生成失敗'}`;
       }
       batchProgress = { done: i + 1, total: n };
     }
 
+    await renderAndStorePageResult(activePage);
+    previewUrl = pages[activePage]?.resultUrl ?? null;
+    batchGenerating = false;
+  }
+
+  async function generateCurrentPageBatch(): Promise<void> {
+    if (batchGenerating) return;
+    if (parsedYamlPages.length > 0) syncPagesFromYaml();
+    const totalPanels = pages[activePage]?.panels.length ?? 0;
+    if (totalPanels === 0) { errorMsg = 'このページにpanel情報がありません。'; return; }
+    batchGenerating = true;
+    batchProgress = { done: 0, total: totalPanels };
+    errorMsg = '';
+    await generatePagePanels(activePage, totalPanels, 0);
+    previewUrl = pages[activePage]?.resultUrl ?? null;
     batchGenerating = false;
   }
 
@@ -764,6 +907,7 @@ async function buildPrompt(basePrompt: string, refDescription: string) {
     while (pages[pageIdx].panels.length <= panelIdx)
       pages[pageIdx].panels = [...pages[pageIdx].panels, emptySlot()];
 
+    pages[pageIdx] = { ...pages[pageIdx], pageYaml: serializeStudioPageToYaml(pages[pageIdx], pageIdx), resultUrl: null };
     pages[pageIdx].panels[panelIdx] = {
       ...pages[pageIdx].panels[panelIdx],
       generating: true, imageUrl: null, videoUrl: null,
@@ -787,12 +931,19 @@ async function buildPrompt(basePrompt: string, refDescription: string) {
     if (!story || generatingYaml) return;
     generatingYaml = true;
     errorMsg = '';
+    panelCountWarning = '';
     try {
       const constraints = extractStoryPanelConstraints(story);
-      const layoutRule  = `- panels 配列には必要な総コマ数をすべて順番に並べること。
-- 1ページあたり最大 ${MAX_PANELS_PER_PAGE} コマへの分割はUI側で自動処理するため、YAML側で無理にページを分けないこと。
-- layout は "auto" としてよい。UI側が各ページのコマ数から 1コマ=1×1、2コマ=2×1、3〜4コマ=2×2 を自動決定する。
-- 長編漫画や資料集では、必要なだけ panels を増やしてよい。
+      const targetPageCount: 1 | 2 = constraints.pageCount === 2 ? 2 : constraints.pageCount === 1 ? 1 : mangaPageMode;
+      const panelBudgets = buildPagePanelBudgets(targetPageCount, constraints);
+      const budgetRule = panelBudgetInstruction(panelBudgets);
+      const layoutRule  = `- pages 配列は必ず ${targetPageCount} ページ分生成すること。
+- 各 page の layout は必ず "free_page" にすること。
+- 各ページの panels 数は pageTargetPanels を基準にすること。
+- panels は1ページあたり1つ以上あれば有効。ただし必要以上にpanelを増やさず、漫画テンポに必要な量だけにすること。
+- page 1 と page 2 でコマ数が違ってもよい。
+- panel.size は small / medium / large / splash から選ぶこと。オチや見せ場には splash を使ってよい。
+${budgetRule}
 ${constraints.instruction ? `\n[STORY内の明示指定: 最優先]\n${constraints.instruction}` : ''}`;
       const constrainedStory = constraints.instruction
         ? `[最優先の明示指定]\n${constraints.instruction}\n\n[STORY]\n${story}`
@@ -810,6 +961,10 @@ ${constraints.instruction ? `\n[STORY内の明示指定: 最優先]\n${constrain
       const charSection = charLines.length > 0
         ? `\n[登場キャラクター情報]\n${charLines.join('\n')}\n上記のキャラクター情報をもとに名前・外見を把握し、scene・dialogue・promptで一貫して使用すること。\n`
         : '';
+      const referenceAnalysisText = buildReferenceAnalysisText();
+      const referenceAnalysisSection = referenceAnalysisText
+        ? `\n[Vision解析結果 / Reference Analysis]\n${referenceAnalysisText}\n`
+        : '';
 
       const res = await fetch('/api/lab-chat', {
         method:  'POST',
@@ -821,7 +976,7 @@ ${constraints.instruction ? `\n[STORY内の明示指定: 最優先]\n${constrain
 入力は単なる短いあらすじではなく、作品全体の自由記述・企画書・メモ・キャラクター表・世界観設定・ページ数指定・画風指定・参考画像指定を含む可能性があります。
 入力内の情報をすべて読み取り、曖昧な箇所は自然に補完し、作品全体が一貫した漫画になるように構成してください。
 
-YAMLのキー（pages, layout, story_summary, prompt, panels, scene, dialogue, prompt）は英語のまま維持すること。
+YAMLのキー（pages, page, layout, story_summary, prompt, panels, panel, size, scene, dialogue, speaker, text, negative_prompt, model）は英語のまま維持すること。
 各値の内容（説明文・セリフ・画像プロンプト）はすべて日本語で出力すること。英語で値を書かないこと。
 
 有効なYAMLのみを出力すること。コードブロック記号（\`\`\`）は不要。
@@ -830,7 +985,12 @@ ${charSection}
 - STORY を作品全体の企画書として扱うこと。
 - 登場キャラクター、関係性、衣装、髪型、表情傾向、性格、口調を抽出すること。
 - 世界観、時代、場所、背景セット、小道具、画風、色彩、ページ数、総コマ数、参考画像の指定を抽出すること。
-- ページ数や総コマ数の指定があれば最優先すること。AIの推測で変更しないこと。指定がない場合は物語に必要な自然な長さにすること。
+- [Vision解析結果 / Reference Analysis] がある場合は、STORYと同じ優先度で読み込み、キャラクター外見・背景資料・過去漫画ページ・吹き出し内容・維持/回避事項をscene/dialogue/promptへ反映すること。
+- ページ数や総コマ数の指定があれば最優先すること。指定がない場合は物語に必要な自然な長さにすること。
+- YAML生成前にpanel budgetingを行い、ページごとの導入・展開・見せ場・オチを先に配分してからpanelsを書くこと。
+- panel数ではなく漫画テンポで構成すること。大コマ、1コマ演出、splash panelを積極的に使ってよい。
+- 会話だけでpanelを増やさないこと。同じ場所の短い会話、近い感情、近い動作は1つのpanelに統合すること。
+- panel数がpageTargetPanelsを超えそうな場合は、近いsceneをmergeし、会話のみpanelを統合し、小コマを削減し、montage化して収めること。
 - 参考画像が指定されている場合は、prompt に「参考画像の人物/衣装/背景を維持」と明記すること。
 - 同じキャラクター・同じ背景設定・同じ画風が全ページで維持されるよう、各 panel prompt に共通設定を織り込むこと。
 
@@ -845,9 +1005,10 @@ ${charSection}
 - 良い例: 「充電ルームで〇〇と△△が1台のポッドを前に困った顔で向き合っている」
 
 [dialogueの書き方]
-- 「キャラ名: セリフ」の形式で書くこと
+- speaker と text を持つオブジェクト配列で書くこと
 - 口語体・自然な日本語で書くこと
-- JSON配列形式: ["〇〇: セリフ", "△△: セリフ"]。セリフなしは []
+- 例: dialogue: [{ speaker: "ミュリィ", text: "ここから始めよう。" }]
+- セリフなしは dialogue: []
 
 [promptの書き方]
 - 各 panel prompt は単独で画像生成しても成立するよう、必要な前後文脈を含めること
@@ -862,20 +1023,26 @@ ${charSection}
 出力形式:
 
 pages:
-  - layout: auto
+  - page: 1
+    layout: "free_page"
     story_summary: 作品全体の企画意図、起承転結、キャラクター、世界観、画風、参考画像指定の要約（日本語）
     prompt: このページ全体の場面説明。作品全体の共通設定、画風、背景、キャラクター一貫性を含める（日本語）
     panels:
-      - scene: 誰が・どこで・何をしているか・どんな表情かを具体的に（日本語）
-        dialogue: ["キャラ名: セリフ（日本語）"]
+      - panel: 1
+        size: "medium"
+        scene: 誰が・どこで・何をしているか・どんな表情かを具体的に（日本語）
+        dialogue:
+          - speaker: "キャラ名"
+            text: "セリフ（日本語）"
         prompt: 前後の文脈、構図、キャラ外見、表情、ポーズ、背景、参考画像指定、画風を具体的に記述した日本語プロンプト
 
 ルール:
 ${layoutRule}
 - STORY に書かれた企画意図を削らず、各ページ・各コマに分解すること。
-- 「4コマ」「1ページ4コマ」の指定がある場合は、必ず4件のpanelを作り、起承転結を割り当てること。
+- 固定コマ数にしないこと。ただし pageTargetPanels と allowed panels を守り、必要以上にpanelを増やさないこと。
+- panel密度よりテンポを優先し、説明や会話だけの小コマを増やさないこと。
 - scene・dialogue・prompt はすべて日本語で書くこと。英語は使わないこと。`,
-          userMessage: constrainedStory,
+          userMessage: `${constrainedStory}${referenceAnalysisSection}`,
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -883,37 +1050,19 @@ ${layoutRule}
       if (data.text) {
         let cleaned = data.text.trim();
         if (cleaned.startsWith('```')) cleaned = cleaned.replace(/^```[^\n]*\n/, '').replace(/\n?```$/, '');
-        if (constraints.totalPanels) {
-          let parsed = parseYamlPages(cleaned);
-          let panelCount = parsed.reduce((sum, page) => sum + page.panels.length, 0);
-          if (panelCount !== constraints.totalPanels) {
-            const retryRes = await fetch('/api/lab-chat', {
-              method:  'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                provider: 'openai',
-                model:    'gpt-4o-mini',
-                systemPrompt: `あなたは漫画YAML修正AIです。有効なYAMLのみを出力してください。コードブロックは禁止。
-STORY内の明示指定を最優先し、YAML全体の panels 合計を必ず ${constraints.totalPanels} 件に修正してください。
-4コマ単位では panel 1=起、panel 2=承、panel 3=転、panel 4=結として連続性を保ってください。
-既存のキャラクター、世界観、背景、画風、参考画像指定を維持し、不足panelは自然に補完し、余分なpanelは統合してください。`,
-                userMessage: `[明示指定]\n${constraints.instruction}\n\n[元STORY]\n${story}\n\n[修正対象YAML]\n${cleaned}`,
-              }),
-            });
-            if (!retryRes.ok) throw new Error(`HTTP ${retryRes.status}`);
-            const retryData = await retryRes.json();
-            if (retryData.text) {
-              const retryCleaned = retryData.text.trim().replace(/^```[^\n]*\n/, '').replace(/\n?```$/, '');
-              parsed = parseYamlPages(retryCleaned);
-              panelCount = parsed.reduce((sum, page) => sum + page.panels.length, 0);
-              if (panelCount === constraints.totalPanels) cleaned = retryCleaned;
-            }
-            if (panelCount !== constraints.totalPanels) {
-              throw new Error(`指定された ${constraints.totalPanels} コマに対して、YAMLは ${panelCount} コマでした。STORYのコマ数指定を少し明確にして再生成してください。`);
-            }
-          }
+        const parsedPages = parseYamlPages(cleaned);
+        const normalizedPages = compressParsedYamlPagesToBudget(parsedPages, panelBudgets);
+        if (normalizedPages.length === 0) throw new Error('YAMLにpanel情報がありません。');
+        const actualPanelCount = normalizedPages.reduce((sum, page) => sum + page.panels.length, 0);
+        const rawPanelCount = parsedPages.reduce((sum, page) => sum + page.panels.length, 0);
+        if (constraints.totalPanels && actualPanelCount < constraints.totalPanels) {
+          panelCountWarning = `panel数不足: 希望 ${constraints.totalPanels} コマに対して、YAMLは ${actualPanelCount} コマです。YAMLのpanel数を優先して続行します。`;
+        } else if (rawPanelCount > actualPanelCount) {
+          panelCountWarning = `panel数調整: YAML生成結果 ${rawPanelCount} コマを、漫画テンポ優先で ${actualPanelCount} コマへ統合しました。`;
         }
-        yamlText = cleaned;
+        yamlText = serializeParsedYamlPages(normalizedPages);
+        parsedYamlPages = normalizedPages;
+        queueMicrotask(syncPagesFromYaml);
       }
     } catch (e) {
       errorMsg = `YAML生成失敗: ${e instanceof Error ? e.message : String(e)}`;
@@ -941,33 +1090,42 @@ STORY内の明示指定を最優先し、YAML全体の panels 合計を必ず ${
       const dialogue = panel.dialogue.trim() || 'セリフなし';
       const scene = panel.scene.trim() || panel.prompt.trim();
       return [
-        `Panel ${i + 1}:`,
-        `scene: ${scene}`,
-        `dialogue: ${dialogue}`,
-        `expression: ${inferPanelExpression(panel)}`,
-        `visual prompt: ${panel.prompt.trim() || scene}`,
+        `コマ ${i + 1}:`,
+        `サイズ: ${normalizePanelSize(panel.size)}`,
+        `場面: ${scene}`,
+        `セリフ: ${dialogue}`,
+        `表情: ${inferPanelExpression(panel)}`,
+        `画像生成指示: ${panel.prompt.trim() || scene}`,
       ].join('\n');
     }).join('\n\n');
 
-    return `Create one complete finished manga page as a single image.
-Use a clean 2x2 four-panel manga layout with thick gutters and clear panel borders.
-Do not create separate images. Do not leave empty panels or placeholders.
-Render the entire page in one composition: top-left panel 1, top-right panel 2, bottom-left panel 3, bottom-right panel 4.
-If more than four YAML panels are provided, compress the full sequence into the same four-panel page while preserving the story order.
-Include readable Japanese manga speech bubbles for each panel dialogue.
-Keep character designs, outfits, background style, color palette, and art style consistent across all panels.
-Use expressive anime/manga facial expressions and poses that match each panel.
+    const perPage = srcPages.map((pg, i) => `ページ ${pg.page ?? i + 1}: ${pg.panels.length} コマ`).join('\n');
 
-[PAGE CONTEXT]
+    return `locale=ja。
+完成した漫画ページを1ページだけ生成する。
+自由コマ割りの漫画ページとして、太めの余白と明確なコマ枠で構成する。
+他ページを同じ画像に含めない。空コマやプレースホルダーを残さない。
+固定グリッドにしない。small、medium、large、splash のサイズ指定に応じて自然に配置する。
+このページ単体で読みやすい漫画ページにする。
+各コマのセリフは日本語の漫画吹き出しで読みやすく入れる。
+キャラクターデザイン、衣装、背景、色彩、画風を全コマで一貫させる。
+表情とポーズは各コマの内容に合わせる。
+画面内のメタデータ、キャプション、注釈、UIラベルは日本語のみ。
+Point、Error、Concern、Scene、Prompt、Panel などの英語ラベルを画像内に描かない。
+
+[ページ内容]
 ${pageContext || currentStoryInput()}
 
-[PANELS FROM YAML]
+[ページ構成]
+${perPage}
+
+[YAMLからのコマ情報]
 ${panelLines}
 
-Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions outside the manga page, no empty placeholders.`;
+最終画像: 日本語UIキャプションのみの完成漫画ページ。漫画ページ外の説明文、英語ラベル、空欄は入れない。`;
   }
 
-  // One-shot pipeline: STORY → YAML → one complete manga page image
+  // STORY → YAML → free-page panel generation
   async function generateMangaPipeline(): Promise<string | void> {
     if (generating || batchGenerating || generatingYaml) return;
     if (!currentStoryInput() && !yamlText.trim()) return;
@@ -980,34 +1138,30 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
       if (!yamlText.trim()) return; // generation failed
     }
 
-    // Step 2: Parse all panels from YAML and collapse them into one page prompt.
+    // Step 2: Parse all panels from YAML and sync free-page panel slots.
     if (parsedYamlPages.length === 0) parsedYamlPages = parseYamlPages(yamlText);
     const yamlPanels = parsedYamlPages.flatMap(pg => pg.panels);
     if (parsedYamlPages.length === 0 || yamlPanels.length === 0) {
       errorMsg = 'YAMLにpanel情報がありません。YAML生成をやり直してください。';
       return;
     }
+    syncPagesFromYaml();
 
-    const mangaPagePrompt = buildSingleMangaPagePrompt(parsedYamlPages);
-
-    // Step 3: Generate one complete manga page image only.
-    batchGenerating = true;
-    batchProgress   = { done: 0, total: 1 };
-    errorMsg        = '';
     revisedPrompt   = null;
     previewUrl      = null;
     previewVideoUrl = null;
-    try {
-      const url = await callGenerateImage(mangaPagePrompt, size);
-      previewUrl = url;
-      batchProgress = { done: 1, total: 1 };
-      await addToHistory(url, mangaPagePrompt, size);
-      return url;
-    } catch (e) {
-      errorMsg = e instanceof Error ? e.message : 'MANGA生成に失敗しました。';
-    } finally {
-      batchGenerating = false;
+
+    // Step 3: Generate each page independently so PAGE 1 / PAGE 2 results stay separate.
+    await generateBatch();
+
+    for (let pageIdx = 0; pageIdx < pages.length; pageIdx++) {
+      const url = pages[pageIdx]?.resultUrl;
+      if (!url) continue;
+      const promptPages = parsedYamlPages[pageIdx] ? [parsedYamlPages[pageIdx]] : parsedYamlPages;
+      await addToHistory(url, buildSingleMangaPagePrompt(promptPages), size);
     }
+    previewUrl = pages[activePage]?.resultUrl ?? null;
+    return previewUrl ?? undefined;
   }
 
   function clearPanels(): void {
@@ -1128,11 +1282,15 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
       id:   Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
       x, y, w, h,
       text: '',
+      font: overlayFont,
+      fontSize: overlaySize,
+      bold: overlayBold,
     };
     pages[activePage].panels[panelIdx] = {
       ...pages[activePage].panels[panelIdx],
       textRegions: [...(pages[activePage].panels[panelIdx].textRegions ?? []), region],
     };
+    selectedRegionIndex = (pages[activePage].panels[panelIdx].textRegions ?? []).length - 1;
   }
 
   // Remove a single region by id
@@ -1141,6 +1299,7 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
       ...pages[activePage].panels[panelIdx],
       textRegions: (pages[activePage].panels[panelIdx].textRegions ?? []).filter(r => r.id !== regionId),
     };
+    selectedRegionIndex = null;
   }
 
   // Update text content of a region (called on every oninput)
@@ -1162,6 +1321,15 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
     };
   }
 
+  function updateTextRegionStyle(panelIdx: number, regionId: string, patch: Partial<Pick<TextRegion, 'font' | 'fontSize' | 'bold'>>): void {
+    pages[activePage].panels[panelIdx] = {
+      ...pages[activePage].panels[panelIdx],
+      textRegions: (pages[activePage].panels[panelIdx].textRegions ?? []).map(
+        r => r.id === regionId ? { ...r, ...patch } : r
+      ),
+    };
+  }
+
   function generateBubblesFromDialogue(panelIdx: number): void {
     const slot = pages[activePage].panels[panelIdx];
     if (!slot?.dialogue.trim()) return;
@@ -1174,18 +1342,20 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
   function startRegionMove(e: MouseEvent, panelIdx: number, region: TextRegion): void {
     e.preventDefault();
     e.stopPropagation();
+    selectedRegionIndex = (pages[activePage].panels[panelIdx].textRegions ?? []).findIndex(r => r.id === region.id);
     const surface = (e.currentTarget as HTMLElement).closest('.bubble-canvas-wrap') as HTMLElement | null;
     if (!surface) return;
     const rc = surface.getBoundingClientRect();
     const startX = e.clientX;
     const startY = e.clientY;
+    const startRegion = { x: region.x, y: region.y, w: region.w, h: region.h };
 
     const onMove = (ev: MouseEvent) => {
       const dx = (ev.clientX - startX) / rc.width;
       const dy = (ev.clientY - startY) / rc.height;
       updateTextRegionBox(panelIdx, region.id, {
-        x: Math.max(0, Math.min(1 - region.w, region.x + dx)),
-        y: Math.max(0, Math.min(1 - region.h, region.y + dy)),
+        x: Math.max(0, Math.min(1 - startRegion.w, startRegion.x + dx)),
+        y: Math.max(0, Math.min(1 - startRegion.h, startRegion.y + dy)),
       });
     };
     const onUp = () => {
@@ -1205,8 +1375,6 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
     const regions = (slot.textRegions ?? []).filter(r => r.text.trim());
     if (!slot.imageUrl || !regions.length) { bubbleEditPanel = null; return; }
 
-    const fontCss = MANGA_FONTS.find(f => f.id === overlayFont)?.css ?? 'sans-serif';
-
     // Load the image
     const img = await new Promise<HTMLImageElement>((resolve, reject) => {
       const el  = new Image();
@@ -1221,9 +1389,13 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
     const ctx = canvas.getContext('2d')!;
     ctx.drawImage(img, 0, 0);
 
-    const fsize = Math.round(overlaySize * (img.naturalWidth / 512));
-
     for (const region of regions) {
+      const regionFont = region.font ?? overlayFont;
+      const fontCss = MANGA_FONTS.find(f => f.id === regionFont)?.css ?? 'sans-serif';
+      const fontSize = region.fontSize ?? overlaySize;
+      const fsize = Math.round(fontSize * (img.naturalWidth / 512));
+      const bold = region.bold ?? overlayBold;
+
       // editor-normalized (0-1) → full image native pixels
       const ix = Math.max(0, region.x * img.naturalWidth);
       const iy = Math.max(0, region.y * img.naturalHeight);
@@ -1255,7 +1427,7 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
       ctx.stroke();
 
       // User text — drawn centered in the masked area
-      ctx.font         = `${overlayBold ? 700 : 400} ${fsize}px ${fontCss}`;
+      ctx.font         = `${bold ? 700 : 400} ${fsize}px ${fontCss}`;
       ctx.fillStyle    = '#111';
       ctx.textAlign    = 'center';
       ctx.textBaseline = 'middle';
@@ -1308,12 +1480,18 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
     previewUrl               = null;
     revisedPrompt            = null;
     errorMsg                 = '';
+    panelCountWarning        = '';
     pages[activePage].prompt = '';
     pages[activePage].panels = panels.map(() => emptySlot());
+    pages[activePage].panelCount = pages[activePage].panels.length;
+    pages[activePage].pageYaml = serializeStudioPageToYaml(pages[activePage], activePage);
+    pages[activePage].resultUrl = null;
     storyText                = '';
     yamlText                 = '';
     referenceImages          = [];
     charProfiles             = [];
+    activePanel              = null;
+    selectedPanelIndex       = null;
     saveRefImages();
     try { localStorage.removeItem('studio-yaml'); } catch { /* ignore */ }
   }
@@ -1326,37 +1504,48 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
       for (let i = 0; i < def.count; i++) next.push(panels[i] ?? emptySlot());
       pages[activePage].panels = next;
       if (activePanel !== null && activePanel >= def.count) activePanel = null;
+      if (selectedPanelIndex !== null && selectedPanelIndex >= def.count) selectedPanelIndex = null;
     }
   }
 
   function addPanel(): void {
-    if (panels.length >= 8) return;
     pages[activePage].panels = [...panels, emptySlot()];
+    pages[activePage].panelCount = pages[activePage].panels.length;
+    selectedPanelIndex = pages[activePage].panels.length - 1;
   }
 
   function removePanel(i: number): void {
     if (panels.length <= 1) return;
     pages[activePage].panels = panels.filter((_, idx) => idx !== i);
+    pages[activePage].panelCount = pages[activePage].panels.length;
     if (activePanel === i) activePanel = null;
     else if (activePanel !== null && activePanel > i) activePanel--;
+    if (selectedPanelIndex === i) selectedPanelIndex = null;
+    else if (selectedPanelIndex !== null && selectedPanelIndex > i) selectedPanelIndex--;
   }
 
   function addPage(): void {
     pages = [...pages, createPage()];
     activePage  = pages.length - 1;
+    previewUrl = pages[activePage]?.resultUrl ?? null;
     activePanel = null;
+    selectedPanelIndex = null;
   }
 
   function removePage(i: number): void {
     if (pages.length <= 1) return;
     pages      = pages.filter((_, idx) => idx !== i);
     activePage  = Math.min(activePage, pages.length - 1);
+    previewUrl = pages[activePage]?.resultUrl ?? null;
     activePanel = null;
+    selectedPanelIndex = null;
   }
 
   function switchPage(i: number): void {
     activePage  = i;
+    previewUrl = pages[i]?.resultUrl ?? null;
     activePanel = null;
+    selectedPanelIndex = null;
   }
 
   function closeBubbleEditor(): void {
@@ -1368,6 +1557,17 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
     if (!pages[pageIdx]?.panels[panelIdx]) return;
     activePage  = pageIdx;
     activePanel = panelIdx;
+    selectedPanelIndex = panelIdx;
+  }
+
+  function selectPanel(i: number): void {
+    if (!panels[i]) return;
+    selectedPanelIndex = i;
+  }
+
+  async function regenerateSelectedPanel(): Promise<void> {
+    if (selectedPanelIndex === null || !panels[selectedPanelIndex]) return;
+    await generatePanel(selectedPanelIndex);
   }
 
   // ============================================================
@@ -1469,103 +1669,251 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
     return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
   }
 
-  function parseYamlPanels(yaml: string): Array<{ scene: string; dialogue: string; prompt: string }> {
-    const result: Array<{ scene: string; dialogue: string; prompt: string }> = [];
-    if (!yaml.trim()) return result;
-    const extract = (line: string, key: string) =>
-      line.replace(new RegExp(`^\\s*(?:- )?${key}:\\s*"?`), '').replace(/"?\s*$/, '').trim();
-    let inPanels = false;
-    let cur: { scene: string; dialogue: string; prompt: string } | null = null;
-    for (const line of yaml.split('\n')) {
-      if (/^  - layout:/.test(line)) { if (cur) { result.push(cur); cur = null; } inPanels = false; }
-      else if (/^    panels:/.test(line)) { inPanels = true; }
-      else if (inPanels && /^      - /.test(line)) {
-        if (cur) result.push(cur);
-        cur = { scene: '', dialogue: '', prompt: '' };
-        if (/^      - scene:/.test(line))  cur.scene  = extract(line, 'scene');
-        if (/^      - prompt:/.test(line)) cur.prompt = extract(line, 'prompt');
-      } else if (inPanels && cur) {
-        if (/^        scene:/.test(line))  cur.scene  = extract(line, 'scene');
-        if (/^        prompt:/.test(line)) cur.prompt = extract(line, 'prompt');
-        if (/^        dialogue:/.test(line)) {
-          try {
-            const arr: string[] = JSON.parse(extract(line, 'dialogue').replace(/\\"/g, '"'));
-            cur.dialogue = arr.join('\n');
-          } catch { cur.dialogue = ''; }
-        }
+  function parseYamlScalar(raw: string): string {
+    const trimmed = raw.trim();
+    if (!trimmed) return '';
+    try {
+      if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+        return JSON.parse(trimmed.replace(/^'/, '"').replace(/'$/, '"'));
       }
-    }
-    if (cur) result.push(cur);
-    return result;
+    } catch { /* fall through */ }
+    return trimmed.replace(/^["']|["']$/g, '');
   }
 
-  // Multi-page YAML parser: groups panels by page
+  function normalizePanelSize(raw: string | undefined): PanelSize {
+    if (raw === 'small' || raw === 'medium' || raw === 'large' || raw === 'splash') return raw;
+    if (raw === 'normal') return 'medium';
+    if (raw === 'wide' || raw === 'tall') return 'large';
+    return 'medium';
+  }
+
+  function parseDialogueValue(raw: string): string {
+    const value = parseYamlScalar(raw);
+    if (!value) return '';
+    try {
+      const arr = JSON.parse(value.replace(/\\"/g, '"')) as unknown[];
+      return arr.map(item => {
+        if (typeof item === 'string') return item;
+        if (item && typeof item === 'object') {
+          const rec = item as { speaker?: string; text?: string };
+          return [rec.speaker, rec.text].filter(Boolean).join(': ');
+        }
+        return '';
+      }).filter(Boolean).join('\n');
+    } catch {
+      return value;
+    }
+  }
+
+  function parseYamlPanels(yaml: string): Array<{ scene: string; dialogue: string; prompt: string }> {
+    return parseYamlPages(yaml).flatMap(page => page.panels.map(panel => ({
+      scene: panel.scene,
+      dialogue: panel.dialogue,
+      prompt: panel.prompt,
+    })));
+  }
+
+  // Multi-page YAML parser: supports free_page YAML and the older compact format.
   function parseYamlPages(yaml: string): ParsedYamlPage[] {
     const result: ParsedYamlPage[] = [];
     if (!yaml.trim()) return result;
-    const extract = (line: string, key: string) =>
-      line.replace(new RegExp(`^\\s*(?:- )?${key}:\\s*"?`), '').replace(/"?\s*$/, '').trim();
-    let curPage:  ParsedYamlPage | null = null;
-    let curPanel: { scene: string; dialogue: string; prompt: string; negativePrompt?: string; model?: StudioModelId } | null = null;
+
+    const keyVal = (line: string) => line.match(/^\s*(?:-\s*)?([A-Za-z_]+):\s*(.*)$/);
+    const flushPanel = () => {
+      if (curPage && curPanel && (curPanel.prompt.trim() || curPanel.scene.trim() || curPanel.dialogue.trim())) {
+        curPage.panels.push(curPanel);
+      }
+      curPanel = null;
+      dialogueEntry = null;
+    };
+    const flushPage = () => {
+      flushPanel();
+      if (curPage && curPage.panels.length > 0) result.push(curPage);
+      curPage = null;
+    };
+    const ensurePage = () => {
+      if (!curPage) curPage = { page: result.length + 1, layout: 'free_page', story_summary: '', prompt: '', panels: [] };
+      return curPage;
+    };
+
+    let curPage: ParsedYamlPage | null = null;
+    let curPanel: ParsedYamlPage['panels'][number] | null = null;
     let inPanels = false;
-    for (const line of yaml.split('\n')) {
-      if (/^  - layout:/.test(line)) {
-        if (curPanel) { curPage?.panels.push(curPanel); curPanel = null; }
-        if (curPage)  result.push(curPage);
-        curPage  = { layout: extract(line, 'layout'), story_summary: '', prompt: '', panels: [] };
-        inPanels = false;
-      } else if (curPage && /^    story_summary:/.test(line)) {
-        curPage.story_summary = extract(line, 'story_summary');
-      } else if (curPage && /^    prompt:/.test(line)) {
-        curPage.prompt = extract(line, 'prompt');
-      } else if (/^    panels:/.test(line)) {
-        inPanels = true;
-      } else if (inPanels && /^      - /.test(line)) {
-        if (curPanel) curPage?.panels.push(curPanel);
-        curPanel = { scene: '', dialogue: '', prompt: '' };
-        if (/^      - scene:/.test(line))  curPanel.scene  = extract(line, 'scene');
-        if (/^      - prompt:/.test(line)) curPanel.prompt = extract(line, 'prompt');
-      } else if (inPanels && curPanel) {
-        if (/^        scene:/.test(line))    curPanel.scene  = extract(line, 'scene');
-        if (/^        prompt:/.test(line))   curPanel.prompt = extract(line, 'prompt');
-        if (/^        negative_prompt:/.test(line)) curPanel.negativePrompt = extract(line, 'negative_prompt');
-        if (/^        model:/.test(line)) {
-          const model = extract(line, 'model') as StudioModelId;
-          if (STUDIO_MODELS.some(m => m.id === model)) curPanel.model = model;
-        }
-        if (/^        dialogue:/.test(line)) {
-          try {
-            const arr: string[] = JSON.parse(extract(line, 'dialogue').replace(/\\"/g, '"'));
-            curPanel.dialogue = arr.join('\n');
-          } catch { curPanel.dialogue = ''; }
+    let inDialogue = false;
+    let dialogueEntry: { speaker?: string; text?: string } | null = null;
+
+    for (const rawLine of yaml.split('\n')) {
+      const line = rawLine.replace(/\t/g, '  ');
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#') || trimmed === 'pages:') continue;
+      const indent = line.match(/^\s*/)?.[0].length ?? 0;
+      const kv = keyVal(line);
+      if (!kv) continue;
+      const key = kv[1];
+      const value = kv[2] ?? '';
+
+      if (indent <= 2 && trimmed.startsWith('- ')) {
+        if (key === 'page' || key === 'layout') {
+          flushPage();
+          curPage = { page: key === 'page' ? Number(parseYamlScalar(value)) || result.length + 1 : result.length + 1, layout: 'free_page', story_summary: '', prompt: '', panels: [] };
+          if (key === 'layout') curPage.layout = parseYamlScalar(value) || 'free_page';
+          inPanels = false;
+          inDialogue = false;
+          continue;
         }
       }
+
+      if (!inPanels && curPage && indent <= 4) {
+        if (key === 'page') curPage.page = Number(parseYamlScalar(value)) || curPage.page;
+        else if (key === 'layout') curPage.layout = parseYamlScalar(value) || 'free_page';
+        else if (key === 'story_summary') curPage.story_summary = parseYamlScalar(value);
+        else if (key === 'prompt') curPage.prompt = parseYamlScalar(value);
+        else if (key === 'panels') inPanels = true;
+        continue;
+      }
+
+      if (key === 'panels') {
+        ensurePage();
+        inPanels = true;
+        inDialogue = false;
+        continue;
+      }
+
+      if (inPanels && trimmed.startsWith('- ') && indent >= 6 && indent <= 8 && (key === 'panel' || key === 'scene' || key === 'prompt' || key === 'size')) {
+        flushPanel();
+        curPanel = { panel: undefined, size: 'medium', scene: '', dialogue: '', prompt: '' };
+        if (key === 'panel') curPanel.panel = Number(parseYamlScalar(value)) || undefined;
+        if (key === 'scene') curPanel.scene = parseYamlScalar(value);
+        if (key === 'prompt') curPanel.prompt = parseYamlScalar(value);
+        if (key === 'size') curPanel.size = normalizePanelSize(parseYamlScalar(value));
+        inDialogue = false;
+        continue;
+      }
+
+      if (!curPanel && inPanels) curPanel = { panel: undefined, size: 'medium', scene: '', dialogue: '', prompt: '' };
+      if (!curPanel) continue;
+
+      if (key === 'panel') curPanel.panel = Number(parseYamlScalar(value)) || undefined;
+      else if (key === 'size') curPanel.size = normalizePanelSize(parseYamlScalar(value));
+      else if (key === 'scene') curPanel.scene = parseYamlScalar(value);
+      else if (key === 'prompt') curPanel.prompt = parseYamlScalar(value);
+      else if (key === 'negative_prompt') curPanel.negativePrompt = parseYamlScalar(value);
+      else if (key === 'model') {
+        const model = parseYamlScalar(value) as StudioModelId;
+        if (STUDIO_MODELS.some(m => m.id === model)) curPanel.model = model;
+      } else if (key === 'dialogue') {
+        const parsed = parseDialogueValue(value);
+        curPanel.dialogue = parsed;
+        inDialogue = true;
+        dialogueEntry = null;
+      } else if (inDialogue && trimmed.startsWith('- ') && key === 'speaker') {
+        if (dialogueEntry) curPanel.dialogue = [...dialogueToBubbleTexts(curPanel.dialogue), [dialogueEntry.speaker, dialogueEntry.text].filter(Boolean).join(': ')].filter(Boolean).join('\n');
+        dialogueEntry = { speaker: parseYamlScalar(value), text: '' };
+      } else if (inDialogue && key === 'text') {
+        if (!dialogueEntry) dialogueEntry = {};
+        dialogueEntry.text = parseYamlScalar(value);
+        const lineText = [dialogueEntry.speaker, dialogueEntry.text].filter(Boolean).join(': ');
+        const existing = dialogueToBubbleTexts(curPanel.dialogue).filter(text => text !== lineText);
+        curPanel.dialogue = [...existing, lineText].filter(Boolean).join('\n');
+      }
     }
-    if (curPanel && curPage) curPage.panels.push(curPanel);
-    if (curPage) result.push(curPage);
-    return result;
+    flushPage();
+    return result.map((page, i) => ({
+      ...page,
+      page: page.page ?? i + 1,
+      layout: normalizeLayoutId(page.layout, 'free_page'),
+      panelCount: page.panels.length,
+      panels: page.panels.map((panel, panelIdx) => ({
+        ...panel,
+        panel: panel.panel ?? panelIdx + 1,
+        size: normalizePanelSize(panel.size),
+      })),
+    }));
   }
 
   function paginateYamlPanels(srcPages: ParsedYamlPage[]): ParsedYamlPage[] {
-    if (!srcPages.length) return srcPages;
+    return srcPages
+      .filter(page => page.panels.length > 0)
+      .map((page, i) => ({
+        ...page,
+        page: page.page ?? i + 1,
+        layout: 'free_page',
+        panelCount: page.panels.length,
+        panels: page.panels,
+      }));
+  }
 
-    const panelEntries = srcPages.flatMap(pg =>
-      pg.panels.map(panel => ({ panel, pagePrompt: pg.prompt }))
-    );
-    if (!panelEntries.length) return [];
+  function panelSizeRank(size: PanelSize | undefined): number {
+    return ({ small: 0, medium: 1, large: 2, splash: 3 } as Record<PanelSize, number>)[normalizePanelSize(size)];
+  }
 
-    const normalized: ParsedYamlPage[] = [];
-    for (let i = 0; i < panelEntries.length; i += MAX_PANELS_PER_PAGE) {
-      const chunk = panelEntries.slice(i, i + MAX_PANELS_PER_PAGE);
-      const prompt = Array.from(new Set(chunk.map(entry => entry.pagePrompt).filter(Boolean))).join(' / ');
-      normalized.push({
-        layout: layoutForPanelCount(chunk.length),
-        story_summary: srcPages.map(pg => pg.story_summary).filter(Boolean).join(' / '),
-        prompt,
-        panels: chunk.map(entry => entry.panel),
-      });
+  function largerPanelSize(a: PanelSize | undefined, b: PanelSize | undefined): PanelSize {
+    return panelSizeRank(a) >= panelSizeRank(b) ? normalizePanelSize(a) : normalizePanelSize(b);
+  }
+
+  function dialogueCount(dialogue: ParsedYamlPage['panels'][number]['dialogue']): number {
+    return dialogueToBubbleTexts(dialogue).length;
+  }
+
+  function pickMergePanelIndex(srcPanels: ParsedYamlPage['panels']): number {
+    if (srcPanels.length <= 1) return 0;
+    for (let i = 0; i < srcPanels.length - 1; i++) {
+      const a = srcPanels[i];
+      const b = srcPanels[i + 1];
+      const hasSmallPanel = normalizePanelSize(a.size) === 'small' || normalizePanelSize(b.size) === 'small';
+      const lightDialogue = dialogueCount(a.dialogue) + dialogueCount(b.dialogue) <= 2;
+      if (hasSmallPanel || lightDialogue) return i;
     }
-    return normalized;
+    return Math.max(0, srcPanels.length - 2);
+  }
+
+  function mergeAdjacentPanels(
+    first: ParsedYamlPage['panels'][number],
+    second: ParsedYamlPage['panels'][number],
+    panelNumber: number,
+  ): ParsedYamlPage['panels'][number] {
+    const sceneParts = [first.scene, second.scene].map(part => part?.trim()).filter(Boolean);
+    const promptParts = [first.prompt, second.prompt].map(part => part?.trim()).filter(Boolean);
+    const dialogue = [
+      ...dialogueToBubbleTexts(first.dialogue),
+      ...dialogueToBubbleTexts(second.dialogue),
+    ].filter(Boolean).join('\n');
+
+    return {
+      panel: panelNumber,
+      size: largerPanelSize(first.size, second.size),
+      scene: sceneParts.length > 0 ? `${sceneParts.join(' / ')}。近い出来事を1コマに統合したmontage演出。` : '近い出来事を1コマに統合したmontage演出。',
+      dialogue,
+      prompt: promptParts.length > 0
+        ? `近いsceneを1コマに統合した漫画演出。${promptParts.join(' / ')}`
+        : '近いsceneを1コマに統合した漫画演出。会話のみの小コマをまとめ、テンポよく読める構図。',
+      negativePrompt: first.negativePrompt || second.negativePrompt,
+      model: first.model ?? second.model,
+    };
+  }
+
+  function compressParsedYamlPagesToBudget(srcPages: ParsedYamlPage[], budgets: PagePanelBudget[]): ParsedYamlPage[] {
+    return srcPages.map((page, pageIdx) => {
+      const budget = budgets[pageIdx] ?? budgets[budgets.length - 1];
+      const maxPanels = budget?.max ?? RECOMMENDED_MAX_PANELS_PER_PAGE;
+      let nextPanels = page.panels.map(panel => ({ ...panel }));
+
+      while (nextPanels.length > maxPanels && nextPanels.length > 1) {
+        const mergeIdx = pickMergePanelIndex(nextPanels);
+        const merged = mergeAdjacentPanels(nextPanels[mergeIdx], nextPanels[mergeIdx + 1], mergeIdx + 1);
+        nextPanels = [
+          ...nextPanels.slice(0, mergeIdx),
+          merged,
+          ...nextPanels.slice(mergeIdx + 2),
+        ].map((panel, i) => ({ ...panel, panel: i + 1 }));
+      }
+
+      return {
+        ...page,
+        panelCount: nextPanels.length,
+        panels: nextPanels,
+      };
+    });
   }
 
   // Sync studio pages layout + slot count from parsedYamlPages.
@@ -1585,7 +1933,7 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
       const n = yp[pi].panels.length;
       if (!n) continue;
 
-      pages[pi].layout = layoutForPanelCount(n);
+      pages[pi].layout = normalizeLayoutId(yp[pi].layout, 'free_page');
       if (yp[pi].prompt || yp[pi].story_summary)
         pages[pi].prompt = [yp[pi].story_summary, yp[pi].prompt].filter(Boolean).join('\n');
 
@@ -1599,6 +1947,7 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
           ...pages[pi].panels[i],
           scene:    src.scene,
           prompt:   src.prompt,
+          panelSize: normalizePanelSize(src.size),
           negativePrompt: src.negativePrompt ?? pages[pi].panels[i].negativePrompt ?? '',
           model: src.model ?? pages[pi].panels[i].model,
           dialogue: src.dialogue,
@@ -1609,6 +1958,13 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
       if (pages[pi].panels.length > n) {
         pages[pi].panels = pages[pi].panels.slice(0, n);
       }
+      pages[pi].panelCount = n;
+
+      if (pi === activePage && selectedPanelIndex !== null && selectedPanelIndex >= n) {
+        selectedPanelIndex = null;
+      }
+
+      pages[pi].pageYaml = serializeParsedYamlPages([{ ...yp[pi], page: pi + 1, layout: 'free_page' }]);
     }
   }
 
@@ -1625,6 +1981,9 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
   type MangaImportData = {
     panels:     Array<{ prompt: string; scene: string }>;
     sourceText: string;
+    storyText?: string;
+    referenceImages?: Array<{ name: string; dataUrl: string; originalDataUrl?: string; note: string }>;
+    charProfiles?: string[];
   };
 
   type DiaryImportData = {
@@ -1635,12 +1994,14 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
 
   type YamlImportData = {
     pages: Array<{
+      page?:    number;
       layout:  string;
       prompt:  string;
-      panels:  Array<{ scene?: string; dialogue?: string; prompt: string }>;
+      panels:  Array<{ panel?: number; size?: PanelSize; scene?: string; dialogue?: string | Array<{ speaker?: string; text?: string }>; prompt: string }>;
     }>;
     refs?: { a?: string; b?: string };
-    referenceImages?: Array<{ name: string; dataUrl: string; note: string }>;
+    referenceImages?: Array<{ name: string; dataUrl: string; originalDataUrl?: string; note: string }>;
+    charProfiles?: string[];
     sourceText?: string;
   };
 
@@ -1673,8 +2034,8 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
   let currentDiaryMood  = $state<DiaryMood>('calm');
   let activeDiaryId     = $state<string | null>(null);
 
-  type SavedPanel  = { scene?: string; prompt: string; negativePrompt?: string; model?: StudioModelId; dialogue?: string; dialoguePos?: 'top' | 'center' | 'bottom'; textRegions?: TextRegion[] };
-  type SavedPage   = { id: string; prompt: string; layout: LayoutId; panels: SavedPanel[] };
+  type SavedPanel  = { scene?: string; prompt: string; panelSize?: PanelSize; negativePrompt?: string; model?: StudioModelId; imageUrl?: string | null; videoUrl?: string | null; dialogue?: string; dialoguePos?: 'top' | 'center' | 'bottom'; textRegions?: TextRegion[] };
+  type SavedPage   = { id: string; prompt: string; layout: LayoutId; panelCount?: number; pageYaml?: string; resultUrl?: string | null; panels: SavedPanel[] };
   type ProjectData = {
     version:    typeof PROJECT_VERSION;
     savedAt:    string;
@@ -1697,6 +2058,7 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
   // ── Browser ──────────────────────────────────────────────
   const INDEX_KEY = 'studio-index';
   const PROJ_PFX  = 'studio-proj-';
+  const STUDIO_SESSION_KEY = 'studio-session-v1';
 
   type ProjectMeta = { id: string; name: string; savedAt: string; pageCount: number };
 
@@ -1714,11 +2076,14 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
       activePage,
       size,
       storyText,
-      pages: pages.map(pg => ({
+      pages: pages.map((pg, pageIdx) => ({
         id:     pg.id,
         prompt: pg.prompt,
         layout: pg.layout,
-        panels: pg.panels.map(p => ({ scene: p.scene, prompt: p.prompt, negativePrompt: p.negativePrompt, model: p.model, dialogue: p.dialogue, dialoguePos: p.dialoguePos, textRegions: p.textRegions })),
+        panelCount: pg.panels.length,
+        pageYaml: serializeStudioPageToYaml(pg, pageIdx),
+        resultUrl: pg.resultUrl,
+        panels: pg.panels.map(p => ({ scene: p.scene, prompt: p.prompt, panelSize: p.panelSize, negativePrompt: p.negativePrompt, model: p.model, imageUrl: p.imageUrl, videoUrl: p.videoUrl, dialogue: p.dialogue, dialoguePos: p.dialoguePos, textRegions: p.textRegions })),
       })),
       refs: { images: referenceImages },
       referenceImages,
@@ -1732,10 +2097,17 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
     pages = data.pages.map(pg => ({
       id:     pg.id ?? (Date.now().toString() + Math.random().toString(36).slice(2, 6)),
       prompt: pg.prompt ?? '',
-      layout: layoutForPanelCount((pg.panels ?? []).length),
+      layout: normalizeLayoutId(pg.layout, 'free_page'),
+      panelCount: (pg.panels ?? []).length,
+      pageYaml: pg.pageYaml ?? '',
+      resultUrl: pg.resultUrl ?? null,
       panels: (pg.panels ?? []).map(p => ({
-        scene: p.scene ?? '', prompt: p.prompt ?? '', negativePrompt: p.negativePrompt ?? '', model: p.model, imageUrl: null, videoUrl: null, generating: false, dialogue: p.dialogue ?? '', dialoguePos: p.dialoguePos ?? 'top', textRegions: p.textRegions ?? [],
+        scene: p.scene ?? '', prompt: p.prompt ?? '', panelSize: normalizePanelSize(p.panelSize), negativePrompt: p.negativePrompt ?? '', model: p.model, imageUrl: p.imageUrl ?? null, videoUrl: p.videoUrl ?? null, generating: false, dialogue: p.dialogue ?? '', dialoguePos: p.dialoguePos ?? 'top', textRegions: p.textRegions ?? [],
       })),
+    }));
+    pages = pages.map((pg, pageIdx) => ({
+      ...pg,
+      pageYaml: pg.pageYaml.trim() ? pg.pageYaml : serializeStudioPageToYaml(pg, pageIdx),
     }));
     activePage    = Math.min(data.activePage ?? 0, pages.length - 1);
     storyText     = data.storyText ?? pages[0]?.prompt ?? storyText;
@@ -1825,12 +2197,21 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
         const imp = JSON.parse(yamlRaw) as YamlImportData;
         if (Array.isArray(imp.pages) && imp.pages.length > 0) {
           const importedPages = paginateYamlPanels(imp.pages.map(pg => ({
-            layout: pg.layout,
+            page: Number((pg as { page?: number }).page) || undefined,
+            layout: pg.layout ?? 'free_page',
             prompt: pg.prompt ?? '',
             panels: (pg.panels ?? []).map(p => ({
+              panel: Number((p as { panel?: number }).panel) || undefined,
+              size: normalizePanelSize((p as { size?: string }).size),
               scene: p.scene ?? '',
               prompt: p.prompt ?? '',
-              dialogue: p.dialogue ?? '',
+              dialogue: Array.isArray(p.dialogue)
+                ? (p.dialogue as unknown[]).map(item => {
+                    if (typeof item === 'string') return item;
+                    const rec = item as { speaker?: string; text?: string };
+                    return [rec.speaker, rec.text].filter(Boolean).join(': ');
+                  }).filter(Boolean).join('\n')
+                : (p.dialogue ?? ''),
             })),
           })));
           applyProjectData({
@@ -1841,21 +2222,23 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
             pages: importedPages.map(pg => ({
               id:     genId(),
               prompt: pg.prompt ?? '',
-              layout: layoutForPanelCount(pg.panels.length),
-              panels: pg.panels.map(p => ({ scene: p.scene ?? '', prompt: p.prompt ?? '', dialogue: p.dialogue ?? '' })),
+              layout: 'free_page',
+              panels: pg.panels.map(p => ({ scene: p.scene ?? '', prompt: p.prompt ?? '', panelSize: normalizePanelSize(p.size), dialogue: p.dialogue ?? '' })),
             })),
           });
           if (Array.isArray(imp.referenceImages) && imp.referenceImages.length > 0) {
             referenceImages = imp.referenceImages.map(r => normalizeRef({
-              thumb: r.dataUrl, thumbs: [r.dataUrl], originals: [r.dataUrl],
+              thumb: r.dataUrl, thumbs: [r.dataUrl], originals: [r.originalDataUrl ?? r.dataUrl],
               label: r.note || r.name, name: r.name, names: [r.name],
             }) ?? emptyRefImage());
+            charProfiles = (imp.charProfiles ?? []).slice(0, referenceImages.length);
             saveRefImages();
           } else if (imp.refs) {
             referenceImages = [
               imp.refs.a ? { ...emptyRefImage(), label: imp.refs.a, name: 'yaml-ref-a', names: ['yaml-ref-a'] } : null,
               imp.refs.b ? { ...emptyRefImage(), label: imp.refs.b, name: 'yaml-ref-b', names: ['yaml-ref-b'] } : null,
             ].filter((r): r is RefImage => !!r);
+            charProfiles = (imp.charProfiles ?? []).slice(0, referenceImages.length);
             saveRefImages();
           }
           // Also populate YAML textarea from studio-yaml
@@ -1874,7 +2257,8 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
     try {
       console.log('[studio-yaml]', localStorage.getItem('studio-yaml'));
       const rawYaml = localStorage.getItem('studio-yaml');
-      if (rawYaml) {
+      const mangaPending = localStorage.getItem(MANGA_IMPORT_KEY);
+      if (rawYaml && !mangaPending) {
         yamlText = rawYaml;
         parsedYamlPages = parseYamlPages(rawYaml);
         if (parsedYamlPages.length > 0) {
@@ -1892,31 +2276,51 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
         localStorage.removeItem(MANGA_IMPORT_KEY);
         const imp = JSON.parse(mangaRaw) as MangaImportData;
         if (Array.isArray(imp.panels) && imp.panels.length > 0) {
-          const importedPages: Page[] = [];
-          for (let i = 0; i < imp.panels.length; i += MAX_PANELS_PER_PAGE) {
-            const chunk = imp.panels.slice(i, i + MAX_PANELS_PER_PAGE);
-            importedPages.push({
-              id:     genId(),
-              prompt: imp.sourceText ? `MANGA: ${imp.sourceText}` : '',
-              layout: layoutForPanelCount(chunk.length),
-              panels: chunk.map(p => ({
-                scene: p.scene ?? '',
-                prompt: p.prompt,
-                imageUrl: null,
-                videoUrl: null,
-                generating: false,
-                dialogue: '',
-                dialoguePos: 'top',
-                textRegions: [],
-              })),
-            });
-          }
+          const importedStoryText = (imp.storyText ?? [
+            imp.sourceText ? `[source]\n${imp.sourceText}` : '',
+            ...imp.panels.map((panel, index) => [
+              `[panel${index + 1}]`,
+              panel.scene ? `scene: ${panel.scene}` : '',
+              panel.prompt ? `prompt: ${panel.prompt}` : '',
+            ].filter(Boolean).join('\n')),
+          ].filter(Boolean).join('\n\n')).trim();
+          const importedPages: Page[] = [{
+            id:     genId(),
+            prompt: importedStoryText || (imp.sourceText ? `MANGA: ${imp.sourceText}` : ''),
+            layout: 'free_page',
+            panelCount: imp.panels.length,
+            pageYaml: '',
+            resultUrl: null,
+            panels: imp.panels.map(p => ({
+              scene: p.scene ?? '',
+              prompt: p.prompt,
+              panelSize: 'medium',
+              imageUrl: null,
+              videoUrl: null,
+              generating: false,
+              dialogue: '',
+              dialoguePos: 'top',
+              textRegions: [],
+            })),
+          }];
           applyProjectData({
             version:    PROJECT_VERSION,
             savedAt:    new Date().toISOString(),
             activePage: 0,
             size:       '1024x1024',
+            storyText:  importedStoryText,
             pages: importedPages,
+            referenceImages: Array.isArray(imp.referenceImages)
+              ? imp.referenceImages.map(r => ({
+                  thumb: r.dataUrl,
+                  thumbs: [r.dataUrl],
+                  originals: [r.originalDataUrl ?? r.dataUrl],
+                  label: r.note || r.name,
+                  name: r.name,
+                  names: [r.name],
+                }))
+              : undefined,
+            charProfiles: imp.charProfiles,
           });
           mangaImportBanner = true;
           setTimeout(() => { mangaImportBanner = false; }, 4000);
@@ -2051,16 +2455,139 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
     return JSON.stringify(value ?? '');
   }
 
+  function serializeParsedYamlPages(srcPages: ParsedYamlPage[]): string {
+    const lines: string[] = ['pages:'];
+    for (const [pageIdx, pg] of srcPages.entries()) {
+      lines.push(`  - page: ${pg.page ?? pageIdx + 1}`);
+      lines.push(`    layout: "free_page"`);
+      if (pg.story_summary) lines.push(`    story_summary: ${yamlQuote(pg.story_summary)}`);
+      if (pg.prompt) lines.push(`    prompt: ${yamlQuote(pg.prompt)}`);
+      lines.push(`    panels:`);
+      for (const [panelIdx, panel] of pg.panels.entries()) {
+        lines.push(`      - panel: ${panel.panel ?? panelIdx + 1}`);
+        lines.push(`        size: ${yamlQuote(normalizePanelSize(panel.size))}`);
+        if (panel.scene) lines.push(`        scene: ${yamlQuote(panel.scene)}`);
+        const dialogue = dialogueToBubbleTexts(panel.dialogue);
+        if (dialogue.length === 0) {
+          lines.push(`        dialogue: []`);
+        } else {
+          lines.push(`        dialogue:`);
+          for (const line of dialogue) {
+            const [speaker, ...textParts] = line.includes(':') ? line.split(':') : ['', line];
+            lines.push(`          - speaker: ${yamlQuote(speaker.trim())}`);
+            lines.push(`            text: ${yamlQuote(textParts.join(':').trim())}`);
+          }
+        }
+        lines.push(`        prompt: ${yamlQuote(panel.prompt)}`);
+        if (panel.negativePrompt?.trim()) lines.push(`        negative_prompt: ${yamlQuote(panel.negativePrompt.trim())}`);
+        if (panel.model) lines.push(`        model: ${yamlQuote(panel.model)}`);
+      }
+    }
+    return lines.join('\n');
+  }
+
+  function pageToParsedYamlPage(pg: Page, pageIdx: number): ParsedYamlPage {
+    return {
+      page: pageIdx + 1,
+      layout: 'free_page',
+      panelCount: pg.panels.length,
+      prompt: pg.prompt ?? '',
+      panels: pg.panels.map((p, panelIdx) => ({
+        panel: panelIdx + 1,
+        size: normalizePanelSize(p.panelSize),
+        scene: p.scene ?? '',
+        dialogue: p.dialogue ?? '',
+        prompt: p.prompt ?? '',
+        negativePrompt: p.negativePrompt,
+        model: p.model,
+      })),
+    };
+  }
+
+  function serializeStudioPageToYaml(pg: Page, pageIdx: number): string {
+    return serializeParsedYamlPages([pageToParsedYamlPage(pg, pageIdx)]);
+  }
+
+  function refreshPageYaml(pageIdx: number): void {
+    if (!pages[pageIdx]) return;
+    pages[pageIdx] = {
+      ...pages[pageIdx],
+      pageYaml: serializeStudioPageToYaml(pages[pageIdx], pageIdx),
+    };
+  }
+
+  function normalizeYamlPageCount(srcPages: ParsedYamlPage[], targetPageCount: 1 | 2): ParsedYamlPage[] {
+    const validPages = srcPages.filter(page => page.panels.length > 0);
+    if (validPages.length === 0) return [];
+    const allPanels = validPages.flatMap(page => page.panels);
+    if (targetPageCount === 1) {
+      return [{
+        page: 1,
+        layout: 'free_page',
+        story_summary: validPages.map(page => page.story_summary).filter(Boolean).join(' / '),
+        prompt: validPages.map(page => page.prompt).filter(Boolean).join(' / '),
+        panelCount: allPanels.length,
+        panels: allPanels.map((panel, i) => ({ ...panel, panel: i + 1, size: normalizePanelSize(panel.size) })),
+      }];
+    }
+    if (validPages.length >= 2) {
+      const first = validPages[0];
+      const restPanels = validPages.slice(1).flatMap(page => page.panels);
+      return [
+        { ...first, page: 1, layout: 'free_page', panelCount: first.panels.length, panels: first.panels.map((panel, i) => ({ ...panel, panel: i + 1, size: normalizePanelSize(panel.size) })) },
+        {
+          ...validPages[1],
+          page: 2,
+          layout: 'free_page',
+          panelCount: restPanels.length,
+          panels: restPanels.map((panel, i) => ({ ...panel, panel: i + 1, size: normalizePanelSize(panel.size) })),
+        },
+      ];
+    }
+    const splitAt = Math.max(1, Math.ceil(allPanels.length / 2));
+    const pagePrompt = validPages[0].prompt ?? '';
+    const summary = validPages[0].story_summary ?? '';
+    return [0, 1].map((pageIdx) => {
+      const chunk = pageIdx === 0 ? allPanels.slice(0, splitAt) : allPanels.slice(splitAt);
+      return {
+        page: pageIdx + 1,
+        layout: 'free_page',
+        panelCount: chunk.length,
+        story_summary: summary,
+        prompt: pagePrompt,
+        panels: (chunk.length ? chunk : [emptySlot()]).map((panel, i) => ({
+          panel: i + 1,
+          size: normalizePanelSize((panel as ParsedYamlPage['panels'][number]).size ?? (panel as PanelSlot).panelSize),
+          scene: panel.scene ?? '',
+          dialogue: panel.dialogue ?? '',
+          prompt: panel.prompt ?? '',
+        })),
+      };
+    });
+  }
+
   function serializePagesToYaml(): string {
     const lines: string[] = ['pages:'];
-    for (const pg of pages) {
-      lines.push(`  - layout: auto`);
+    for (const [pageIdx, pg] of pages.entries()) {
+      lines.push(`  - page: ${pageIdx + 1}`);
+      lines.push(`    layout: "free_page"`);
       lines.push(`    prompt: ${yamlQuote(pg.prompt ?? '')}`);
       lines.push(`    panels:`);
-      for (const p of pg.panels) {
+      for (const [panelIdx, p] of pg.panels.entries()) {
         const dialogue = dialogueToBubbleTexts(p.dialogue ?? '');
-        lines.push(`      - scene: ${yamlQuote(p.scene ?? '')}`);
-        lines.push(`        dialogue: ${JSON.stringify(dialogue)}`);
+        lines.push(`      - panel: ${panelIdx + 1}`);
+        lines.push(`        size: ${yamlQuote(normalizePanelSize(p.panelSize))}`);
+        lines.push(`        scene: ${yamlQuote(p.scene ?? '')}`);
+        if (dialogue.length === 0) {
+          lines.push(`        dialogue: []`);
+        } else {
+          lines.push(`        dialogue:`);
+          for (const line of dialogue) {
+            const [speaker, ...textParts] = line.includes(':') ? line.split(':') : ['', line];
+            lines.push(`          - speaker: ${yamlQuote(speaker.trim())}`);
+            lines.push(`            text: ${yamlQuote(textParts.join(':').trim())}`);
+          }
+        }
         lines.push(`        prompt: ${yamlQuote(p.prompt ?? '')}`);
         if (p.negativePrompt?.trim()) lines.push(`        negative_prompt: ${yamlQuote(p.negativePrompt.trim())}`);
         if (p.model) lines.push(`        model: ${yamlQuote(p.model)}`);
@@ -2104,6 +2631,160 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
     referenceImages = cloneRefImages(item.referenceImages);
     charProfiles = referenceImages.map(() => '');
     saveRefImages();
+  }
+
+  type StudioPageMode = 'one-page' | 'two-page';
+  type StudioSessionData = ProjectData & {
+    yamlText?: string;
+    selectedPanel?: number | null;
+    pageMode?: StudioPageMode;
+    characterLibraryText?: string;
+    generatedImages?: Array<{ page: number; panel: number; imageUrl: string | null; videoUrl: string | null }>;
+    resultUrl?: string | null;
+  };
+
+  function normalizeStudioPageMode(raw: unknown): 1 | 2 {
+    if (raw === 2 || raw === '2' || raw === 'two-page') return 2;
+    return 1;
+  }
+
+  function buildStudioSessionData(): StudioSessionData {
+    const data = buildProjectData(false) as StudioSessionData;
+    data.yamlText = yamlText;
+    data.selectedPanel = selectedPanelIndex;
+    data.pageMode = mangaPageMode === 2 ? 'two-page' : 'one-page';
+    data.characterLibraryText = charProfiles.join('\n\n');
+    data.generatedImages = pages.flatMap((pg, pageIdx) =>
+      pg.panels.map((panel, panelIdx) => ({
+        page: pageIdx,
+        panel: panelIdx,
+        imageUrl: panel.imageUrl,
+        videoUrl: panel.videoUrl,
+      }))
+    );
+    data.resultUrl = pages[activePage]?.resultUrl ?? previewUrl;
+    return data;
+  }
+
+  function saveStudioSession(session: StudioSessionData = buildStudioSessionData()): void {
+    if (typeof localStorage === 'undefined') return;
+    try {
+      localStorage.setItem(STUDIO_SESSION_KEY, JSON.stringify(session));
+    } catch {
+      const slimPages = session.pages.map(pg => ({
+        ...pg,
+        panels: pg.panels.map(panel => ({ ...panel, videoUrl: null })),
+      }));
+      try { localStorage.setItem(STUDIO_SESSION_KEY, JSON.stringify({ ...session, pages: slimPages, generatedImages: undefined })); }
+      catch { /* quota */ }
+    }
+  }
+
+  function loadStudioSession(): void {
+    if (typeof localStorage === 'undefined') return;
+    try {
+      const raw = localStorage.getItem(STUDIO_SESSION_KEY);
+      if (!raw) return;
+      const data = JSON.parse(raw) as StudioSessionData;
+      if (!Array.isArray(data.pages) || data.pages.length === 0) return;
+      applyProjectData(data);
+      if (Array.isArray(data.generatedImages)) {
+        pages = pages.map((pg, pageIdx) => ({
+          ...pg,
+          panels: pg.panels.map((panel, panelIdx) => {
+            const generated = data.generatedImages?.find(item => item.page === pageIdx && item.panel === panelIdx);
+            return generated ? { ...panel, imageUrl: panel.imageUrl ?? generated.imageUrl, videoUrl: panel.videoUrl ?? generated.videoUrl } : panel;
+          }),
+        }));
+      }
+      yamlText = data.yamlText ?? yamlText;
+      parsedPanels = parseYamlPanels(yamlText);
+      parsedYamlPages = parseYamlPages(yamlText);
+      mangaPageMode = normalizeStudioPageMode(data.pageMode);
+      selectedPanelIndex = data.selectedPanel ?? null;
+      if (selectedPanelIndex !== null && !pages[activePage]?.panels[selectedPanelIndex]) selectedPanelIndex = null;
+      activePanel = selectedPanelIndex;
+      if ((!data.charProfiles || data.charProfiles.length === 0) && data.characterLibraryText) {
+        charProfiles = data.characterLibraryText.split(/\n{2,}/).map(v => v.trim()).filter(Boolean);
+      }
+      previewUrl = pages[activePage]?.resultUrl ?? data.resultUrl ?? null;
+      errorMsg = '';
+    } catch {
+      errorMsg = 'Studio自動保存データの復元に失敗しました。';
+    }
+  }
+
+  function resetStudioState(): void {
+    pages = [createPage()];
+    activePage = 0;
+    activePanel = null;
+    selectedPanelIndex = null;
+    selectedRegionIndex = null;
+    bubbleEditPanel = null;
+    storyText = '';
+    yamlText = '';
+    parsedPanels = [];
+    parsedYamlPages = [];
+    referenceImages = [];
+    charProfiles = [];
+    characterSetName = '';
+    generatedPanels = [];
+    mangaPageMode = 1;
+    previewUrl = null;
+    previewVideoUrl = null;
+    revisedPrompt = null;
+    errorMsg = '';
+  }
+
+  function clearStudioSession(): void {
+    if (!confirm('保存されたStudioデータをすべて削除しますか？')) return;
+    if (typeof localStorage !== 'undefined') localStorage.removeItem(STUDIO_SESSION_KEY);
+    resetStudioState();
+    saveRefImages();
+  }
+
+  function exportStudioProject(): void {
+    const data = buildStudioSessionData();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' });
+    triggerDownload(blob, `studio-project-${dateStamp()}.json`);
+  }
+
+  async function importStudioProject(file: File): Promise<void> {
+    try {
+      const data = JSON.parse(await file.text()) as StudioSessionData;
+      if (!Array.isArray(data.pages) || data.pages.length === 0) {
+        errorMsg = 'StudioプロジェクトJSONにpagesがありません。';
+        return;
+      }
+      applyProjectData(data);
+      if (Array.isArray(data.generatedImages)) {
+        pages = pages.map((pg, pageIdx) => ({
+          ...pg,
+          panels: pg.panels.map((panel, panelIdx) => {
+            const generated = data.generatedImages?.find(item => item.page === pageIdx && item.panel === panelIdx);
+            return generated ? { ...panel, imageUrl: panel.imageUrl ?? generated.imageUrl, videoUrl: panel.videoUrl ?? generated.videoUrl } : panel;
+          }),
+        }));
+      }
+      yamlText = data.yamlText ?? '';
+      parsedPanels = parseYamlPanels(yamlText);
+      parsedYamlPages = parseYamlPages(yamlText);
+      mangaPageMode = normalizeStudioPageMode(data.pageMode);
+      selectedPanelIndex = data.selectedPanel ?? null;
+      if (selectedPanelIndex !== null && !pages[activePage]?.panels[selectedPanelIndex]) selectedPanelIndex = null;
+      activePanel = selectedPanelIndex;
+      previewUrl = pages[activePage]?.resultUrl ?? data.resultUrl ?? null;
+      saveStudioSession();
+    } catch {
+      errorMsg = 'StudioプロジェクトJSONの読み込みに失敗しました。';
+    }
+  }
+
+  async function importStudioProjectFile(e: Event): Promise<void> {
+    const input = e.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = '';
+    if (file) await importStudioProject(file);
   }
 
   function deleteCharacterSet(id: string): void {
@@ -2231,6 +2912,72 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
     saveRefImages();
   }
 
+  function buildVisionAnalysisSystemPrompt(): string {
+    return `あなたは漫画制作向けの参照画像解析専門家です。出力は必ず日本語で書き、英語説明を混ぜないでください。JSONキーのみ英語で構いません。
+短すぎる要約は禁止です。最低800文字、可能なら1500文字程度を目標に、画像生成・YAML生成にそのまま使える資料テキストとして詳細に解析してください。
+
+必ず次の観点を確認してください:
+- 髪型、髪色、目の色、衣装、アクセサリー
+- 体型を強調しない範囲でのシルエット
+- 表情、ポーズ、視線、手や身体の動き
+- 背景、場所、小物、世界観
+- 漫画ページの場合はコマ構成、ページ内の流れ、吹き出し内容、キャラクター同士の関係
+- 画風、線、塗り、色彩、光、雰囲気
+- 生成時に維持すべき要素
+- 生成時に避けるべき要素
+
+可能な限り次のJSON形式だけで返してください。値はすべて日本語で詳しく書いてください。
+{
+  "summary": "...",
+  "characters": [
+    {
+      "name_or_role": "...",
+      "hair": "...",
+      "eyes": "...",
+      "outfit": "...",
+      "personality_implied": "...",
+      "important_visual_features": ["..."]
+    }
+  ],
+  "scene": "...",
+  "style": "...",
+  "composition": "...",
+  "speech_bubbles": ["..."],
+  "continuity_notes": ["..."],
+  "generation_hints": ["..."],
+  "avoid": ["..."]
+}
+
+不明な項目は空欄にせず、「画像からは判別しにくいが、維持すべき推定要素は...」のように制作上有用な形で補足してください。`;
+  }
+
+  function buildReferenceAnalysisText(): string {
+    const lines: string[] = [];
+    referenceImages.forEach((ref, i) => {
+      const name = ref.name.trim() || `REF${i + 1}`;
+      const label = ref.label.trim();
+      const profile = charProfiles[i]?.trim();
+      if (profile) {
+        lines.push(`REF${i + 1} ${name}${label ? ` / ユーザーメモ: ${label}` : ''}\n${profile}`);
+      } else if (label) {
+        lines.push(`REF${i + 1} ${name}\n未解析の参照メモ: ${label}`);
+      }
+    });
+    if (lines.length === 0) return '';
+    return `${lines.join('\n\n')}\n\n[統合メモ]\n- 各REFの役割を推定し、背景資料・キャラクター資料・過去漫画ページ・衣装資料などとして使い分けること。\n- 複数REFに矛盾がある場合は、ユーザーのSTORY指定を優先しつつ、共通している外見・画風・世界観を継続要素として扱うこと。`;
+  }
+
+  function buildVisionAnalysisUserPrompt(ref: RefImage, index: number, imageCount: number): string {
+    const name = ref.name.trim() || `REF${index + 1}`;
+    const label = ref.label.trim();
+    return `REF${index + 1}「${name}」を解析してください。${label ? `ユーザーメモ: ${label}\n` : ''}
+この参照画像は漫画制作・画像生成・STORYからYAML生成に使用します。
+画像が複数枚ある場合は個別に観察したうえで、最後に統合メモを入れてください。
+REFの役割を推定してください（例: 背景資料、キャラクター資料、衣装資料、過去漫画ページ、表情資料など）。
+添付画像数: ${imageCount}
+必ず日本語で、最低800文字以上の詳細なJSON資料として返してください。`;
+  }
+
   // ── Vision: analyze one ref → extract character profile ──
   async function analyzeCharacter(ref: RefImage, index: number): Promise<string> {
     // Prefer full-resolution originals for Vision; fall back to thumbnails
@@ -2244,13 +2991,8 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
     const fd = new FormData();
     fd.append('provider',    'openai');
     fd.append('model',       'gpt-4o');
-    fd.append('systemPrompt',
-      'あなたはキャラクターデザイン解析の専門家です。参照画像からキャラクターの外見的特徴を抽出し、' +
-      '画像生成AIのプロンプトとして使える日本語の連続した文章で出力してください。\n' +
-      '出力形式: 箇条書きなし・1段落。髪色・髪型・目の色・衣装・装飾品・全体の印象を具体的に記述すること。\n' +
-      '例: ショートシルバーボブ、輝くシアン色の目、白いサイバーパンクユニフォーム、腕にアンドロイド回路模様、太ももまでのブーツ。'
-    );
-    fd.append('userMessage', `参照画像${index + 1}の外見的特徴・資料として重要な要素を詳細に日本語で記述してください。`);
+    fd.append('systemPrompt', buildVisionAnalysisSystemPrompt());
+    fd.append('userMessage', buildVisionAnalysisUserPrompt(ref, index, thumbs.length));
 
     thumbs.forEach((t, i) => {
       const commaIdx = t.indexOf(',');
@@ -2264,7 +3006,10 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
     const res = await fetch('/api/lab-chat', { method: 'POST', body: fd });
     if (!res.ok) throw new Error(`Vision API HTTP ${res.status}`);
     const data = await res.json();
-    return (data.text ?? '').trim();
+    const text = (data.text ?? '').trim();
+    console.log(`[vision] reference_${index + 1}_0.jpg analysis length=${text.length}`);
+    console.log(`[vision] preview=${text.replace(/\s+/g, ' ').slice(0, 200)}`);
+    return text;
   }
 
   async function analyzeCharacterImages(): Promise<void> {
@@ -2274,6 +3019,11 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
     try {
       const profiles = await Promise.all(referenceImages.map((ref, i) => analyzeCharacter(ref, i)));
       charProfiles = profiles;
+      const integrated = buildReferenceAnalysisText();
+      if (integrated) {
+        console.log(`[vision] integrated reference analysis length=${integrated.length}`);
+        console.log(`[vision] integrated preview=${integrated.replace(/\s+/g, ' ').slice(0, 200)}`);
+      }
       saveRefImages();
     } catch (e) {
       errorMsg = `キャラ解析失敗: ${e instanceof Error ? e.message : String(e)}`;
@@ -2374,7 +3124,7 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
         throw new Error(data.message ?? `HTTP ${res.status}`);
       }
       const data = await res.json();
-      if (!data.url) throw new Error('No image data returned.');
+    if (!data.url) throw new Error('画像データが返されませんでした。');
       previewUrl    = data.url;
       revisedPrompt = null;
       await addToHistory(data.url, p, size);
@@ -2392,7 +3142,7 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
         saveDiaryHistory();
       }
     } catch (e) {
-      errorMsg = e instanceof Error ? e.message : 'Generation failed.';
+      errorMsg = e instanceof Error ? e.message : '生成に失敗しました。';
     } finally {
       generating = false;
     }
@@ -2786,6 +3536,127 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
     URL.revokeObjectURL(url);
   }
 
+  function dateStamp(): string {
+    return new Date().toISOString().slice(0, 10);
+  }
+
+  async function sourceToBlob(source: string): Promise<Blob> {
+    const res = await fetch(source);
+    if (!res.ok) throw new Error(`画像の取得に失敗しました: HTTP ${res.status}`);
+    return await res.blob();
+  }
+
+  async function sourceToDataUrl(source: string): Promise<string> {
+    if (source.startsWith('data:')) return source;
+    const blob = await sourceToBlob(source);
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  async function safeCreateThumbnail(source: string): Promise<string> {
+    try {
+      return await createThumbnail(source);
+    } catch {
+      return source;
+    }
+  }
+
+  async function downloadImageSource(source: string | null | undefined, filename: string): Promise<void> {
+    if (!source) return;
+    try {
+      triggerDownload(await sourceToBlob(source), filename);
+    } catch {
+      const a = document.createElement('a');
+      a.href = source;
+      a.download = filename;
+      a.click();
+    }
+  }
+
+  async function saveComicPagePng(): Promise<void> {
+    if (currentPageResultUrl) {
+      await downloadImageSource(currentPageResultUrl, `comic-page-${dateStamp()}-page-${activePage + 1}.png`);
+      return;
+    }
+    const canvas = await renderPageToCanvas(pages[activePage]);
+    const blob = await new Promise<Blob>(res => canvas.toBlob(b => res(b!), 'image/png'));
+    triggerDownload(blob, `comic-page-${dateStamp()}.png`);
+  }
+
+  async function savePanelPng(panelIdx: number): Promise<void> {
+    await downloadImageSource(panels[panelIdx]?.imageUrl, `panel-${panelIdx + 1}.png`);
+  }
+
+  async function saveAllPanelsPng(): Promise<void> {
+    const generated = panels
+      .map((panel, index) => ({ panel, index }))
+      .filter(({ panel }) => !!panel.imageUrl);
+    for (const { panel, index } of generated) {
+      await downloadImageSource(panel.imageUrl, `panel-${index + 1}.png`);
+    }
+  }
+
+  function saveCurrentYamlFile(): void {
+    const yaml = yamlText.trim() ? yamlText : serializePagesToYaml();
+    triggerDownload(new Blob([yaml + '\n'], { type: 'text/yaml;charset=utf-8' }), `comic-story-${dateStamp()}.yaml`);
+  }
+
+  function saveCurrentPageYamlFile(): void {
+    const yaml = currentPageYaml.trim();
+    if (!yaml) return;
+    triggerDownload(new Blob([yaml + '\n'], { type: 'text/yaml;charset=utf-8' }), `comic-story-${dateStamp()}-page-${activePage + 1}.yaml`);
+  }
+
+  async function addImageToRefsAndLibrary(source: string | null | undefined, label: string): Promise<void> {
+    if (!source) return;
+    try {
+      const original = await sourceToDataUrl(source);
+      const thumb = await safeCreateThumbnail(original);
+      const ref: RefImage = {
+        thumb,
+        thumbs: [thumb],
+        originals: [original],
+        label,
+        name: label,
+        names: [`${label}.png`],
+      };
+      referenceImages = [...referenceImages, ref];
+      charProfiles = [...charProfiles, ''];
+      saveRefImages();
+
+      const item: CharacterSet = {
+        id: genId(),
+        name: label,
+        referenceImages: [normalizeRef(ref) ?? ref],
+        originals: [original],
+        thumbs: [thumb],
+        createdAt: new Date().toISOString(),
+      };
+      characterLibrary = [item, ...characterLibrary];
+      saveCharacterLibrary();
+      errorMsg = '';
+    } catch (e) {
+      errorMsg = `REF追加に失敗しました: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  async function addPageToReferenceLibrary(): Promise<void> {
+    if (currentPageResultUrl) {
+      await addImageToRefsAndLibrary(currentPageResultUrl, `comic-page-${dateStamp()}-page-${activePage + 1}`);
+      return;
+    }
+    const canvas = await renderPageToCanvas(pages[activePage]);
+    await addImageToRefsAndLibrary(canvas.toDataURL('image/png'), `comic-page-${dateStamp()}`);
+  }
+
+  async function addPanelToReferenceLibrary(panelIdx: number): Promise<void> {
+    await addImageToRefsAndLibrary(panels[panelIdx]?.imageUrl, `panel-${panelIdx + 1}-${dateStamp()}`);
+  }
+
   function slugName(): string {
     return currentProjectName.replace(/\s+/g, '-').replace(/[^\w-]/g, '') || 'studio';
   }
@@ -2837,23 +3708,21 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
   let autoSaveInitialized = false;
 
   $effect(() => {
-    // Deep-track: page prompts, layouts, panel prompts, activePage
-    for (const pg of pages) {
-      pg.prompt;
-      pg.layout;
-      for (const p of pg.panels) p.prompt;
-    }
+    const session = buildStudioSessionData();
     void activePage;
+    void selectedPanelIndex;
+    void mangaPageMode;
+    void storyText;
+    void yamlText;
+    void referenceImages;
+    void charProfiles;
 
     if (!autoSaveInitialized) { autoSaveInitialized = true; return; }
 
     if (autoSaveTimer !== null) clearTimeout(autoSaveTimer);
     autoSaveStatus = 'pending';
     autoSaveTimer  = setTimeout(() => {
-      if (typeof localStorage !== 'undefined') {
-        try { localStorage.setItem(PROJECT_KEY, JSON.stringify(buildProjectData(false))); }
-        catch { /* quota */ }
-      }
+      saveStudioSession(session);
       autoSaveTimer  = null;
       autoSaveStatus = 'saved';
       setTimeout(() => { autoSaveStatus = 'idle'; }, 2000);
@@ -2868,6 +3737,9 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
   projectIndex = loadIndex();
   loadAssets();
   loadDiaryHistory();
+  onMount(() => {
+    loadStudioSession();
+  });
 </script>
 
 <svelte:head>
@@ -3321,7 +4193,7 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
             <!-- Enhanced Prompt Preview -->
             <div class="pro-preview">
               <div class="pro-preview-hd">
-                <span class="pro-preview-lbl">ENHANCED PROMPT</span>
+                <span class="pro-preview-lbl">強化プロンプト</span>
                 <span class="pro-tag-count">{buildEnhancedPrompt().split(',').filter(t => t.trim()).length} tags</span>
               </div>
               <div class="pro-preview-text">
@@ -3356,6 +4228,13 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
             <span class="panel-label">STORY</span>
             <span class="story-subtitle">作品企画書 / 自然言語 → 漫画YAML</span>
           </div>
+          <button class="session-btn" onclick={exportStudioProject} title="StudioプロジェクトJSONを書き出し">SAVE PROJECT</button>
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+          <label class="session-btn session-load-btn" title="StudioプロジェクトJSONを読み込み">
+            LOAD PROJECT
+            <input type="file" accept=".json,application/json" style="display:none" onchange={importStudioProjectFile} />
+          </label>
+          <button class="session-btn danger" onclick={clearStudioSession} title="自動保存セッションを削除">CLEAR SESSION</button>
           <button class="icon-btn" onclick={copyPrompt} title="Copy">⧉</button>
           <button
             class="yaml-gen-from-story-btn"
@@ -3364,16 +4243,30 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
             title="作品企画書からYAMLを自動生成"
           >{generatingYaml ? '…' : '≡ YAML生成'}</button>
         </div>
+        <div class="manga-page-mode-row" aria-label="漫画ページ数">
+          <button
+            class="mode-chip"
+            class:active={mangaPageMode === 1}
+            onclick={() => (mangaPageMode = 1)}
+            title="1ページ漫画として自由コマ数YAMLを生成"
+          >1ページ漫画</button>
+          <button
+            class="mode-chip"
+            class:active={mangaPageMode === 2}
+            onclick={() => (mangaPageMode = 2)}
+            title="2ページ漫画として自由コマ数YAMLを生成"
+          >2ページ漫画</button>
+        </div>
         <textarea
           class="prompt-area story-area"
           value={storyText}
           oninput={(e) => { storyText = e.currentTarget.value; }}
-          placeholder="作品全体の企画書をそのまま入力してください。長文OK。&#10;&#10;含められる情報:&#10;・作品タイトル、ジャンル、テーマ、起承転結&#10;・登場キャラクター、関係性、性格、口調、衣装、髪型&#10;・世界観、時代、舞台、背景セット、小道具&#10;・ページ数、総コマ数、1ページの密度、画風、色彩、参考画像指定&#10;・各ページで必ず描きたい出来事やセリフ&#10;&#10;例: タイトル「配信前夜のメモリ嵐」。近未来の小さな配信スタジオ。ミュールは虹色ツインテールのAIアイドル、ニュールは冷静な保守担当。全3ページ、合計10コマ。画風は明るいアニメ塗り、背景はネオンと配信機材を維持。参考画像の衣装と髪型を全ページで維持。1ページ目は配信準備、2ページ目は感情メモリ暴走、3ページ目は復旧して本番開始。"
+          placeholder="作品全体の企画書をそのまま入力してください。長文OK。&#10;&#10;含められる情報:&#10;・作品タイトル、ジャンル、テーマ、起承転結&#10;・登場キャラクター、関係性、性格、口調、衣装、髪型&#10;・世界観、時代、舞台、背景セット、小道具&#10;・ページ数、総コマ数、1ページの密度、画風、色彩、参考画像指定&#10;・各ページで必ず描きたい出来事やセリフ&#10;&#10;例: タイトル「配信前夜のメモリ嵐」。近未来の小さな配信スタジオ。ミュールは虹色ツインテールのAIアイドル、ニュールは冷静な保守担当。2ページ漫画。画風は明るいアニメ塗り、背景はネオンと配信機材を維持。参考画像の衣装と髪型を全ページで維持。1ページ目は配信準備、2ページ目は感情メモリ暴走から復旧して本番開始。"
           rows="12"
           onkeydown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) generateMangaPipeline(); }}
         ></textarea>
         <div class="prompt-foot">
-          <span class="prompt-hint">Ctrl+Enter → 企画書解析 → YAML → 1枚のMANGAページ</span>
+          <span class="prompt-hint">Ctrl+Enter → 企画書解析 → 自由コマ数YAML → 漫画ページ生成</span>
           <div class="gen-mode-badge"
             class:is-i2i={generationMode === 'image-to-image'}
             class:is-edit={generationMode === 'edit'}
@@ -3463,7 +4356,7 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
         <textarea
           class="prompt-area yaml-area"
           bind:value={yamlText}
-          placeholder="pages:&#10;  - layout: 2panel&#10;    panels:&#10;      - prompt: ..."
+          placeholder="pages:&#10;  - page: 1&#10;    layout: &quot;free_page&quot;&#10;    panels:&#10;      - panel: 1&#10;        size: &quot;large&quot;&#10;        prompt: ..."
           rows="6"
         ></textarea>
       </div>
@@ -3473,18 +4366,18 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
         {@const totalPanels = parsedYamlPages.reduce((s, pg) => s + pg.panels.length, 0)}
         <div class="yaml-panels-wrap">
           <div class="yaml-panels-hd">
-            PANELS — {totalPanels} コマ / {parsedYamlPages.length} ページ
-            <button class="yaml-clear-panels-btn" onclick={clearPanels} title="全パネルの内容をクリア">✕ Clear</button>
+            コマ一覧 — {totalPanels} コマ / {parsedYamlPages.length} ページ
+            <button class="yaml-clear-panels-btn" onclick={clearPanels} title="全パネルの内容をクリア">✕ クリア</button>
           </div>
           {#each parsedYamlPages as pg, pageIdx}
             {#if parsedYamlPages.length > 1}
-              <div class="yaml-page-label">PAGE {pageIdx + 1} — {pg.layout} ({pg.panels.length} panels)</div>
+              <div class="yaml-page-label">ページ {pageIdx + 1} — {pg.layout} ({pg.panelCount ?? pg.panels.length} コマ)</div>
             {/if}
             {#each pg.panels as panel, i}
               {@const slot = pages[pageIdx]?.panels[i]}
               <div class="yaml-panel-card">
                 <div class="yaml-panel-num">
-                  {parsedYamlPages.length > 1 ? `P${pageIdx + 1}-` : ''}Panel {i + 1}
+                  {parsedYamlPages.length > 1 ? `P${pageIdx + 1}-` : ''}コマ {i + 1}
                   {#if slot?.imageUrl}
                     <img class="yaml-panel-thumb" src={slot.imageUrl} alt="thumb" />
                   {/if}
@@ -3493,16 +4386,16 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
                   <div class="yaml-panel-scene">{slot?.scene || panel.scene}</div>
                 {/if}
                 {#if slot?.dialogue || panel.dialogue}
-                  <div class="yaml-panel-field-lbl">DIALOGUE</div>
+                  <div class="yaml-panel-field-lbl">セリフ</div>
                   <div class="yaml-panel-preview">{slot?.dialogue || panel.dialogue}</div>
                 {/if}
-                <div class="yaml-panel-field-lbl">PROMPT</div>
-                <div class="yaml-panel-preview yaml-panel-prompt-preview">{slot?.prompt || panel.prompt || 'No prompt'}</div>
+                <div class="yaml-panel-field-lbl">プロンプト</div>
+                <div class="yaml-panel-preview yaml-panel-prompt-preview">{slot?.prompt || panel.prompt || 'プロンプトなし'}</div>
                 <button
                   class="yaml-panel-edit-btn"
                   onclick={() => openPanelEditor(pageIdx, i)}
-                  title="Panel Editor Modal で編集"
-                >EDIT</button>
+                  title="コマ編集モーダルで編集"
+                >編集</button>
               </div>
             {/each}
           {/each}
@@ -3522,7 +4415,7 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
           <span class="gen-dots">
             <span></span><span></span><span></span>
           </span>
-          ▦ MANGA PAGE {batchProgress.done} / {batchProgress.total}
+          ▦ 漫画ページ {batchProgress.done} / {batchProgress.total}
         {:else if generatingYaml}
           <span class="gen-dots">
             <span></span><span></span><span></span>
@@ -3532,11 +4425,11 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
           <span class="gen-dots">
             <span></span><span></span><span></span>
           </span>
-          GENERATING... (30–60s)
+          生成中... (30–60秒)
         {:else}
           {#if yamlText.trim()}
             {@const totalPanels = parsedYamlPages.reduce((s, pg) => s + pg.panels.length, 0) || panels.length}
-            ▦ STORY → MANGA ({totalPanels} PANEL SOURCE → 1 PAGE)
+            ▦ STORY → MANGA ({parsedYamlPages.length || mangaPageMode} ページ / {totalPanels} コマ)
           {:else}
             ▦ STORY → MANGA
           {/if}
@@ -3546,31 +4439,41 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
       {#if errorMsg}
         <div class="error-bar">⚠ {errorMsg}</div>
       {/if}
+      {#if panelCountWarning}
+        <div class="error-bar">⚠ {panelCountWarning}</div>
+      {/if}
+      {#if pagePanelWarnings.length > 0}
+        <div class="error-bar">⚠ panel数不足: {pagePanelWarnings.map(item => `ページ${item.page}`).join('、')} にコマがありません。YAMLの panels を確認してください。</div>
+      {/if}
 
       <!-- Preview -->
       <div class="panel preview-panel">
         <div class="panel-hd">
-          <span class="panel-label">RESULT</span>
+          <span class="panel-label">ページ {activePage + 1} 結果</span>
           <div class="hd-actions">
+            <button class="mini-save-btn" onclick={saveComicPagePng} disabled={!currentPageResultUrl && !panels.some(p => p.imageUrl)} title="ページ全体をPNG保存">ページPNG</button>
+            <button class="mini-save-btn" onclick={saveCurrentPageYamlFile} disabled={!currentPageYaml.trim()} title="現在のページだけのYAMLを保存">ページYAML</button>
+            <button class="mini-save-btn" onclick={saveCurrentYamlFile} disabled={!yamlText.trim() && !pages.some(pg => pg.panels.some(p => p.prompt.trim() || p.dialogue.trim() || p.scene.trim()))} title="現在のYAMLを保存">YAML</button>
+            <button class="mini-save-btn" onclick={addPageToReferenceLibrary} disabled={!currentPageResultUrl && !panels.some(p => p.imageUrl)} title="ページ全体をReference Images / Character Libraryへ追加">+REF PAGE</button>
             {#if previewVideoUrl}
               <a class="icon-btn" href={previewVideoUrl} download="studio_output.mp4" title="Download">↓</a>
-              <button class="icon-btn" onclick={() => { previewVideoUrl = null; errorMsg = ''; }} title="Clear">✕</button>
-            {:else if previewUrl}
-              <a class="icon-btn" href={previewUrl} download="studio_output.png" title="Download">↓</a>
-              <button class="icon-btn" onclick={() => { previewUrl = null; errorMsg = ''; }} title="Clear">✕</button>
+              <button class="icon-btn" onclick={() => { previewVideoUrl = null; errorMsg = ''; }} title="クリア">✕</button>
+            {:else if currentPageResultUrl || previewUrl}
+              <a class="icon-btn" href={currentPageResultUrl ?? previewUrl ?? ''} download="studio_output.png" title="Download">↓</a>
+              <button class="icon-btn" onclick={() => { pages[activePage].resultUrl = null; previewUrl = null; errorMsg = ''; }} title="クリア">✕</button>
             {/if}
           </div>
         </div>
-        <div class="preview-area" class:has-image={!!(previewUrl || previewVideoUrl)}>
+        <div class="preview-area" class:has-image={!!(currentPageResultUrl || previewUrl || previewVideoUrl)}>
           {#if previewVideoUrl}
             <!-- svelte-ignore a11y_media_has_caption -->
             <video src={previewVideoUrl} class="preview-img" autoplay muted loop playsinline controls></video>
-          {:else if previewUrl}
-            <img src={previewUrl} alt="Generated" class="preview-img" />
+          {:else if currentPageResultUrl || previewUrl}
+            <img src={currentPageResultUrl ?? previewUrl ?? ''} alt="Generated" class="preview-img" />
           {:else if generating}
             <div class="preview-placeholder">
               <div class="spinner"></div>
-              <span>{studioMediaType === 'video' ? 'Generating video...' : 'Generating...'}</span>
+              <span>{studioMediaType === 'video' ? '動画を生成中...' : '生成中...'}</span>
             </div>
           {:else}
             <div class="preview-placeholder">
@@ -3579,7 +4482,7 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
                 <circle cx="14" cy="16" r="3" stroke="#00e5ff" stroke-width="1.2"/>
                 <path d="M4 26 l8-8 6 6 5-5 13 9" stroke="#00e5ff" stroke-width="1.2" stroke-linejoin="round"/>
               </svg>
-              <span>No media yet</span>
+              <span>まだ生成されていません</span>
             </div>
           {/if}
         </div>
@@ -3744,7 +4647,6 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
     <section class="col-right">
 
       <!-- Comic Panels -->
-      {#if false}
       <div class="panel comic-panel">
 
         <!-- Page Tabs -->
@@ -3755,37 +4657,52 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
               class:active={activePage === i}
               onclick={() => switchPage(i)}
             >
-              PAGE {i + 1}
+              ページ {i + 1}
+              {#if _page.resultUrl}
+                <span class="tab-result-dot" title="このページの結果あり"></span>
+              {/if}
               {#if pages.length > 1}
                 <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
                 <span class="tab-del" onclick={(e) => { e.stopPropagation(); removePage(i); }}>✕</span>
               {/if}
             </button>
           {/each}
-          <button class="page-tab-add" onclick={addPage}>+ PAGE</button>
+          <button class="page-tab-add" onclick={addPage}>+ ページ</button>
         </div>
 
         <div class="panel-hd">
-          <span class="panel-label">COMIC PANELS</span>
-          <span class="panel-sublabel">生成プレビュー</span>
+          <span class="panel-label">漫画コマ</span>
+          <span class="panel-sublabel">生成プレビュー / {pages[activePage]?.panelCount ?? panels.length} コマ</span>
           <span class="cp-layout-badge">{LAYOUTS.find(l => l.id === layout)?.label ?? layout}</span>
           <div style="flex:1"></div>
+          <button class="mini-save-btn" onclick={saveComicPagePng} disabled={!currentPageResultUrl && !panels.some(p => p.imageUrl)} title="ページ全体をPNG保存">ページPNG</button>
+          <button class="mini-save-btn" onclick={saveAllPanelsPng} disabled={!panels.some(p => p.imageUrl)} title="生成済みの全コマを順番に保存">全コマ</button>
+          <button class="mini-save-btn" onclick={saveCurrentPageYamlFile} disabled={!currentPageYaml.trim()} title="現在のページだけのYAMLを保存">ページYAML</button>
+          <button class="mini-save-btn" onclick={saveCurrentYamlFile} disabled={!yamlText.trim() && !pages.some(pg => pg.panels.some(p => p.prompt.trim() || p.dialogue.trim() || p.scene.trim()))} title="現在の漫画YAMLを保存">YAML</button>
           {#if parsedYamlPages.length > 0}
+            <button
+              class="cp-gen-all-btn"
+              onclick={generateCurrentPageBatch}
+              disabled={batchGenerating || generatingYaml}
+              title="現在のページだけを生成"
+            >
+              ページ {activePage + 1}
+            </button>
             <button
               class="cp-gen-all-btn"
               onclick={generateBatch}
               disabled={batchGenerating || generatingYaml}
-              title="YAML から全コマを一括生成"
+              title="ページ1、ページ2を別処理で順番に生成"
             >
               {#if batchGenerating}
                 <span class="gen-dots"><span></span><span></span><span></span></span>
                 {batchProgress.done}/{batchProgress.total}
               {:else}
-                ▦ GENERATE ALL
+                ▦ 全ページ生成
               {/if}
             </button>
           {/if}
-          <button class="icon-btn danger" onclick={clearAll} title="Clear all">✕ CLEAR</button>
+          <button class="icon-btn danger" onclick={clearAll} title="すべてクリア">✕ クリア</button>
         </div>
 
         <!-- Text Overlay Toolbar -->
@@ -3808,68 +4725,153 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
           <button class="bake-all-panels-btn" onclick={bakeAllPanels} title="全パネルを確定してPNGダウンロード">⬇ Bake All</button>
         </div>
 
-        <div class="comic-grid" style={gridStyle}>
-          {#each panels as slot, i}
-            <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-            <div
-              class="comic-slot"
-              class:active={activePanel === i}
-              onclick={() => { if (bubbleEditPanel === i) return; activePanel = i; }}
-            >
-              <div class="slot-num">{i + 1}</div>
-              {#if layout === 'free' && panels.length > 1}
-                <button class="slot-remove-btn" onclick={(e) => { e.stopPropagation(); removePanel(i); }}>✕</button>
-              {/if}
+        <div class="comic-workspace">
+          <div class="comic-grid" style={gridStyle}>
+            {#each panels as slot, i}
+              <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+              <div
+                class="comic-slot"
+                class:active={selectedPanelIndex === i}
+                class:panel-size-small={normalizePanelSize(slot.panelSize) === 'small'}
+                class:panel-size-medium={normalizePanelSize(slot.panelSize) === 'medium'}
+                class:panel-size-large={normalizePanelSize(slot.panelSize) === 'large'}
+                class:panel-size-splash={normalizePanelSize(slot.panelSize) === 'splash'}
+                onclick={() => { if (bubbleEditPanel === i) return; selectPanel(i); }}
+              >
+                <div class="slot-num">{i + 1}</div>
+                {#if slot.imageUrl}
+                  <button
+                    class="slot-save-btn"
+                    onclick={(e) => { e.stopPropagation(); savePanelPng(i); }}
+                    title="このコマを元画像品質で保存"
+                  >SAVE</button>
+                {/if}
+                {#if (layout === 'free' || layout === 'free_page') && panels.length > 1}
+                  <button class="slot-remove-btn" onclick={(e) => { e.stopPropagation(); removePanel(i); }}>✕</button>
+                {/if}
 
-              {#if slot.videoUrl}
-                <!-- svelte-ignore a11y_media_has_caption -->
-                <video src={slot.videoUrl} class="slot-img" autoplay muted loop playsinline></video>
-              {:else if slot.imageUrl}
-                <img src={slot.imageUrl} alt="Panel {i+1}" class="slot-img" />
-              {:else if slot.generating}
-                <div class="slot-empty generating">
-                  <div class="spinner sm"></div>
-                </div>
-              {:else}
-                <div class="slot-empty">
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" opacity="0.25">
-                    <rect x="2" y="4" width="20" height="16" rx="1" stroke="#00e5ff" stroke-width="1"/>
-                    <path d="M2 15 l5-5 4 4 3-3 8 5" stroke="#00e5ff" stroke-width="1" stroke-linejoin="round"/>
-                  </svg>
-                </div>
-              {/if}
-
-              <!-- ── Bubble region preview: editing happens in the large modal ── -->
-              {#if slot.imageUrl}
-                {#each (slot.textRegions ?? []) as region (region.id)}
-                  <!-- svelte-ignore a11y_no_static_element_interactions -->
-                  <div
-                    class="bubble-region"
-                    style="left:{region.x*100}%; top:{region.y*100}%; width:{region.w*100}%; height:{region.h*100}%;"
-                  >
-                    {#if region.text.trim()}
-                      <!-- Preview mode: styled text over white mask -->
-                      <div
-                        class="bubble-region-text"
-                        style="font-family:{MANGA_FONTS.find(f=>f.id===overlayFont)?.css}; font-size:{overlaySize}px; font-weight:{overlayBold?700:400};"
-                      >{region.text}</div>
-                    {/if}
+                {#if slot.videoUrl}
+                  <!-- svelte-ignore a11y_media_has_caption -->
+                  <video src={slot.videoUrl} class="slot-img" autoplay muted loop playsinline></video>
+                {:else if slot.imageUrl}
+                  <img src={slot.imageUrl} alt="コマ {i+1}" class="slot-img" />
+                {:else if slot.generating}
+                  <div class="slot-empty generating">
+                    <div class="spinner sm"></div>
                   </div>
-                {/each}
-              {/if}
+                {:else}
+                  <div class="slot-empty">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" opacity="0.25">
+                      <rect x="2" y="4" width="20" height="16" rx="1" stroke="#00e5ff" stroke-width="1"/>
+                      <path d="M2 15 l5-5 4 4 3-3 8 5" stroke="#00e5ff" stroke-width="1" stroke-linejoin="round"/>
+                    </svg>
+                  </div>
+                {/if}
 
-            </div>
-          {/each}
-          {#if layout === 'free' && panels.length < 8}
-            <button class="add-panel-btn" onclick={addPanel}>+ ADD PANEL</button>
-          {/if}
+                <!-- ── Bubble region preview: editing happens in the large modal ── -->
+                {#if slot.imageUrl}
+                  {#each (slot.textRegions ?? []) as region (region.id)}
+                    <!-- svelte-ignore a11y_no_static_element_interactions -->
+                    <div
+                      class="bubble-region"
+                      style="left:{region.x*100}%; top:{region.y*100}%; width:{region.w*100}%; height:{region.h*100}%;"
+                    >
+                      {#if region.text.trim()}
+                        <!-- Preview mode: styled text over white mask -->
+                        <div
+                          class="bubble-region-text"
+                          style="font-family:{MANGA_FONTS.find(f=>f.id===(region.font ?? overlayFont))?.css}; font-size:{region.fontSize ?? overlaySize}px; font-weight:{(region.bold ?? overlayBold)?700:400};"
+                        >{region.text}</div>
+                      {/if}
+                    </div>
+                  {/each}
+                {/if}
+
+              </div>
+            {/each}
+            {#if layout === 'free' || layout === 'free_page'}
+              <button class="add-panel-btn" onclick={addPanel}>+ コマ追加</button>
+            {/if}
+          </div>
+
+          <aside class="panel-edit-sidebar">
+            {#if selectedPanelIndex !== null && panels[selectedPanelIndex]}
+              {@const selectedIdx = selectedPanelIndex}
+              {@const selectedSlot = panels[selectedPanelIndex]}
+              <div class="panel-edit-sidebar-hd">
+                <span class="panel-edit-title">コマ {selectedPanelIndex + 1}</span>
+                <span class="panel-edit-page">ページ {activePage + 1}</span>
+              </div>
+
+              <div class="panel-save-actions">
+                <button
+                  class="mini-save-btn"
+                  onclick={() => savePanelPng(selectedIdx)}
+                  disabled={!selectedSlot.imageUrl}
+                  title="このコマをPNG保存"
+                >このコマを保存</button>
+                <button
+                  class="mini-save-btn"
+                  onclick={() => addPanelToReferenceLibrary(selectedIdx)}
+                  disabled={!selectedSlot.imageUrl}
+                  title="このコマをReference Images / Character Libraryへ追加"
+                >+REF</button>
+              </div>
+
+              <div class="pedit-field-lbl">サイズ</div>
+              <select
+                class="gen-select pedit-model-select"
+                value={normalizePanelSize(selectedSlot.panelSize)}
+                onchange={(e) => {
+                  const value = (e.currentTarget as HTMLSelectElement).value as PanelSize;
+                  pages[activePage].panels[selectedIdx] = { ...selectedSlot, panelSize: normalizePanelSize(value) };
+                }}
+              >
+                <option value="small">small</option>
+                <option value="medium">medium</option>
+                <option value="large">large</option>
+                <option value="splash">splash</option>
+              </select>
+
+              <div class="pedit-field-lbl">プロンプト</div>
+              <textarea
+                class="pedit-textarea panel-edit-textarea"
+                bind:value={selectedSlot.prompt}
+                placeholder="このコマのプロンプト"
+                rows="8"
+              ></textarea>
+
+              <div class="pedit-field-lbl">セリフ</div>
+              <textarea
+                class="pedit-textarea panel-edit-textarea"
+                bind:value={selectedSlot.dialogue}
+                placeholder="このコマのセリフ"
+                rows="4"
+              ></textarea>
+
+              <button
+                class="pedit-gen-btn panel-edit-regenerate"
+                onclick={regenerateSelectedPanel}
+                disabled={selectedSlot.generating || !selectedSlot.prompt.trim()}
+              >
+                {#if selectedSlot.generating}
+                  <span class="gen-dots">...</span> 生成中
+                {:else}
+                  このコマだけ再生成
+                {/if}
+              </button>
+            {:else}
+              <div class="panel-edit-empty">
+                コマをクリックすると、この場所で1コマだけ編集できます
+              </div>
+            {/if}
+          </aside>
         </div>
 
         <div class="export-hint">
-          コマをクリックすると編集モーダルが開きます
+          コマをクリックすると右側でそのコマだけ編集できます
         </div>
       </div>
-      {/if}
 
       <!-- History Gallery -->
       <div class="panel hist-gallery" class:expanded={historyExpanded}>
@@ -3889,7 +4891,7 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
           </span>
           <div class="hd-actions">
             {#if history.length > 0}
-              <button class="icon-btn danger" onclick={(e) => { e.stopPropagation(); history = []; saveHistory([]); }} title="Clear history">✕ CLEAR</button>
+              <button class="icon-btn danger" onclick={(e) => { e.stopPropagation(); history = []; saveHistory([]); }} title="履歴をクリア">✕ クリア</button>
             {/if}
             <button class="icon-btn" onclick={(e) => { e.stopPropagation(); historyOpen = !historyOpen; }}>
               {historyOpen ? (historyExpanded ? '▴' : '▾') : '▼'}
@@ -3915,7 +4917,7 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
                       <button class="ha-btn ha-regen"   onclick={(e) => regenerateFromHistory(entry, e)} title="再生成" disabled={generating}>⟳</button>
                       <div class="ha-sep"></div>
                       {#each panels as _, i}
-                        <button class="ha-btn ha-panel" onclick={(e) => sendHistoryToPanel(entry, i, e)} title="Panel {i+1} へ送る">{i + 1}</button>
+                        <button class="ha-btn ha-panel" onclick={(e) => sendHistoryToPanel(entry, i, e)} title="コマ {i+1} へ送る">{i + 1}</button>
                       {/each}
                       <div class="ha-sep"></div>
                       <button class="ha-btn ha-del" onclick={(e) => removeHistory(entry.id, e)} title="削除">✕</button>
@@ -4001,7 +5003,7 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
           <span class="pedit-title">PANEL {panelIdx + 1}</span>
           <span class="pedit-page-lbl">Page {activePage + 1}</span>
           <div style="flex:1"></div>
-          <button class="icon-btn" onclick={() => (activePanel = null)}>✕ CLOSE</button>
+          <button class="icon-btn" onclick={() => (activePanel = null)}>✕ 閉じる</button>
         </div>
 
         <!-- Image preview -->
@@ -4009,7 +5011,7 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
           <!-- svelte-ignore a11y_media_has_caption -->
           <video src={slot.videoUrl} class="pedit-img" autoplay muted loop playsinline></video>
         {:else if slot.imageUrl}
-          <img src={slot.imageUrl} alt="Panel {panelIdx + 1}" class="pedit-img" />
+          <img src={slot.imageUrl} alt="コマ {panelIdx + 1}" class="pedit-img" />
         {:else}
           <div class="pedit-img-empty">
             <span class="pedit-img-empty-hint">まだ生成されていません</span>
@@ -4017,7 +5019,7 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
         {/if}
 
         <!-- Scene -->
-        <div class="pedit-field-lbl">SCENE</div>
+        <div class="pedit-field-lbl">場面</div>
         <textarea
           class="pedit-textarea pedit-scene-input"
           bind:value={slot.scene}
@@ -4026,7 +5028,7 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
         ></textarea>
 
         <!-- Dialogue -->
-        <div class="pedit-field-lbl">DIALOGUE</div>
+        <div class="pedit-field-lbl">セリフ</div>
         <textarea
           class="pedit-textarea pedit-dialogue"
           bind:value={slot.dialogue}
@@ -4043,15 +5045,15 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
         </div>
 
         <!-- Prompt -->
-        <div class="pedit-field-lbl">PROMPT</div>
+        <div class="pedit-field-lbl">プロンプト</div>
         <textarea
           class="pedit-textarea pedit-prompt"
           bind:value={slot.prompt}
-          placeholder="Panel {panelIdx + 1} prompt..."
+          placeholder="コマ {panelIdx + 1} のプロンプト..."
           rows="5"
         ></textarea>
 
-        <div class="pedit-field-lbl">NEGATIVE PROMPT</div>
+        <div class="pedit-field-lbl">ネガティブプロンプト</div>
         <textarea
           class="pedit-textarea pedit-negative"
           bind:value={slot.negativePrompt}
@@ -4141,6 +5143,7 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
                 class="bubble-region bubble-editor-region"
                 class:selected={selectedRegionIndex === regionIdx}
                 style="left:{region.x*100}%; top:{region.y*100}%; width:{region.w*100}%; height:{region.h*100}%;"
+                onmousedown={(e) => startRegionMove(e, panelIdx, region)}
                 onclick={(e) => {
                   e.stopPropagation();
                   selectedRegionIndex = regionIdx;
@@ -4149,20 +5152,15 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
                   }
                 }}
               >
+                <div
+                  class="bubble-region-text"
+                  style="font-family:{MANGA_FONTS.find(f=>f.id===(region.font ?? overlayFont))?.css}; font-size:{region.fontSize ?? overlaySize}px; font-weight:{(region.bold ?? overlayBold)?700:400};"
+                >{region.text || 'セリフ...'}</div>
                 <button
-                  class="bubble-region-move"
-                  title="ドラッグして吹き出しを移動"
-                  onmousedown={(e) => startRegionMove(e, panelIdx, region)}
-                >↕</button>
-                <textarea
-                  class="bubble-region-input"
-                  value={region.text}
-                  oninput={(e) => updateTextRegion(panelIdx, region.id, (e.currentTarget as HTMLTextAreaElement).value)}
-                  onclick={(e) => e.stopPropagation()}
-                  style="font-family:{MANGA_FONTS.find(f=>f.id===overlayFont)?.css}; font-size:{overlaySize}px; font-weight:{overlayBold?700:400};"
-                  placeholder="セリフ..."
-                ></textarea>
-                <button class="bubble-region-del" onclick={(e) => { e.stopPropagation(); deleteTextRegion(panelIdx, region.id); }}>✕</button>
+                  class="bubble-region-del"
+                  onmousedown={(e) => e.stopPropagation()}
+                  onclick={(e) => { e.stopPropagation(); deleteTextRegion(panelIdx, region.id); }}
+                >✕</button>
               </div>
             {/each}
 
@@ -4179,10 +5177,60 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
               onmousedown={(e) => { e.stopPropagation(); startBubbleDrag(e, panelIdx); }}
             ></div>
           </div>
+
+          <aside class="bubble-side-editor">
+            {#if selectedRegionIndex !== null && slot.textRegions?.[selectedRegionIndex]}
+              {@const selectedRegion = slot.textRegions[selectedRegionIndex]}
+              <div class="bubble-side-hd">
+                <span class="bubble-side-title">吹き出し {selectedRegionIndex + 1}</span>
+                <span class="bubble-side-hint">ドラッグで移動</span>
+              </div>
+
+              <div class="pedit-field-lbl">TEXT</div>
+              <textarea
+                class="pedit-textarea bubble-side-textarea"
+                value={selectedRegion.text}
+                oninput={(e) => updateTextRegion(panelIdx, selectedRegion.id, (e.currentTarget as HTMLTextAreaElement).value)}
+                placeholder="セリフを入力"
+                rows="5"
+              ></textarea>
+
+              <div class="pedit-field-lbl">FONT</div>
+              <select
+                class="font-select bubble-side-select"
+                value={selectedRegion.font ?? overlayFont}
+                onchange={(e) => updateTextRegionStyle(panelIdx, selectedRegion.id, { font: (e.currentTarget as HTMLSelectElement).value as MangaFont })}
+              >
+                {#each MANGA_FONTS as f}
+                  <option value={f.id}>{f.label}</option>
+                {/each}
+              </select>
+
+              <div class="pedit-field-lbl">サイズ</div>
+              <input
+                type="number"
+                class="overlay-size-input bubble-side-size"
+                value={selectedRegion.fontSize ?? overlaySize}
+                min="10"
+                max="48"
+                step="2"
+                oninput={(e) => updateTextRegionStyle(panelIdx, selectedRegion.id, { fontSize: Number((e.currentTarget as HTMLInputElement).value) || overlaySize })}
+              />
+
+              <button
+                class="bold-toggle bubble-side-bold"
+                class:active={selectedRegion.bold ?? overlayBold}
+                onclick={() => updateTextRegionStyle(panelIdx, selectedRegion.id, { bold: !(selectedRegion.bold ?? overlayBold) })}
+                title="太字"
+              >B</button>
+            {:else}
+              <div class="bubble-side-empty">吹き出しをクリックすると、ここで文字と書式を編集できます</div>
+            {/if}
+          </aside>
         </div>
 
         <div class="bubble-modal-actions">
-          <button class="pedit-bubble-btn" onclick={() => addTextRegion(panelIdx, 0.18, 0.68, 0.64, 0.18)}>+ 領域追加</button>
+          <button class="pedit-bubble-btn" onclick={() => addTextRegion(panelIdx, 0.05, 0.05, 0.42, 0.12)}>+ 領域追加</button>
           <select class="font-select" bind:value={overlayFont}>
             {#each MANGA_FONTS as f}
               <option value={f.id}>{f.label}</option>
@@ -4832,9 +5880,38 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
   color: rgba(204,232,240,0.48);
 }
 
+.manga-page-mode-row {
+  display: flex;
+  gap: 8px;
+  margin: -2px 0 10px;
+  flex-wrap: wrap;
+}
+
+.mode-chip {
+  font-size: 12px;
+  font-family: inherit;
+  letter-spacing: 0.9px;
+  color: rgba(204,232,240,0.68);
+  background: rgba(255,255,255,0.025);
+  border: 1px solid rgba(0,229,255,0.16);
+  border-radius: 5px;
+  padding: 6px 11px;
+  cursor: pointer;
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+}
+
+.mode-chip:hover,
+.mode-chip.active {
+  color: var(--cy);
+  background: rgba(0,229,255,0.09);
+  border-color: rgba(0,229,255,0.38);
+}
+
 .hd-actions {
   display: flex;
   gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
 }
 
 .icon-btn {
@@ -4854,6 +5931,32 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
 
 .icon-btn:hover { color: var(--cy); border-color: var(--pborder); }
 .icon-btn.danger:hover { color: var(--red); }
+
+.mini-save-btn {
+  font-size: 10px;
+  font-family: inherit;
+  letter-spacing: 0.8px;
+  line-height: 1.2;
+  color: rgba(0,229,255,0.78);
+  background: rgba(0,229,255,0.045);
+  border: 1px solid rgba(0,229,255,0.22);
+  border-radius: 4px;
+  padding: 5px 9px;
+  cursor: pointer;
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+  white-space: nowrap;
+}
+
+.mini-save-btn:hover:not(:disabled) {
+  color: var(--cy);
+  background: rgba(0,229,255,0.11);
+  border-color: rgba(0,229,255,0.42);
+}
+
+.mini-save-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
 
 /* ============================================================
    STORY / PROMPT
@@ -4936,6 +6039,37 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
   color: var(--cy);
 }
 .yaml-gen-from-story-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.session-btn {
+  padding: 3px 8px;
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  font-family: inherit;
+  background: rgba(255,255,255,0.035);
+  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 4px;
+  color: rgba(255,255,255,0.72);
+  cursor: pointer;
+  white-space: nowrap;
+  line-height: 1.45;
+}
+.session-btn:hover {
+  background: rgba(0,229,255,0.10);
+  border-color: rgba(0,229,255,0.38);
+  color: var(--cy);
+}
+.session-btn.danger {
+  color: rgba(251,113,133,0.85);
+  border-color: rgba(244,63,94,0.25);
+}
+.session-btn.danger:hover {
+  background: rgba(244,63,94,0.12);
+  border-color: rgba(244,63,94,0.48);
+  color: #fb7185;
+}
+.session-load-btn {
+  display: inline-flex;
+  align-items: center;
+}
 .yaml-panel-card { background: rgba(167,139,250,0.06); border: 1px solid rgba(167,139,250,0.2); border-radius: 6px; padding: 10px; display: flex; flex-direction: column; gap: 4px; }
 .yaml-panel-num { font-size: 10px; letter-spacing: 1.5px; color: rgba(167,139,250,0.7); }
 .yaml-panel-scene { font-size: 11px; color: rgba(255,255,255,0.5); }
@@ -5665,9 +6799,10 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
   flex: 1;
   min-height: 0;
   overflow: auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
+  align-items: stretch;
+  gap: 14px;
   padding: 8px;
   background: rgba(0,0,0,0.22);
   border-radius: 6px;
@@ -5681,6 +6816,67 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
   max-width: 100%;
   max-height: 100%;
   margin: auto;
+  align-self: center;
+  justify-self: center;
+}
+
+.bubble-side-editor {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid rgba(0,229,255,0.18);
+  border-radius: 8px;
+  background: rgba(2,9,18,0.68);
+  overflow-y: auto;
+}
+
+.bubble-side-hd {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+
+.bubble-side-title {
+  font-size: 15px;
+  letter-spacing: 1.4px;
+  color: var(--cy);
+}
+
+.bubble-side-hint {
+  font-size: 11px;
+  color: rgba(204,232,240,0.42);
+}
+
+.bubble-side-textarea {
+  min-height: 128px;
+}
+
+.bubble-side-select,
+.bubble-side-size {
+  width: 100%;
+}
+
+.bubble-side-bold {
+  width: 42px;
+  height: 34px;
+}
+
+.bubble-side-empty {
+  min-height: 160px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: rgba(204,232,240,0.52);
+  font-size: 13px;
+  line-height: 1.7;
+  border: 1px dashed rgba(0,229,255,0.18);
+  border-radius: 8px;
+  padding: 16px;
 }
 
 .bubble-editor-img {
@@ -5818,6 +7014,8 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
   box-sizing: border-box;
   white-space: pre-line;
   overflow: hidden;
+  cursor: move;
+  user-select: none;
 }
 /* Invisible drag surface — sits below regions so they remain clickable */
 .bubble-edit-surface {
@@ -6218,6 +7416,14 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
   background: rgba(0,229,255,0.08);
 }
 
+.tab-result-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--cy);
+  box-shadow: 0 0 8px rgba(0,229,255,0.75);
+}
+
 .tab-del {
   font-size: 10px;
   color: var(--muted);
@@ -6290,6 +7496,42 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
   color: var(--red);
   background: rgba(244,63,94,0.1);
   border-color: rgba(244,63,94,0.25);
+}
+
+.slot-save-btn {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  z-index: 4;
+  font-size: 9px;
+  font-family: inherit;
+  letter-spacing: 0.8px;
+  line-height: 1;
+  color: rgba(0,229,255,0.82);
+  background: rgba(2,9,18,0.78);
+  border: 1px solid rgba(0,229,255,0.24);
+  border-radius: 4px;
+  padding: 5px 7px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s, background 0.12s, border-color 0.12s;
+}
+
+.comic-slot:hover .slot-save-btn,
+.comic-slot.active .slot-save-btn {
+  opacity: 1;
+}
+
+.slot-save-btn:hover {
+  background: rgba(0,229,255,0.14);
+  border-color: rgba(0,229,255,0.44);
+}
+
+.panel-save-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-bottom: 4px;
 }
 
 /* ============================================================
@@ -8184,8 +9426,111 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
   min-height: clamp(620px, calc(100vh - 220px), 980px);
 }
 
+.comic-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
+  gap: 16px;
+  align-items: stretch;
+  min-height: 0;
+}
+
 .comic-grid {
   height: clamp(520px, calc(100vh - 330px), 860px);
+}
+
+.comic-slot.active {
+  border-color: rgba(0,229,255,0.98);
+  box-shadow:
+    0 0 0 2px rgba(0,229,255,0.42),
+    0 0 28px rgba(0,229,255,0.34),
+    inset 0 0 22px rgba(0,229,255,0.08);
+}
+
+.comic-slot.active::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: 8px;
+  background: linear-gradient(135deg, rgba(0,229,255,0.14), transparent 36%, rgba(167,139,250,0.12));
+  mix-blend-mode: screen;
+}
+
+.comic-grid .panel-size-small {
+  min-height: 120px;
+}
+
+.comic-grid .panel-size-medium {
+  min-height: 180px;
+}
+
+.comic-grid .panel-size-large {
+  grid-column: span 2;
+  min-height: 220px;
+}
+
+.comic-grid .panel-size-splash {
+  grid-column: span 4;
+  grid-row: span 2;
+  min-height: 320px;
+}
+
+.panel-edit-sidebar {
+  min-height: 0;
+  height: clamp(520px, calc(100vh - 330px), 860px);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid rgba(0,229,255,0.22);
+  border-radius: 8px;
+  background: rgba(2,9,18,0.58);
+  overflow-y: auto;
+}
+
+.panel-edit-sidebar-hd {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+
+.panel-edit-title {
+  font-size: 18px;
+  line-height: 1.3;
+  letter-spacing: 1.4px;
+  color: var(--cy);
+}
+
+.panel-edit-page {
+  font-size: 12px;
+  color: rgba(204,232,240,0.46);
+}
+
+.panel-edit-textarea {
+  min-height: 120px;
+}
+
+.panel-edit-regenerate {
+  width: 100%;
+  margin-top: auto;
+  min-height: 42px;
+}
+
+.panel-edit-empty {
+  min-height: 180px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: rgba(204,232,240,0.52);
+  font-size: 14px;
+  line-height: 1.7;
+  border: 1px dashed rgba(0,229,255,0.18);
+  border-radius: 8px;
+  padding: 18px;
 }
 
 .export-hint {
@@ -8200,6 +9545,15 @@ Final image: one polished manga page, 2x2 four-panel grid, no UI, no captions ou
 
   .comic-panel {
     min-height: 560px;
+  }
+
+  .comic-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .panel-edit-sidebar {
+    height: auto;
+    max-height: none;
   }
 
   .hist-gallery {
