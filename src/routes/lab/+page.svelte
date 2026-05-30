@@ -425,6 +425,7 @@
     name:    string;
     dataUrl: string;  // compressed thumbnail
     note:    string;  // user-editable description injected into YAML
+    sourceUrl?: string; // original URL, used when image memory is not a data URL
   };
 
   let referenceImages = $state<ReferenceImage[]>([]);
@@ -1515,6 +1516,13 @@ function removeReferenceImage(i: number): void {
           dataUrl: resolved.imageUrl,
           note: resolved.note,
         });
+      } else if (resolved?.imageUrl && /^https?:\/\//.test(resolved.imageUrl)) {
+        refs.push({
+          name: 'Image Memory',
+          dataUrl: '',
+          sourceUrl: resolved.imageUrl,
+          note: resolved.note,
+        });
       }
     } catch (error) {
       console.warn('[Lab] image memory reference load failed:', error);
@@ -2460,8 +2468,13 @@ function removeReferenceImage(i: number): void {
         _fd.append('systemPrompt', _sysPrompt);
         _fd.append('userMessage', text);
         for (let _i = 0; _i < visionReferenceImages.length; _i++) {
-          _fd.append(`image_${_i}`, dataUrlToBlob(visionReferenceImages[_i].dataUrl), `ref_${_i}.jpg`);
-          if (visionReferenceImages[_i].note) _fd.append(`note_${_i}`, visionReferenceImages[_i].note);
+          const _ref = visionReferenceImages[_i];
+          if (_ref.dataUrl?.startsWith('data:')) {
+            _fd.append(`image_${_i}`, dataUrlToBlob(_ref.dataUrl), `ref_${_i}.jpg`);
+          } else if (_ref.sourceUrl) {
+            _fd.append(`image_url_${_i}`, _ref.sourceUrl);
+          }
+          if (_ref.note) _fd.append(`note_${_i}`, _ref.note);
         }
         res = await fetch('/api/lab-chat', { method: 'POST', body: _fd });
       }

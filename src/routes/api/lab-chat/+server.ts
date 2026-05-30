@@ -71,6 +71,16 @@ async function parseRequest(request: Request): Promise<{ body: LabChatRequest; i
       if (!b64) { console.warn(`[lab-chat] image[${i}] skipped — empty base64`); continue; }
       images.push({ dataUrl: `data:${mime};base64,${b64}`, name: file.name });
     }
+    const imageUrlEntries = Array.from(fd.entries())
+      .filter(([key]) => /^image_url_\d+$/.test(key))
+      .sort(([a], [b]) => Number(a.slice('image_url_'.length)) - Number(b.slice('image_url_'.length)));
+    for (const [key, value] of imageUrlEntries) {
+      const imageUrl = typeof value === 'string' ? value.trim() : '';
+      if (!imageUrl) continue;
+      const dataUrl = await imageSourceToDataUrl(imageUrl, key);
+      console.log(`[lab-chat] parse form ${key}: sourceLen=${imageUrl.length} dataUrlLen=${dataUrl.length}`);
+      images.push({ dataUrl, name: key });
+    }
     // Bug 4 fix: note_i をユーザーメッセージへ付加
     const notes: string[] = [];
     for (let i = 0; fd.has(`note_${i}`); i++) {
