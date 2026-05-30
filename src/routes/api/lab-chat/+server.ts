@@ -24,12 +24,25 @@ interface LabChatRequest {
   systemPrompt: string;
   userMessage: string;
   memory?: MemoryCoreRequest;
+  images?: string[];
 }
 
 // base64 data URL: "data:<mime>;base64,<data>"
 interface ImageInput {
   dataUrl: string;
   name?: string;
+}
+
+async function imageSourceToDataUrl(imageUrl: string, sourceLabel: string): Promise<string> {
+  if (imageUrl.startsWith('data:')) return imageUrl;
+  if (!/^https?:\/\//.test(imageUrl)) throw new Error(`Unsupported image source: ${sourceLabel}`);
+
+  const res = await fetch(imageUrl);
+  if (!res.ok) throw new Error(`Image fetch failed (${sourceLabel}): HTTP ${res.status}`);
+
+  const mime = res.headers.get('content-type')?.split(';')[0] || 'image/jpeg';
+  const buf = Buffer.from(await res.arrayBuffer());
+  return `data:${mime};base64,${buf.toString('base64')}`;
 }
 
 // ================================================================
@@ -71,7 +84,17 @@ async function parseRequest(request: Request): Promise<{ body: LabChatRequest; i
   }
 
   const body = await request.json() as LabChatRequest;
-  return { body, images: [], enableMemoryByDefault: false };
+  const imageUrls = Array.isArray(body.images) ? body.images.filter((img): img is string => typeof img === 'string' && img.trim().length > 0) : [];
+  const images: ImageInput[] = [];
+
+  for (let i = 0; i < imageUrls.length; i++) {
+    const imageUrl = imageUrls[i].trim();
+    const dataUrl = await imageSourceToDataUrl(imageUrl, `json_image_${i}`);
+    console.log(`[lab-chat] parse json image[${i}]: sourceLen=${imageUrl.length} dataUrlLen=${dataUrl.length}`);
+    images.push({ dataUrl, name: `json_image_${i}` });
+  }
+
+  return { body, images, enableMemoryByDefault: images.length > 0 };
 }
 
 // ================================================================

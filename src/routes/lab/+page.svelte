@@ -1412,33 +1412,50 @@ function removeReferenceImage(i: number): void {
 
   async function analyzeReferenceImage() {
     visionScanning = true;
-  if (referenceImages.length === 0) {
-    console.warn('[Vision] reference image not found');
-    return;
-  }
+    try {
+      const prompt = inputText.trim() || 'この画像を詳しく説明してください。キャラクターの髪型、服装、色、表情、世界観を分析してください。';
+      const resolved = await resolveImageReference(prompt);
+      const fallbackImage = referenceImages[0] ?? null;
+      const imageUrl = resolved?.imageUrl ?? fallbackImage?.dataUrl;
+      const imageName = resolved ? 'Image Memory' : fallbackImage?.name;
 
-  const image = referenceImages[0];
+      if (!imageUrl) {
+        console.warn('[Vision] reference image not found');
+        return;
+      }
 
-  console.log('[Vision] analyzing image:', image.name);
+      const provider = $sessionStore.provider === 'openai' || $sessionStore.provider === 'gemini' || $sessionStore.provider === 'claude'
+        ? $sessionStore.provider
+        : 'gemini';
+      const model = provider === $sessionStore.provider ? ($sessionStore.model || undefined) : undefined;
 
-  const response = await fetch('/api/chat', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      message:
-        'この画像を詳しく説明してください。キャラクターの髪型、服装、色、表情、世界観を分析してください。',
-      images: [image.dataUrl]
-    })
-  });
+      console.log('[Vision] analyzing image:', imageName);
 
-  const data = await response.json();
-  const text = (data.text ?? '') as string;
-  if (text) visionContext = text;
-  console.log('[Vision result]', data);
+      const response = await fetch('/api/lab-chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          provider,
+          model,
+          systemPrompt: 'あなたは画像を正確に観察して答えるVisionアシスタントです。画像内に見える事実を優先し、不明な点は推測しすぎず答えてください。',
+          userMessage: prompt,
+          images: [imageUrl]
+        })
+      });
 
-  visionScanning = false;
+      if (!response.ok) throw new Error(`Vision API HTTP ${response.status}`);
+
+      const data = await response.json();
+      const text = (data.text ?? '') as string;
+      if (text) visionContext = text;
+      console.log('[Vision result]', data);
+    } catch (error) {
+      console.warn('[Vision] analysis failed:', error);
+    } finally {
+      visionScanning = false;
+    }
 }
 
 
@@ -1454,20 +1471,49 @@ function removeReferenceImage(i: number): void {
   }
 
   function wantsImageMemoryReference(text: string): boolean {
-    return /さっきの画像|最後に生成した画像|前に描いた|前描いた|前の画像|生成した画像/.test(text);
+    const normalized = text.replace(/\s+/g, '');
+    const previousImagePhrases = [
+      /前(?:の|に)?(?:描いた|描いてくれた|生成した)?画像/,
+      /さっき(?:の|に)?(?:描いた|生成した)?画像/,
+      /この前(?:の|に)?(?:描いた|生成した)?画像/,
+      /最後(?:の|に生成した)?画像/,
+      /直前(?:の|に生成した)?画像/,
+      /先ほど(?:の|に生成した)?画像/,
+      /生成した画像/,
+      /描いた画像/,
+      /前描いた/,
+    ];
+    if (previousImagePhrases.some((pattern) => pattern.test(normalized))) return true;
+    if (/画像(?:の)?(?:色|詳細|説明|見た目|外見|特徴|解析|分析)/.test(normalized)) return true;
+
+    const refersToImage = /画像|イラスト|絵|生成結果|猫耳|耳|髪|服|目|背景|色/.test(normalized);
+    const asksAboutImage = /色|詳細|説明|見た目|外見|特徴|何色|どんな|解析|分析|教えて|覚えてる/.test(normalized);
+    const temporalReference = /前|さっき|この前|最後|直前|先ほど|生成した|描いた/.test(normalized);
+    return refersToImage && asksAboutImage && temporalReference;
+  }
+
+  async function resolveImageReference(text: string): Promise<{ imageUrl: string; note: string } | null> {
+    if (!wantsImageMemoryReference(text)) return null;
+
+    const latest = await getLatestImageMemory();
+    if (!latest?.imageUrl) return null;
+
+    return {
+      imageUrl: latest.imageUrl,
+      note: latest.imagePrompt,
+    };
   }
 
   async function buildVisionReferenceImages(text: string): Promise<ReferenceImage[]> {
     const refs: ReferenceImage[] = [...referenceImages];
-    if (!wantsImageMemoryReference(text)) return refs;
 
     try {
-      const latest = await getLatestImageMemory();
-      if (latest?.imageUrl?.startsWith('data:')) {
+      const resolved = await resolveImageReference(text);
+      if (resolved?.imageUrl.startsWith('data:')) {
         refs.push({
           name: 'Image Memory',
-          dataUrl: latest.imageUrl,
-          note: latest.imagePrompt,
+          dataUrl: resolved.imageUrl,
+          note: resolved.note,
         });
       }
     } catch (error) {
@@ -4078,7 +4124,7 @@ ${recent}
         <button
           class="vision-btn"
           onclick={analyzeReferenceImage}
-          disabled={referenceImages.length === 0}
+          disabled={visionScanning || (referenceImages.length === 0 && !wantsImageMemoryReference(inputText))}
         >
           {#if visionScanning}
             SCANNING...
