@@ -2350,8 +2350,28 @@ function removeReferenceImage(i: number): void {
   // ============================================================
   // Chat
   // ============================================================
+  const IMAGE_GENERATION_KEYWORDS = [
+    '描いて',
+    'イラスト',
+    '画像生成',
+    '立ち絵',
+    'キャラデザ',
+    '設定画',
+    '資料集',
+    'キャラクターシート',
+    'デザインシート',
+    '4コマ',
+    '漫画',
+    'マンガ',
+    'ポスター',
+    '表紙',
+    '一枚絵',
+  ];
+
   function isImageGenerationRequest(text: string): boolean {
-    return text.includes('\u63cf\u3044\u3066');
+    const normalized = text.replace(/\s+/g, '');
+    if (/ya?ml/i.test(normalized)) return false;
+    return IMAGE_GENERATION_KEYWORDS.some((keyword) => normalized.includes(keyword));
   }
 
   async function generateImageFromLabChat(prompt: string): Promise<void> {
