@@ -81,3 +81,19 @@ export async function saveImageMemory(input: SaveImageMemoryInput): Promise<Imag
 
   return entry;
 }
+
+export async function getLatestImageMemory(): Promise<ImageMemoryEntry | null> {
+  const db = await openDb();
+
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(IMAGE_STORE, 'readonly');
+    const index = transaction.objectStore(IMAGE_STORE).index('createdAt');
+    const request = index.openCursor(null, 'prev');
+
+    request.onsuccess = () => {
+      const cursor = request.result;
+      resolve(cursor ? (cursor.value as ImageMemoryEntry) : null);
+    };
+    request.onerror = () => reject(request.error);
+  });
+}

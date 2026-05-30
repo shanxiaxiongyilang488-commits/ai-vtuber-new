@@ -11,7 +11,8 @@
   import { addSpecialMemory, getSpecialMemoryHint } from '$lib/ai/memory/specialMemory';
   import { recordTalk, getAnniversaryHint, computeDailyDrift, shouldApplyDrift, markDriftApplied } from '$lib/ai/memory/anniversaryMemory';
   import { recordVisit, getHabitHint } from '$lib/ai/memory/habitMemory';
-  import { saveImageMemory } from '$lib/ai/memory/imageMemory';
+  import { getLatestImageMemory, saveImageMemory } from '$lib/ai/memory/imageMemory';
+  import { clearLabChatHistory, loadLabChatHistory, migrateLabChatHistoryFromLocalStorage, saveLabChatHistory } from '$lib/ai/memory/labChatHistory';
   import { CHARACTER_PROFILES } from '$lib/ai/characters/characterProfiles';
   import { buildEmotionStyleHint } from '$lib/ai/emotion/emotionStyleEngine';
   import { buildToneHints } from '$lib/ai/conversationCore/toneHints';
@@ -1452,6 +1453,30 @@ function removeReferenceImage(i: number): void {
     return new Blob([arr], { type: mime });
   }
 
+  function wantsImageMemoryReference(text: string): boolean {
+    return /さっきの画像|最後に生成した画像|前に描いた|前描いた|前の画像|生成した画像/.test(text);
+  }
+
+  async function buildVisionReferenceImages(text: string): Promise<ReferenceImage[]> {
+    const refs: ReferenceImage[] = [...referenceImages];
+    if (!wantsImageMemoryReference(text)) return refs;
+
+    try {
+      const latest = await getLatestImageMemory();
+      if (latest?.imageUrl?.startsWith('data:')) {
+        refs.push({
+          name: 'Image Memory',
+          dataUrl: latest.imageUrl,
+          note: latest.imagePrompt,
+        });
+      }
+    } catch (error) {
+      console.warn('[Lab] image memory reference load failed:', error);
+    }
+
+    return refs;
+  }
+
   async function convertToYaml(msg: ChatMessage): Promise<void> {
     if (yamlConverting) return;
     yamlConverting = true;
@@ -2355,7 +2380,9 @@ function removeReferenceImage(i: number): void {
 
     console.log('[Lab] provider:', $sessionStore.provider);
     console.log('[Lab] model   :', $sessionStore.model || '(default)');
-    console.log('[Lab] images  :', referenceImages.length, referenceImages.length > 0 ? referenceImages.map(r => r.name).join(', ') : '(none)');
+    const visionReferenceImages = await buildVisionReferenceImages(text);
+
+    console.log('[Lab] images  :', visionReferenceImages.length, visionReferenceImages.length > 0 ? visionReferenceImages.map(r => r.name).join(', ') : '(none)');
     console.log('[Lab] request start');
 
     const _reqStart = Date.now();
@@ -2373,8 +2400,8 @@ function removeReferenceImage(i: number): void {
         });
       } else {
         let _sysPrompt = buildLabSystemPrompt(text);
-        if (referenceImages.length > 0) {
-          const _noteList = referenceImages
+        if (visionReferenceImages.length > 0) {
+          const _noteList = visionReferenceImages
             .map((r, i) => `画像${i + 1}「${r.note || r.name}」`)
             .join('、');
           _sysPrompt += `\n\n【参照画像】${_noteList}が添付されています。キャラクターとして自然に画像の内容を踏まえて返答してください。`;
@@ -2386,9 +2413,9 @@ function removeReferenceImage(i: number): void {
         if ($sessionStore.model) _fd.append('model', $sessionStore.model);
         _fd.append('systemPrompt', _sysPrompt);
         _fd.append('userMessage', text);
-        for (let _i = 0; _i < referenceImages.length; _i++) {
-          _fd.append(`image_${_i}`, dataUrlToBlob(referenceImages[_i].dataUrl), `ref_${_i}.jpg`);
-          if (referenceImages[_i].note) _fd.append(`note_${_i}`, referenceImages[_i].note);
+        for (let _i = 0; _i < visionReferenceImages.length; _i++) {
+          _fd.append(`image_${_i}`, dataUrlToBlob(visionReferenceImages[_i].dataUrl), `ref_${_i}.jpg`);
+          if (visionReferenceImages[_i].note) _fd.append(`note_${_i}`, visionReferenceImages[_i].note);
         }
         res = await fetch('/api/lab-chat', { method: 'POST', body: _fd });
       }
@@ -2416,7 +2443,7 @@ function removeReferenceImage(i: number): void {
       responseMemoryDebug = data.memory;
       aiText = $sessionStore.provider === 'onair' ? data.reply : data.text;
       lastResponseMs   = Date.now() - _reqStart;
-      lastSentImages   = referenceImages.length;
+      lastSentImages   = visionReferenceImages.length;
       lastUsedProvider = data.provider  ?? $sessionStore.provider;
       lastUsedModel    = data.actualModel ?? $sessionStore.model ?? null;
       console.log('[Lab] response success — provider:', lastUsedProvider, 'model:', lastUsedModel, 'images_sent:', lastSentImages);
@@ -2743,18 +2770,15 @@ ${recent}
     const toSave = messages
       .filter(m => m.role !== 'error' && !m.isGreeting) // エラー・起動挨拶は保存しない
       .slice(-HISTORY_MAX);                              // 最新 50 件に制限
-    try {
-      localStorage.setItem(LS_CHAT_HISTORY, JSON.stringify(toSave));
-    } catch (e) {
-      // localStorage容量オーバー時は古い半分を切り捨てて再試行
-      console.warn('[Lab] saveChatHistory: quota exceeded, trimming history');
-      try {
-        localStorage.setItem(LS_CHAT_HISTORY, JSON.stringify(toSave.slice(-Math.floor(HISTORY_MAX / 2))));
-      } catch { /* 保存できなくてもクラッシュさせない */ }
-    }
+    void saveLabChatHistory(toSave).catch((e) => {
+      console.warn('[Lab] saveChatHistory: IndexedDB save failed', e);
+    });
   }
 
   function resetChat() {
+    void clearLabChatHistory().catch((e) => {
+      console.warn('[Lab] resetChat: IndexedDB clear failed', e);
+    });
     [LS_CHAT_HISTORY, LS_LAST_TOPIC, LS_LAST_TALK_AT,
      LS_LAST_GOAL, LS_LAST_MOOD, LS_RECENT_PROGRESS,
      LS_LONG_MEMORY, LS_MEMORY_UPDATED_AT].forEach(k => localStorage.removeItem(k));
@@ -3290,6 +3314,54 @@ ${recent}
     }
   });
 
+  function parseLocalStorageChatHistory(): ChatMessage[] {
+    const rawHistory = localStorage.getItem(LS_CHAT_HISTORY);
+    if (!rawHistory) return [];
+
+    try {
+      const parsed = JSON.parse(rawHistory) as unknown;
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter((msg): msg is ChatMessage => {
+        if (!msg || typeof msg !== 'object') return false;
+        const candidate = msg as Partial<ChatMessage>;
+        return typeof candidate.role === 'string'
+          && typeof candidate.text === 'string'
+          && typeof candidate.time === 'string';
+      });
+    } catch {
+      return [];
+    }
+  }
+
+  async function restoreChatHistory(greetingMsg: ChatMessage | null): Promise<void> {
+    let historyLoaded = false;
+    let history: ChatMessage[] = [];
+
+    try {
+      history = await loadLabChatHistory() as ChatMessage[];
+      if (history.length === 0) {
+        history = await migrateLabChatHistoryFromLocalStorage(localStorage.getItem(LS_CHAT_HISTORY)) as ChatMessage[];
+      }
+    } catch (e) {
+      console.warn('[Lab] chat history IndexedDB load failed:', e);
+      history = parseLocalStorageChatHistory();
+    }
+
+    if (history.length > 0) {
+      messages = greetingMsg ? [...history, greetingMsg] : [...history];
+      historyLoaded = true;
+
+      const lastUpdated = parseInt(localStorage.getItem(LS_MEMORY_UPDATED_AT) ?? '0');
+      if (Date.now() - lastUpdated > MEMORY_STALE_MS) {
+        setTimeout(() => updateLongMemory(), 3000);
+      }
+    }
+
+    if (!historyLoaded && greetingMsg) messages = [greetingMsg];
+
+    setTimeout(() => chatEl?.scrollTo({ top: chatEl.scrollHeight, behavior: 'smooth' }), 80);
+  }
+
   // ============================================================
   // Clock
   // ============================================================
@@ -3413,28 +3485,7 @@ ${recent}
     }
 
     // ③ 会話履歴を復元し、末尾に挨拶を配置（続きから再開しているように見せる）
-    const rawHistory = localStorage.getItem(LS_CHAT_HISTORY);
-    let historyLoaded = false;
-    if (rawHistory) {
-      try {
-        const history: ChatMessage[] = JSON.parse(rawHistory);
-        if (history.length > 0) {
-          messages = greetingMsg ? [...history, greetingMsg] : [...history];
-          historyLoaded = true;
-
-          // ④ 記憶が古い（1時間以上）かつ履歴があれば起動時にバックグラウンド更新
-          const lastUpdated = parseInt(localStorage.getItem(LS_MEMORY_UPDATED_AT) ?? '0');
-          if (Date.now() - lastUpdated > MEMORY_STALE_MS) {
-            setTimeout(() => updateLongMemory(), 3000);
-          }
-        }
-      } catch { /* 破損データは無視 */ }
-    }
-    // 履歴なし・挨拶あり → 挨拶のみ表示
-    if (!historyLoaded && greetingMsg) messages = [greetingMsg];
-
-    // ⑤ 常に最下部へスクロール（初回起動・挨拶のみ・履歴復元いずれも）
-    setTimeout(() => chatEl?.scrollTo({ top: chatEl.scrollHeight, behavior: 'smooth' }), 80);
+    void restoreChatHistory(greetingMsg);
 
     sessionStore.init();
     resetIdleTimer(); // autoTalk ON の場合、起動直後からタイマー開始
