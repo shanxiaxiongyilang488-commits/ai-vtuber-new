@@ -1,5 +1,31 @@
 [
   {
+    "id": "4cede1bc-0245-4fc7-b8f0-d80d0b802b96",
+    "scope": "shared",
+    "title": "もっとアニメ調でお願いします",
+    "content": "もっとアニメ調でお願いします",
+    "tags": [
+      "chat"
+    ],
+    "importance": 4,
+    "timestamp": "2026-06-05T00:44:43.825Z",
+    "source": "chat",
+    "updatedAt": "2026-06-05T00:44:43.825Z"
+  },
+  {
+    "id": "fe36b9b8-edc6-42fd-8957-d75fb22511b2",
+    "scope": "shared",
+    "title": "メノア、おはよう",
+    "content": "メノア、おはよう",
+    "tags": [
+      "chat"
+    ],
+    "importance": 4,
+    "timestamp": "2026-06-05T00:36:41.387Z",
+    "source": "chat",
+    "updatedAt": "2026-06-05T00:36:41.389Z"
+  },
+  {
     "id": "15d293ce-a588-4e68-b3b9-5aab6dcd215d",
     "scope": "shared",
     "title": "ごめん、今ちょっとこっちで異常事態になってるからこうやってテストするしかないんだわ。ちょっと付き合てくれないかな",

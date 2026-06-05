@@ -1,5 +1,6 @@
 import { error } from '@sveltejs/kit';
 import { getProviderKey } from '$lib/server/settings';
+import { recordImageGenerationUsage } from '$lib/server/mediaUsage';
 import { normalizeImages, type GeneratedImage, type ImageGenerationInput, type ImageSize } from '$lib/server/imageProviders/types';
 
 const DEFAULT_FAL_IMAGE_MODEL = 'fal-ai/nano-banana';
@@ -36,6 +37,18 @@ const FAL_MODEL_MAP: Record<string, string> = {
   seedance: DEFAULT_FAL_VIDEO_MODEL,
 };
 
+const IMAGE_COST_ESTIMATES_USD: Record<string, number> = {
+  'fal-ai/nano-banana-pro': 0.15,
+  'fal-ai/nano-banana-pro/edit': 0.15,
+  'fal-ai/nano-banana': 0.039,
+  'fal-ai/nano-banana/edit': 0.039,
+  'fal-ai/nano-banana-2': 0.15,
+  'fal-ai/nano-banana-2/edit': 0.15,
+  'fal-ai/flux-pro/kontext': 0.05,
+  'fal-ai/flux-pro/kontext/text-to-image': 0.05,
+  'fal-ai/flux-pro/v1.1': 0.04,
+};
+
 const VIDEO_MODEL_CONFIG = {
   seedance: {
     endpoint: 'https://fal.run/fal-ai/bytedance/seedance-1-0-lite-t2v',
@@ -51,6 +64,10 @@ const VIDEO_MODEL_CONFIG = {
 
 export function resolveFalMediaModel(selectedModel?: string, fallback = DEFAULT_FAL_IMAGE_MODEL): string {
   return FAL_MODEL_MAP[selectedModel ?? ''] ?? selectedModel ?? fallback;
+}
+
+function estimateFalImageCost(model: string, endpointModel: string): number {
+  return IMAGE_COST_ESTIMATES_USD[endpointModel] ?? IMAGE_COST_ESTIMATES_USD[model] ?? 0;
 }
 
 function sizeToAspectRatio(size: ImageSize): string {
@@ -136,6 +153,11 @@ export async function generateFalImage(input: ImageGenerationInput): Promise<Gen
   const falData = await falRes.json();
   const images = normalizeImages(falData?.images ?? []);
   if (images.length === 0) throw error(500, 'No image URL returned from FAL');
+  await recordImageGenerationUsage({
+    provider: 'fal',
+    model: falModel,
+    estimatedCost: estimateFalImageCost(falModel, endpointModel),
+  });
   return images;
 }
 
