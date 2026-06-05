@@ -382,6 +382,14 @@
   let memoryViewerError = $state<string | null>(null);
   let lastRouterAction = $state('none');
   let lastRouterActionAt = $state('—');
+  let yamlImagePlan = $state<{
+    panel: string;
+    chars: string[];
+    pose: string;
+    line: string;
+    scene: string;
+    model: string;
+  } | null>(null);
   let cognitiveMonitor = $state<CognitiveMonitor>({
     retrievedMemories: [],
     emotionLabel: 'neutral',
@@ -2568,13 +2576,59 @@ function removeReferenceImage(i: number): void {
   }
 
   function extractYamlBlockFromText(text: string): string | null {
-    const fenced = text.match(/```ya?ml\s*([\s\S]*?)```/i);
-    if (fenced?.[1]?.trim()) return fenced[1].trim();
+    const fenced = Array.from(text.matchAll(/```ya?ml\s*([\s\S]*?)```/gi));
+    const latest = fenced.at(-1);
+    if (latest?.[1]?.trim()) return latest[1].trim();
     if (/^\s*pages\s*:/m.test(text) || /^\s*panel_?1\s*:/im.test(text)) {
       const start = text.search(/^\s*(pages|panel_?1)\s*:/im);
       return start >= 0 ? text.slice(start).trim() : text.trim();
     }
     return null;
+  }
+
+  function yamlScalar(raw: string): string {
+    const trimmed = raw.trim();
+    try {
+      if (
+        (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+        (trimmed.startsWith("'") && trimmed.endsWith("'"))
+      ) {
+        return JSON.parse(trimmed.replace(/^'/, '"').replace(/'$/, '"'));
+      }
+    } catch { /* plain fallback */ }
+    return trimmed.replace(/^["']|["']$/g, '');
+  }
+
+  function extractYamlField(block: string, keys: string[]): string {
+    for (const key of keys) {
+      const match = block.match(new RegExp(`^\\s*(?:-\\s*)?${key}:\\s*(.+)$`, 'im'));
+      if (match?.[1]) return yamlScalar(match[1]);
+    }
+    return '';
+  }
+
+  function firstYamlPanelBlock(yaml: string): string {
+    const panelHeader = yaml.match(/^\s*(?:-\s*)?panel_?1:\s*$/im);
+    if (panelHeader?.index !== undefined) {
+      return yaml.slice(panelHeader.index);
+    }
+    const firstPanel = yaml.match(/^\s*-\s*(?:panel:\s*1|scene:|prompt:|chars:|character:|characters:|pose:|line:)/im);
+    if (firstPanel?.index !== undefined) return yaml.slice(firstPanel.index);
+    return yaml;
+  }
+
+  function buildYamlImagePlanForSidebar(yaml: string, model: string) {
+    const block = firstYamlPanelBlock(yaml);
+    const charsRaw = extractYamlField(block, ['chars', 'characters', 'character']) || extractYamlField(yaml, ['chars', 'characters', 'character']);
+    const line = extractYamlField(block, ['line']) || extractYamlField(block, ['dialogue']);
+    return {
+      panel: 'panel_1',
+      chars: charsRaw ? charsRaw.split(/[,/]/).map((item) => item.trim()).filter(Boolean) : [],
+      pose: extractYamlField(block, ['pose']),
+      line,
+      scene: extractYamlField(block, ['scene']),
+      model,
+    };
   }
 
   function latestYamlForImageGeneration(): string | null {
@@ -2606,15 +2660,18 @@ function removeReferenceImage(i: number): void {
     const model = labImageModelConfig.provider === 'fal'
       ? labImageModelConfig.apiModel
       : 'fal-ai/nano-banana-pro';
+    yamlImagePlan = buildYamlImagePlanForSidebar(yaml, model);
+    lastRouterAction = 'YAML_IMAGE_PLAN';
+    lastRouterActionAt = new Date().toLocaleString('ja-JP');
 
     try {
       const payload = {
         yaml,
-        panel: 'panel_1',
         model,
         size: '1024x1024',
       };
-      console.log('[lab] yaml image payload', { panel: payload.panel, model: payload.model, yamlLength: yaml.length });
+      console.log('[YAML_IMAGE_PLAN]', yamlImagePlan);
+      console.log('[lab] yaml image payload', { panel: 'panel_1', model: payload.model, yamlLength: yaml.length });
       console.log('[lab] fetch /api/yaml-image provider/model', { provider: 'fal', model: payload.model });
 
       const res = await fetch('/api/yaml-image', {
@@ -4851,6 +4908,34 @@ ${recent}
             <span class="router-state-label">Timestamp</span>
             <span class="router-state-value">{lastRouterActionAt}</span>
           </div>
+          {#if yamlImagePlan}
+            <div class="router-state-divider"></div>
+            <div class="router-state-section-title">YAML_IMAGE_PLAN</div>
+            <div class="router-state-row">
+              <span class="router-state-label">Panel</span>
+              <span class="router-state-value">{yamlImagePlan.panel}</span>
+            </div>
+            <div class="router-state-row">
+              <span class="router-state-label">Chars</span>
+              <span class="router-state-value">{yamlImagePlan.chars.length > 0 ? yamlImagePlan.chars.join(' / ') : '-'}</span>
+            </div>
+            <div class="router-state-row">
+              <span class="router-state-label">Pose</span>
+              <span class="router-state-value">{yamlImagePlan.pose || '-'}</span>
+            </div>
+            <div class="router-state-row">
+              <span class="router-state-label">Line</span>
+              <span class="router-state-value">{yamlImagePlan.line || '-'}</span>
+            </div>
+            <div class="router-state-row">
+              <span class="router-state-label">Scene</span>
+              <span class="router-state-value">{yamlImagePlan.scene || '-'}</span>
+            </div>
+            <div class="router-state-row">
+              <span class="router-state-label">Model</span>
+              <span class="router-state-value">{yamlImagePlan.model}</span>
+            </div>
+          {/if}
           <div class="router-state-divider"></div>
           <div class="router-state-section-title">MEMORY</div>
           <div class="router-state-row">

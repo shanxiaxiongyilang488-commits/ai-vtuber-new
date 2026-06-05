@@ -1,22 +1,20 @@
 export type YamlScenePanel = {
   panel: number;
-  size?: string;
   scene: string;
-  dialogue: string;
+  chars: string[];
+  pose: string;
+  line: string;
   prompt: string;
   negativePrompt?: string;
   model?: string;
-  characters: string[];
 };
 
 export type YamlSceneDocument = {
   pagePrompt: string;
   storySummary: string;
-  characters: string[];
+  chars: string[];
   panels: YamlScenePanel[];
 };
-
-type MutablePanel = YamlScenePanel;
 
 function stripCodeFence(text: string): string {
   const block = text.match(/```(?:ya?ml|json)?\s*([\s\S]*?)```/i);
@@ -34,12 +32,22 @@ function parseScalar(raw: string): string {
       return JSON.parse(trimmed.replace(/^'/, '"').replace(/'$/, '"'));
     }
   } catch {
-    // Fall through to plain scalar handling.
+    // Keep the plain scalar fallback below.
   }
   return trimmed.replace(/^["']|["']$/g, '');
 }
 
-function dialogueToText(value: unknown): string {
+function unique(values: Array<string | undefined>): string[] {
+  return Array.from(new Set(values.map((value) => (value ?? '').trim()).filter(Boolean)));
+}
+
+function stringArray(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map((item) => String(item));
+  if (typeof value === 'string') return value.split(/[,/]/).map((item) => item.trim());
+  return [];
+}
+
+function lineFromDialogue(value: unknown): string {
   if (Array.isArray(value)) {
     return value
       .map((item) => {
@@ -56,27 +64,21 @@ function dialogueToText(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
-function normalizeCharacters(values: Array<string | undefined>): string[] {
-  return Array.from(new Set(values
-    .map((value) => (value ?? '').trim())
-    .filter(Boolean)));
-}
-
-function panelFromJson(raw: Record<string, unknown>, index: number): YamlScenePanel {
-  const characterValue = raw.character ?? raw.characters;
-  const characters = Array.isArray(characterValue)
-    ? characterValue.map((item) => String(item))
-    : [typeof characterValue === 'string' ? characterValue : ''];
-
+function panelFromObject(raw: Record<string, unknown>, index: number): YamlScenePanel {
+  const line = typeof raw.line === 'string' ? raw.line : lineFromDialogue(raw.dialogue);
   return {
     panel: Number(raw.panel) || index + 1,
-    size: typeof raw.size === 'string' ? raw.size : undefined,
     scene: typeof raw.scene === 'string' ? raw.scene : '',
-    dialogue: dialogueToText(raw.dialogue),
+    chars: unique([
+      ...stringArray(raw.chars),
+      ...stringArray(raw.character),
+      ...stringArray(raw.characters),
+    ]),
+    pose: typeof raw.pose === 'string' ? raw.pose : '',
+    line,
     prompt: typeof raw.prompt === 'string' ? raw.prompt : '',
     negativePrompt: typeof raw.negative_prompt === 'string' ? raw.negative_prompt : undefined,
     model: typeof raw.model === 'string' ? raw.model : undefined,
-    characters: normalizeCharacters(characters),
   };
 }
 
@@ -86,6 +88,7 @@ function parseJsonDocument(text: string): YamlSceneDocument | null {
     const parsed = JSON.parse(jsonMatch?.[0] ?? text) as {
       pages?: Array<{ prompt?: string; story_summary?: string; panels?: Array<Record<string, unknown>> }>;
       refs?: Record<string, unknown>;
+      chars?: unknown;
       characters?: unknown;
     };
     const pages = Array.isArray(parsed.pages) ? parsed.pages : [];
@@ -95,19 +98,20 @@ function parseJsonDocument(text: string): YamlSceneDocument | null {
     const refs = parsed.refs && typeof parsed.refs === 'object'
       ? Object.values(parsed.refs).map((value) => typeof value === 'string' ? value : '')
       : [];
-    const characters = Array.isArray(parsed.characters)
-      ? parsed.characters.map((item) => String(item))
-      : [];
 
     return {
       pagePrompt: pages.map((page) => page.prompt).filter(Boolean).join('\n'),
       storySummary: pages.map((page) => page.story_summary).filter(Boolean).join('\n'),
-      characters: normalizeCharacters([...refs, ...characters]),
-      panels: panels.map(panelFromJson),
+      chars: unique([...refs, ...stringArray(parsed.chars), ...stringArray(parsed.characters)]),
+      panels: panels.map(panelFromObject),
     };
   } catch {
     return null;
   }
+}
+
+function emptyPanel(panel = 1): YamlScenePanel {
+  return { panel, scene: '', chars: [], pose: '', line: '', prompt: '' };
 }
 
 export function parseYamlSceneDocument(source: string): YamlSceneDocument {
@@ -118,43 +122,35 @@ export function parseYamlSceneDocument(source: string): YamlSceneDocument {
   const document: YamlSceneDocument = {
     pagePrompt: '',
     storySummary: '',
-    characters: [],
+    chars: [],
     panels: [],
   };
 
   const keyVal = (line: string) => line.match(/^\s*(?:-\s*)?([A-Za-z0-9_]+):\s*(.*)$/);
-  const pushCharacter = (value: string) => {
-    const parsed = parseScalar(value);
-    if (parsed) document.characters = normalizeCharacters([...document.characters, parsed]);
+  let currentPanel: YamlScenePanel | null = null;
+  let inPanels = false;
+  let inRefs = false;
+  let inChars = false;
+  let inDialogue = false;
+  let dialogueSpeaker = '';
+
+  const pushChars = (value: string) => {
+    document.chars = unique([...document.chars, ...stringArray(parseScalar(value))]);
   };
   const flushPanel = () => {
     if (!currentPanel) return;
-    if (currentPanel.prompt.trim() || currentPanel.scene.trim() || currentPanel.dialogue.trim()) {
-      currentPanel.characters = normalizeCharacters(currentPanel.characters);
+    if (currentPanel.scene || currentPanel.chars.length > 0 || currentPanel.pose || currentPanel.line || currentPanel.prompt) {
+      currentPanel.chars = unique(currentPanel.chars);
       document.panels.push(currentPanel);
     }
     currentPanel = null;
-    dialogueEntry = null;
+    inDialogue = false;
+    dialogueSpeaker = '';
   };
-  const ensurePanel = (panelNumber?: number): MutablePanel => {
-    if (!currentPanel) {
-      currentPanel = {
-        panel: panelNumber ?? document.panels.length + 1,
-        scene: '',
-        dialogue: '',
-        prompt: '',
-        characters: [],
-      };
-    }
+  const ensurePanel = (panel?: number) => {
+    if (!currentPanel) currentPanel = emptyPanel(panel ?? document.panels.length + 1);
     return currentPanel;
   };
-
-  let currentPanel: MutablePanel | null = null;
-  let inPanels = false;
-  let inRefs = false;
-  let inCharacters = false;
-  let inDialogue = false;
-  let dialogueEntry: { speaker?: string; text?: string } | null = null;
 
   for (const rawLine of yaml.split('\n')) {
     const line = rawLine.replace(/\t/g, '  ');
@@ -165,16 +161,10 @@ export function parseYamlSceneDocument(source: string): YamlSceneDocument {
     const panelHeader = trimmed.match(/^(?:-\s*)?panel_?([0-9]+):\s*$/i);
     if (panelHeader) {
       flushPanel();
+      currentPanel = emptyPanel(Number(panelHeader[1]) || document.panels.length + 1);
       inPanels = true;
       inRefs = false;
-      inCharacters = false;
-      currentPanel = {
-        panel: Number(panelHeader[1]) || document.panels.length + 1,
-        scene: '',
-        dialogue: '',
-        prompt: '',
-        characters: [],
-      };
+      inChars = false;
       continue;
     }
 
@@ -185,46 +175,47 @@ export function parseYamlSceneDocument(source: string): YamlSceneDocument {
 
     if (key === 'refs') {
       inRefs = true;
-      inCharacters = false;
+      inChars = false;
       inPanels = false;
       continue;
     }
-    if (key === 'characters') {
-      inCharacters = true;
+    if (key === 'chars' || key === 'characters') {
+      inChars = true;
       inRefs = false;
-      if (value) pushCharacter(value);
+      if (value) pushChars(value);
       continue;
     }
     if (key === 'panels') {
       inPanels = true;
       inRefs = false;
-      inCharacters = false;
+      inChars = false;
       continue;
     }
 
     if (inRefs && indent <= 4 && ['a', 'b', 'c', 'd', 'ref', 'character'].includes(key)) {
-      pushCharacter(value);
+      pushChars(value);
       continue;
     }
-    if (inCharacters && trimmed.startsWith('- ')) {
-      pushCharacter(value || trimmed.replace(/^-\s*/, ''));
+    if (inChars && trimmed.startsWith('- ')) {
+      pushChars(value || trimmed.replace(/^-\s*/, ''));
       continue;
     }
 
     if (!inPanels && indent <= 4) {
       if (key === 'prompt') document.pagePrompt = parseScalar(value);
       else if (key === 'story_summary') document.storySummary = parseScalar(value);
-      else if (key === 'character') pushCharacter(value);
+      else if (key === 'chars' || key === 'character' || key === 'characters') pushChars(value);
       continue;
     }
 
-    if (inPanels && trimmed.startsWith('- ') && ['panel', 'scene', 'prompt', 'size', 'character'].includes(key)) {
+    if (inPanels && trimmed.startsWith('- ') && ['panel', 'scene', 'chars', 'character', 'characters', 'pose', 'line', 'prompt'].includes(key)) {
       flushPanel();
       const panel = ensurePanel(key === 'panel' ? Number(parseScalar(value)) || undefined : undefined);
       if (key === 'scene') panel.scene = parseScalar(value);
-      if (key === 'prompt') panel.prompt = parseScalar(value);
-      if (key === 'size') panel.size = parseScalar(value);
-      if (key === 'character') panel.characters = normalizeCharacters([...panel.characters, parseScalar(value)]);
+      else if (key === 'pose') panel.pose = parseScalar(value);
+      else if (key === 'line') panel.line = parseScalar(value);
+      else if (key === 'prompt') panel.prompt = parseScalar(value);
+      else if (key === 'chars' || key === 'character' || key === 'characters') panel.chars = unique([...panel.chars, ...stringArray(parseScalar(value))]);
       inDialogue = false;
       continue;
     }
@@ -233,64 +224,61 @@ export function parseYamlSceneDocument(source: string): YamlSceneDocument {
     if (!panel) continue;
 
     if (key === 'panel') panel.panel = Number(parseScalar(value)) || panel.panel;
-    else if (key === 'size') panel.size = parseScalar(value);
     else if (key === 'scene') panel.scene = parseScalar(value);
+    else if (key === 'pose') panel.pose = parseScalar(value);
+    else if (key === 'line') panel.line = parseScalar(value);
     else if (key === 'prompt') panel.prompt = parseScalar(value);
     else if (key === 'negative_prompt') panel.negativePrompt = parseScalar(value);
     else if (key === 'model') panel.model = parseScalar(value);
-    else if (key === 'character' || key === 'characters') {
-      panel.characters = normalizeCharacters([...panel.characters, parseScalar(value)]);
+    else if (key === 'chars' || key === 'character' || key === 'characters') {
+      panel.chars = unique([...panel.chars, ...stringArray(parseScalar(value))]);
     } else if (key === 'dialogue') {
-      panel.dialogue = parseScalar(value);
+      panel.line = parseScalar(value);
       try {
-        panel.dialogue = dialogueToText(JSON.parse(panel.dialogue.replace(/\\"/g, '"'))) || panel.dialogue;
+        panel.line = lineFromDialogue(JSON.parse(panel.line.replace(/\\"/g, '"'))) || panel.line;
       } catch {
-        // Plain dialogue scalar.
+        // Plain scalar dialogue.
       }
       inDialogue = true;
-      dialogueEntry = null;
+      dialogueSpeaker = '';
     } else if (inDialogue && trimmed.startsWith('- ') && key === 'speaker') {
-      dialogueEntry = { speaker: parseScalar(value), text: '' };
+      dialogueSpeaker = parseScalar(value);
     } else if (inDialogue && key === 'text') {
-      if (!dialogueEntry) dialogueEntry = {};
-      dialogueEntry.text = parseScalar(value);
-      const lineText = [dialogueEntry.speaker, dialogueEntry.text].filter(Boolean).join(': ');
-      panel.dialogue = [panel.dialogue, lineText].filter(Boolean).join('\n');
+      const lineText = [dialogueSpeaker, parseScalar(value)].filter(Boolean).join(': ');
+      panel.line = [panel.line, lineText].filter(Boolean).join('\n');
     }
   }
 
   flushPanel();
 
-  document.characters = normalizeCharacters([
-    ...document.characters,
-    ...document.panels.flatMap((panel) => panel.characters),
-    ...document.panels.flatMap((panel) =>
-      panel.dialogue.split('\n')
-        .map((line) => line.match(/^([^:：]{1,40})[:：]/)?.[1])
-        .filter((value): value is string => Boolean(value)),
-    ),
+  const speakers = document.panels.flatMap((panel) =>
+    panel.line.split('\n')
+      .map((line) => line.match(/^([^:：]{1,40})[:：]/)?.[1])
+      .filter((value): value is string => Boolean(value)),
+  );
+  document.chars = unique([
+    ...document.chars,
+    ...document.panels.flatMap((panel) => panel.chars),
+    ...speakers,
   ]);
 
   return document;
 }
 
-export function getYamlScenePanel(document: YamlSceneDocument, panelNumber = 1): YamlScenePanel | null {
-  return document.panels.find((panel) => panel.panel === panelNumber) ?? document.panels[panelNumber - 1] ?? null;
+export function getYamlScenePanel(document: YamlSceneDocument): YamlScenePanel | null {
+  return document.panels[0] ?? null;
 }
 
 export function buildImagePromptFromYamlPanel(document: YamlSceneDocument, panel: YamlScenePanel): string {
-  const characters = normalizeCharacters([
-    ...document.characters,
-    ...panel.characters,
-  ]);
-
+  const chars = unique([...document.chars, ...panel.chars]);
   return [
-    'single manga panel illustration',
+    'single finished illustration based on the latest YAML scene',
     document.storySummary ? `story summary: ${document.storySummary}` : '',
     document.pagePrompt ? `page direction: ${document.pagePrompt}` : '',
     panel.scene ? `scene: ${panel.scene}` : '',
-    characters.length > 0 ? `characters: ${characters.join(' / ')}` : '',
-    panel.dialogue ? `dialogue or acting cue: ${panel.dialogue}` : '',
+    chars.length > 0 ? `chars: ${chars.join(' / ')}` : '',
+    panel.pose ? `pose: ${panel.pose}` : '',
+    panel.line ? `line: ${panel.line}` : '',
     panel.prompt ? `visual prompt: ${panel.prompt}` : '',
     'anime style, clean lineart, highly detailed, consistent character design, cinematic composition',
     panel.negativePrompt ? `avoid: ${panel.negativePrompt}` : '',
