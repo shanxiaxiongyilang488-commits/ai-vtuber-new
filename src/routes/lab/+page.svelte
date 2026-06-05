@@ -463,6 +463,8 @@
     dataUrl: string;  // compressed thumbnail
     note:    string;  // user-editable description injected into YAML
     sourceUrl?: string; // original URL, used when image memory is not a data URL
+    characterId?: string;
+    registryName?: string;
   };
 
   let referenceImages = $state<ReferenceImage[]>([]);
@@ -1505,8 +1507,8 @@
   // ============================================================
   // Chat to YAML/Studio Pipeline
   // ============================================================
-  async function createLabThumbnail(file: File): Promise<string> {
-    return new Promise(resolve => {
+	  async function createLabThumbnail(file: File): Promise<string> {
+	    return new Promise(resolve => {
       const url = URL.createObjectURL(file);
       const img = new Image();
       img.onload = () => {
@@ -1517,35 +1519,86 @@
         canvas.height = Math.round(img.height * r);
         canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
         URL.revokeObjectURL(url);
-        resolve(canvas.toDataURL('image/jpeg', 0.75));
+	        resolve(canvas.toDataURL('image/png'));
       };
       img.onerror = () => { URL.revokeObjectURL(url); resolve(''); };
       img.src = url;
+	    });
+	  }
+
+  async function registerReferenceImageCharacter(input: {
+    id: string;
+    name: string;
+    description: string;
+    referenceImageDataUrl: string;
+  }): Promise<void> {
+    const res = await fetch('/api/characters', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data?.message ?? `Character Registry HTTP ${res.status}`);
+    }
+    console.log('[CHARACTER_REGISTRY_REGISTERED]', {
+      id: input.id,
+      name: input.name,
     });
   }
 
-  async function handleReferenceImageUpload(e: Event): Promise<void> {
-  const input = e.currentTarget as HTMLInputElement;
-  const files = Array.from(input.files ?? []);
-
-  input.value = '';
-
-  for (const file of files) {
-    if (referenceImages.length >= 2) break;
-
-    const dataUrl = await createLabThumbnail(file);
-
-    const name = file.name
-      .replace(/\.[^/.]+$/, '')
-      .replace(/[_-]/g, ' ');
-
-    referenceImages.push({
-      name,
-      dataUrl,
-      note: ''
-    });
+  function nextReferenceRegistryName(): string {
+    const used = new Set(referenceImages.map((ref) => ref.registryName).filter(Boolean));
+    for (let i = 1; i <= 2; i++) {
+      const name = `N-${i.toString().padStart(2, '0')}`;
+      if (!used.has(name)) return name;
+    }
+    return `N-${(referenceImages.length + 1).toString().padStart(2, '0')}`;
   }
-}
+	
+	  async function handleReferenceImageUpload(e: Event): Promise<void> {
+	  const input = e.currentTarget as HTMLInputElement;
+	  const files = Array.from(input.files ?? []);
+
+	  input.value = '';
+	
+	  for (const file of files) {
+	    if (referenceImages.length >= 2) break;
+	
+	    const dataUrl = await createLabThumbnail(file);
+	    const registryName = nextReferenceRegistryName();
+	    const characterId = registryName.toLowerCase();
+	
+	    const name = file.name
+	      .replace(/\.[^/.]+$/, '')
+	      .replace(/[_-]/g, ' ');
+
+	    try {
+	      await registerReferenceImageCharacter({
+	        id: characterId,
+	        name: registryName,
+	        description: `${registryName}: ${name}`,
+	        referenceImageDataUrl: dataUrl,
+	      });
+	    } catch (error) {
+	      console.error('[CHARACTER_REGISTRY_ERROR]', error);
+	      messages = [...messages, {
+	        role: 'error',
+	        text: `Character Registry registration failed: ${registryName}`,
+	        time: getTime(),
+	      }];
+	      continue;
+	    }
+	
+	    referenceImages.push({
+	      name,
+	      dataUrl,
+	      note: registryName,
+	      characterId,
+	      registryName,
+	    });
+	  }
+	}
 
 function removeReferenceImage(i: number): void {
   referenceImages.splice(i, 1);
@@ -1683,9 +1736,9 @@ function removeReferenceImage(i: number): void {
         .map(m => `${m.role === 'user' ? 'ユーザー' : 'AI'}: ${m.text}`)
         .join('\n');
 
-      const refContext    = referenceImages.length > 0
-        ? `\n[参照キャラクター]\n${referenceImages.map((r, i) => `キャラクター${i === 0 ? 'A' : 'B'}: ${r.note || r.name}`).join('\n')}`
-        : '';
+	      const refContext    = referenceImages.length > 0
+	        ? `\n[参照キャラクター]\n${referenceImages.map((r, i) => `${r.registryName ?? `キャラクター${i === 0 ? 'A' : 'B'}`}: ${r.note || r.name}`).join('\n')}`
+	        : '';
       const visionSection = visionContext
         ? `\n[VISION解析結果]\n${visionContext}`
         : '';
@@ -1757,11 +1810,19 @@ function removeReferenceImage(i: number): void {
       try {
         const jsonMatch = raw.match(/\{[\s\S]*\}/);
         parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(raw);
-      } catch {
-        parsed = { pages: [{ layout: '4panel', prompt: msg.text.slice(0, 200), panels: [{ prompt: msg.text.slice(0, 300) }] }] };
-      }
+	      } catch {
+	        parsed = { pages: [{ layout: '4panel', prompt: msg.text.slice(0, 200), panels: [{ prompt: msg.text.slice(0, 300) }] }] };
+	      }
 
-      const yamlData = {
+	      if (referenceImages.length > 0) {
+	        parsed.refs = {
+	          ...(parsed.refs ?? {}),
+	          a: parsed.refs?.a ?? referenceImages[0]?.registryName ?? referenceImages[0]?.note ?? referenceImages[0]?.name,
+	          b: parsed.refs?.b ?? referenceImages[1]?.registryName ?? referenceImages[1]?.note ?? referenceImages[1]?.name,
+	        };
+	      }
+	
+	      const yamlData = {
         ...parsed,
         referenceImages: referenceImages.length > 0 ? referenceImages : undefined,
         sourceText: msg.text.slice(0, 60),
@@ -4421,10 +4482,13 @@ ${recent}
         <div class="ref-img-strip">
           {#each referenceImages as ref, i}
             <div class="ref-img-chip">
-              {#if ref.dataUrl}
-                <img src={ref.dataUrl} alt={ref.name} class="ref-img-thumb" />
-              {/if}
-              <input
+	              {#if ref.dataUrl}
+	                <img src={ref.dataUrl} alt={ref.name} class="ref-img-thumb" />
+	              {/if}
+	              {#if ref.registryName}
+	                <span class="ref-registry-badge">{ref.registryName}</span>
+	              {/if}
+	              <input
                 type="text"
                 class="ref-img-note"
                 placeholder={ref.name}
@@ -8449,6 +8513,17 @@ ${recent}
   object-fit: cover;
   border-radius: 3px;
   border: 1px solid rgba(52,211,153,0.2);
+  flex-shrink: 0;
+}
+.ref-registry-badge {
+  padding: 2px 5px;
+  border-radius: 3px;
+  background: rgba(0,229,255,0.08);
+  border: 1px solid rgba(0,229,255,0.3);
+  color: #7dd3fc;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
   flex-shrink: 0;
 }
 .ref-img-note {

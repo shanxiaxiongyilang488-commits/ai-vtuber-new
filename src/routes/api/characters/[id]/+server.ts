@@ -3,7 +3,9 @@ import { deleteCharacter, getCharacter } from '$lib/server/characterRegistry';
 
 export const GET: RequestHandler = async ({ params }) => {
   try {
-    const character = getCharacter(params.id);
+    const id = params.id;
+    if (!id) return json({ message: 'character id is required' }, { status: 400 });
+    const character = getCharacter(id);
     if (!character) return json({ message: 'character not found' }, { status: 404 });
     return json({ character });
   } catch (error) {
@@ -14,7 +16,9 @@ export const GET: RequestHandler = async ({ params }) => {
 
 export const DELETE: RequestHandler = async ({ params }) => {
   try {
-    const deleted = deleteCharacter(params.id);
+    const id = params.id;
+    if (!id) return json({ message: 'character id is required' }, { status: 400 });
+    const deleted = deleteCharacter(id);
     if (!deleted) return json({ message: 'character not found' }, { status: 404 });
     return json({ ok: true });
   } catch (error) {

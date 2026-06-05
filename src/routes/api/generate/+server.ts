@@ -27,10 +27,11 @@ function normalizeSelectedModel(body: GenerateRequest): string {
 }
 
 function characterIdsFromPrompt(prompt: string): string[] {
-  return Array.from(new Set(
-    Array.from(prompt.matchAll(/\bcharacter:([a-z0-9_-]+)\b/gi))
-      .map((match) => match[1].toLowerCase()),
-  ));
+  const explicit = Array.from(prompt.matchAll(/\bcharacter:([a-z0-9_-]+)\b/gi))
+    .map((match) => match[1].toLowerCase());
+  const registryNames = Array.from(prompt.matchAll(/\bN-\d{2}\b/gi))
+    .map((match) => match[0].toLowerCase());
+  return Array.from(new Set([...explicit, ...registryNames]));
 }
 
 function addRegistryReferenceImages(prompt: string, refImages: string[]): string[] {

@@ -20,8 +20,10 @@ async function requestToDataUrl(request: Request): Promise<string> {
 
 export const PUT: RequestHandler = async ({ params, request }) => {
   try {
+    const id = params.id;
+    if (!id) return json({ message: 'character id is required' }, { status: 400 });
     const referenceImageDataUrl = await requestToDataUrl(request);
-    const character = saveCharacterReferenceImage(params.id, referenceImageDataUrl);
+    const character = saveCharacterReferenceImage(id, referenceImageDataUrl);
     return json({ character });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

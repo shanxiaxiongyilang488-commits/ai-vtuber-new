@@ -2,6 +2,7 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { AVAILABLE_MEDIA_MODELS, generateMediaImage, logAvailableMediaModels, resolveMediaModel } from '$lib/server/mediaProviders/registry';
 import { buildImagePromptFromYamlPanel, getYamlScenePanel, parseYamlSceneDocument } from '$lib/server/yamlSceneParser';
+import { getCharacterReferenceDataUrl } from '$lib/server/characterRegistry';
 import type { GeneratedImage, ImageSize } from '$lib/server/imageProviders/types';
 
 const DEFAULT_FAL_IMAGE_MODEL = 'fal-ai/nano-banana-pro';
@@ -17,6 +18,26 @@ function resolveFalImageModel(raw?: string) {
   const requested = resolveMediaModel(raw || DEFAULT_FAL_IMAGE_MODEL);
   if (requested.provider === 'fal') return requested;
   return AVAILABLE_MEDIA_MODELS.find((model) => model.apiModel === DEFAULT_FAL_IMAGE_MODEL) ?? resolveMediaModel(DEFAULT_FAL_IMAGE_MODEL);
+}
+
+function registryReferenceImagesFromText(text: string): string[] {
+  const ids = Array.from(new Set([
+    ...Array.from(text.matchAll(/\bcharacter:([a-z0-9_-]+)\b/gi)).map((match) => match[1].toLowerCase()),
+    ...Array.from(text.matchAll(/\bN-\d{2}\b/gi)).map((match) => match[0].toLowerCase()),
+  ]));
+
+  return ids
+    .map((id) => {
+      try {
+        const ref = getCharacterReferenceDataUrl(id);
+        if (ref) console.log('[YAML_IMAGE_REF]', id);
+        return ref;
+      } catch (caughtError) {
+        console.warn('[YAML_IMAGE_REF_ERROR]', id, caughtError);
+        return null;
+      }
+    })
+    .filter((ref): ref is string => Boolean(ref));
 }
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -62,14 +83,16 @@ export const POST: RequestHandler = async ({ request }) => {
   console.log('[YAML_IMAGE_PROMPT]', prompt);
   console.log('[MEDIA_PROVIDER]', 'fal');
   console.log('[MEDIA_MODEL]', mediaModel.id);
+  const refImages = registryReferenceImagesFromText(`${prompt}\n${chars.join('\n')}`);
+  console.log('[YAML_IMAGE_REF_COUNT]', refImages.length);
 
   const result = await generateMediaImage({
     prompt,
     size,
     model: mediaModel.apiModel,
     requestedModel: mediaModel.id,
-    refImages: [],
-    editMode: false,
+    refImages,
+    editMode: refImages.length > 0,
   });
   const images: GeneratedImage[] = result.images;
 
