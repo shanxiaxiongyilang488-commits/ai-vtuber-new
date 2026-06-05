@@ -1,12 +1,11 @@
 import { json, type RequestHandler } from '@sveltejs/kit';
-import { getProviderKey, readSettings, writeSettings } from '$lib/server/settings';
-import { getAvailableGeminiImageModels } from '$lib/server/imageProviders/gemini';
+import { readSettings, writeSettings } from '$lib/server/settings';
 
 export const GET: RequestHandler = async () => {
   const settings = await readSettings();
-  const apiKey = await getProviderKey('gemini');
-  const availableGeminiImageModels = await getAvailableGeminiImageModels(apiKey);
-  return json({ ...settings, availableGeminiImageModels });
+  console.log('[MEDIA_PROVIDER]', settings.mediaConfig.provider);
+  console.log('[MEDIA_MODEL]', settings.mediaConfig.model);
+  return json(settings);
 };
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -17,6 +16,8 @@ export const POST: RequestHandler = async ({ request }) => {
   console.log('[CHAT_MODEL]', saved.chatConfig.model);
   console.log('[IMAGE_PROVIDER]', saved.imageConfig.provider);
   console.log('[IMAGE_MODEL]', saved.imageConfig.model);
+  console.log('[MEDIA_PROVIDER]', saved.mediaConfig.provider);
+  console.log('[MEDIA_MODEL]', saved.mediaConfig.model);
   console.log('[OPENAI KEY SAVED]', Boolean(saved.openai.key), saved.openai.key.slice(0, 12));
   console.log('[GEMINI KEY SAVED]', Boolean(saved.gemini.key), saved.gemini.key.slice(0, 12));
   console.log('[FAL KEY SAVED]', Boolean(saved.fal.key), saved.fal.key.slice(0, 12));

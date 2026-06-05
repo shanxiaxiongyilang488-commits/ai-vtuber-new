@@ -7,6 +7,7 @@
   type ServerStatus = 'OK' | 'Missing API Key' | 'Unauthorized' | 'Quota' | 'Error';
   type ChatProvider = 'openai' | 'gemini' | 'lmstudio';
   type ImageProvider = 'openai' | 'gemini' | 'ideogram';
+  type MediaProvider = 'fal';
 
   function mapStatus(s: ServerStatus): Exclude<ConnectionStatus, 'not_tested' | 'testing'> {
     if (s === 'OK') return 'connected';
@@ -64,7 +65,8 @@
   let saveFlash = $state<Record<string, boolean>>({});
   let chatProvider = $state<ChatProvider>('gemini');
   let imageProvider = $state<ImageProvider>('openai');
-  let availableGeminiImageModels = $state<{ id: string; label: string; apiModel: string }[]>([]);
+  let mediaProvider = $state<MediaProvider>('fal');
+  let mediaModel = $state('fal-ai/nano-banana');
 
   function chatModelForProvider(provider: ChatProvider): string {
     if (provider === 'openai') return openai.model;
@@ -73,7 +75,7 @@
   }
 
   function imageModelForProvider(provider: ImageProvider): string {
-    if (provider === 'gemini') return availableGeminiImageModels[0]?.apiModel ?? 'nano-banana';
+    if (provider === 'gemini') return 'nano-banana';
     if (provider === 'ideogram') return 'ideogram-v3';
     return 'gpt-image-2';
   }
@@ -83,6 +85,7 @@
     return {
       chatProvider,
       imageProvider,
+      mediaProvider,
       chatConfig: {
         provider: chatProvider,
         model: chatModelForProvider(chatProvider),
@@ -90,6 +93,10 @@
       imageConfig: {
         provider: imageProvider,
         model: imageModelForProvider(imageProvider),
+      },
+      mediaConfig: {
+        provider: mediaProvider,
+        model: mediaModel,
       },
       openai: { key: openai.key, model: openai.model },
       gemini: { key: gemini.key, model: gemini.model },
@@ -115,25 +122,17 @@
     const res = await fetch('/api/settings');
     if (!res.ok) return;
     const data = await res.json();
-    availableGeminiImageModels = Array.isArray(data.availableGeminiImageModels)
-      ? data.availableGeminiImageModels
-          .map((model: unknown) => {
-            const item = model && typeof model === 'object' ? model as Record<string, unknown> : {};
-            const id = typeof item.id === 'string' ? item.id : '';
-            const label = typeof item.label === 'string' ? item.label : id;
-            const apiModel = typeof item.apiModel === 'string' ? item.apiModel : id;
-            return id && apiModel ? { id, label, apiModel } : null;
-          })
-          .filter((model: { id: string; label: string; apiModel: string } | null): model is { id: string; label: string; apiModel: string } => Boolean(model))
-      : [];
     const loadedChatProvider = data.chatConfig?.provider ?? data.chatProvider;
     const loadedImageProvider = data.imageConfig?.provider ?? data.imageProvider ?? data.image?.provider;
+    const loadedMediaProvider = data.mediaConfig?.provider ?? data.mediaProvider;
     chatProvider = loadedChatProvider === 'openai' || loadedChatProvider === 'gemini' || loadedChatProvider === 'lmstudio'
       ? loadedChatProvider
       : 'gemini';
     imageProvider = loadedImageProvider === 'openai' || loadedImageProvider === 'gemini' || loadedImageProvider === 'ideogram'
       ? loadedImageProvider
       : 'openai';
+    mediaProvider = loadedMediaProvider === 'fal' ? 'fal' : 'fal';
+    mediaModel = data.mediaConfig?.model || data.mediaModel || 'fal-ai/nano-banana';
 
     openai.key = data.openai?.key ?? '';
     openai.model = chatProvider === 'openai'
@@ -324,11 +323,19 @@
           </select>
         </label>
         <label class="field">
-          <span class="field-label">Image Provider</span>
-          <select class="input select-input" bind:value={imageProvider}>
-            <option value="openai">OpenAI (GPT Image 2)</option>
-            <option value="gemini">Gemini (Nano Banana)</option>
-            <option value="ideogram">Ideogram</option>
+          <span class="field-label">Media Provider</span>
+          <select class="input select-input" bind:value={mediaProvider}>
+            <option value="fal">FAL</option>
+          </select>
+        </label>
+        <label class="field">
+          <span class="field-label">Media Model</span>
+          <select class="input select-input" bind:value={mediaModel}>
+            <option value="fal-ai/nano-banana">Nano Banana</option>
+            <option value="fal-ai/nano-banana-pro">Nano Banana Pro</option>
+            <option value="fal-ai/nano-banana-2">Nano Banana 2</option>
+            <option value="fal-ai/flux-pro/kontext">Flux Kontext</option>
+            <option value="fal-ai/flux-pro/v1.1">Flux Pro</option>
           </select>
         </label>
       </div>

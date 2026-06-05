@@ -531,7 +531,7 @@
   // ============================================================
   // AI config — sessionStore で一元管理
   // ============================================================
-  type LabImageProvider = 'openai' | 'gemini' | 'ideogram';
+  type LabImageProvider = 'fal';
   type LabImageModelId = string;
   type LabImageModelOption = { id: LabImageModelId; label: string; provider: LabImageProvider; apiModel: string };
   type LabGenerationMode = 'text-to-image' | 'image-to-image' | 'manga-continue' | 'character-sheet' | 'expression-sheet';
@@ -545,29 +545,28 @@
   ];
 
   const LAB_IMAGE_PROVIDERS: { id: LabImageProvider; label: string }[] = [
-    { id: 'openai', label: 'OpenAI' },
-    { id: 'gemini', label: 'Gemini' },
-    { id: 'ideogram', label: 'Ideogram' },
+    { id: 'fal', label: 'FAL' },
   ];
 
   const DEFAULT_LAB_IMAGE_MODELS: LabImageModelOption[] = [
-    { id: 'gpt-image-2', label: 'GPT Image 2', provider: 'openai', apiModel: 'gpt-image-2' },
-    { id: 'ideogram-v3', label: 'Ideogram', provider: 'ideogram', apiModel: 'ideogram-v3' },
+    { id: 'fal-ai/nano-banana', label: 'Nano Banana', provider: 'fal', apiModel: 'fal-ai/nano-banana' },
+    { id: 'fal-ai/nano-banana-pro', label: 'Nano Banana Pro', provider: 'fal', apiModel: 'fal-ai/nano-banana-pro' },
+    { id: 'fal-ai/nano-banana-2', label: 'Nano Banana 2', provider: 'fal', apiModel: 'fal-ai/nano-banana-2' },
+    { id: 'fal-ai/flux-pro/kontext', label: 'Flux Kontext', provider: 'fal', apiModel: 'fal-ai/flux-pro/kontext' },
+    { id: 'fal-ai/flux-pro/v1.1', label: 'Flux Pro', provider: 'fal', apiModel: 'fal-ai/flux-pro/v1.1' },
   ];
   let labImageModels = $state<LabImageModelOption[]>(DEFAULT_LAB_IMAGE_MODELS);
 
   function normalizeLabImageProvider(raw: string | null): LabImageProvider {
-    if (raw === 'openai' || raw === 'gemini' || raw === 'ideogram') return raw;
-    if (raw === 'fal' || raw === 'fal-ai') return 'gemini';
-    return 'openai';
+    return 'fal';
   }
 
   function normalizeLabImageModel(raw: string | null): LabImageModelId {
     if (labImageModels.some((model) => model.id === raw)) return raw as LabImageModelId;
-    if (raw === 'openai/GPT Image 2' || raw === 'openai/GPT Image 2 Edit') return 'gpt-image-2';
-    if (raw?.includes('nano-banana')) return 'nano-banana';
-    if (raw?.toLowerCase().includes('ideogram')) return 'ideogram-v3';
-    return 'gpt-image-2';
+    if (raw === 'openai/GPT Image 2' || raw === 'openai/GPT Image 2 Edit' || raw === 'gpt-image-2') return 'fal-ai/nano-banana';
+    if (raw?.includes('nano-banana')) return 'fal-ai/nano-banana';
+    if (raw?.toLowerCase().includes('ideogram')) return 'fal-ai/nano-banana';
+    return 'fal-ai/nano-banana';
   }
 
   function normalizeLabGenerationMode(raw: string | null): LabGenerationMode {
@@ -580,38 +579,6 @@
 
   function imageModelsForProvider(provider: LabImageProvider) {
     return labImageModels.filter((model) => model.provider === provider);
-  }
-
-  function applyLabGeminiImageModels(models: unknown): void {
-    const geminiModels: LabImageModelOption[] = [];
-    if (Array.isArray(models)) {
-      for (const model of models) {
-        const data = model && typeof model === 'object' ? model as Record<string, unknown> : {};
-        const id = typeof data.id === 'string' ? data.id : '';
-        const label = typeof data.label === 'string' ? data.label : id;
-        const apiModel = typeof data.apiModel === 'string' ? data.apiModel : id;
-        if (id && apiModel) geminiModels.push({ id, label, provider: 'gemini', apiModel });
-      }
-    }
-    labImageModels = [
-      ...DEFAULT_LAB_IMAGE_MODELS.filter((model) => model.provider !== 'gemini'),
-      ...geminiModels,
-    ];
-    const available = imageModelsForProvider(labImageProvider);
-    if (!available.some((model) => model.id === labImageModel) && available[0]) {
-      labImageModel = available[0].id;
-    }
-  }
-
-  async function loadLabGeminiImageModels(): Promise<void> {
-    try {
-      const res = await fetch('/api/gemini-image-models');
-      if (!res.ok) return;
-      const data = await res.json();
-      applyLabGeminiImageModels(data.models);
-    } catch (error) {
-      console.warn('[lab] gemini image model load failed:', error);
-    }
   }
 
   function setLabImageProvider(provider: LabImageProvider): void {
@@ -3738,7 +3705,6 @@ ${recent}
     void restoreChatHistory(greetingMsg);
 
     sessionStore.init();
-    void loadLabGeminiImageModels();
     resetIdleTimer(); // autoTalk ON の場合、起動直後からタイマー開始
 
     // PNGTuber 瞬きスケジューラー起動
@@ -4746,11 +4712,11 @@ ${recent}
           <div class="router-state-divider"></div>
           <div class="router-state-section-title">MODEL ROUTING</div>
           <div class="router-state-row">
-            <span class="router-state-label">Provider</span>
+            <span class="router-state-label">MEDIA_PROVIDER</span>
             <span class="router-state-value">{imageProviderLabel(labImageApiProvider)}</span>
           </div>
           <div class="router-state-row">
-            <span class="router-state-label">Model</span>
+            <span class="router-state-label">MEDIA_MODEL</span>
             <span class="router-state-value">{labImageModelConfig.label}</span>
           </div>
           <div class="router-state-row">
@@ -4793,11 +4759,11 @@ ${recent}
             </select>
           </div>
           <div class="vc-row">
-            <span class="vc-lbl vc-lbl-wide">Image Provider</span>
+            <span class="vc-lbl vc-lbl-wide">MEDIA_PROVIDER</span>
             <span class="vc-note vc-current">{LAB_IMAGE_PROVIDERS.find((provider) => provider.id === labImageProvider)?.label ?? labImageProvider}</span>
           </div>
           <div class="vc-row">
-            <span class="vc-lbl vc-lbl-wide">Image Model</span>
+            <span class="vc-lbl vc-lbl-wide">MEDIA_MODEL</span>
             <span class="vc-note vc-current">{labImageModelConfig.label}</span>
           </div>
           <div class="vc-row">

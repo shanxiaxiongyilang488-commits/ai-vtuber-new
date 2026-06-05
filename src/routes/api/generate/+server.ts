@@ -1,10 +1,8 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { getCharacterReferenceDataUrl } from '$lib/server/characterRegistry';
-import { readSettings, type ImageProvider } from '$lib/server/settings';
-import { generateGeminiImage } from '$lib/server/imageProviders/gemini';
-import { generateIdeogramImage } from '$lib/server/imageProviders/ideogram';
-import { generateOpenAIImage } from '$lib/server/imageProviders/openai';
+import { readSettings } from '$lib/server/settings';
+import { generateFalImage, resolveFalMediaModel } from '$lib/server/mediaProviders/fal';
 import type { GeneratedImage, ImageSize } from '$lib/server/imageProviders/types';
 
 const VALID_SIZES = ['1024x1024', '1024x1536', '1536x1024', '1792x1024', '1024x1792'] as const;
@@ -22,18 +20,10 @@ interface GenerateRequest {
   refImages?: string[];
 }
 
-function normalizeSelectedModel(body: GenerateRequest, provider: ImageProvider): string {
+function normalizeSelectedModel(body: GenerateRequest): string {
   const raw = (body.selectedModel || body.model || '').replace(/\s+edit$/i, '').trim();
   if (raw) return raw;
-  if (provider === 'gemini') return 'nano-banana';
-  if (provider === 'ideogram') return 'ideogram-v3';
-  return 'gpt-image-2';
-}
-
-function normalizeRequestProvider(value: unknown): ImageProvider | null {
-  const provider = typeof value === 'string' ? value.trim().toLowerCase() : '';
-  if (provider === 'openai' || provider === 'gemini' || provider === 'ideogram') return provider;
-  return null;
+  return 'fal-ai/nano-banana';
 }
 
 function characterIdsFromPrompt(prompt: string): string[] {
@@ -61,19 +51,6 @@ function addRegistryReferenceImages(prompt: string, refImages: string[]): string
   return Array.from(new Set([...registryRefs, ...refImages]));
 }
 
-async function generateWithProvider(provider: ImageProvider, input: {
-  prompt: string;
-  size: ImageSize;
-  model: string;
-  refImages: string[];
-  editMode: boolean;
-}): Promise<GeneratedImage[]> {
-  if (provider === 'openai') return generateOpenAIImage(input);
-  if (provider === 'gemini') return generateGeminiImage(input);
-  if (provider === 'ideogram') return generateIdeogramImage(input);
-  throw error(400, `Unknown image provider: ${provider}`);
-}
-
 export const POST: RequestHandler = async ({ request }) => {
   console.log('[IMAGE GENERATE ENTRY]');
 
@@ -91,20 +68,19 @@ export const POST: RequestHandler = async ({ request }) => {
   if (!VALID_SIZES.includes(size)) throw error(400, `size must be one of: ${VALID_SIZES.join(', ')}`);
 
   const settings = await readSettings();
-  const requestProvider = normalizeRequestProvider(body.provider);
-  const provider = requestProvider ?? settings.imageConfig.provider;
   const requestModel = (body.model || body.selectedModel || '').replace(/\s+edit$/i, '').trim();
-  const imageModel = requestModel || settings.imageConfig.model || settings.image.model || normalizeSelectedModel(body, provider);
+  const mediaProvider = settings.mediaConfig.provider;
+  const mediaModel = resolveFalMediaModel(requestModel || settings.mediaConfig.model || normalizeSelectedModel(body));
 
   console.log('[api/generate] received provider/model', {
     provider: body.provider ?? null,
     model: body.model ?? null,
     selectedModel: body.selectedModel ?? null,
   });
-  console.log('[api/generate] settings imageConfig', settings.imageConfig);
-  console.log('[api/generate] provider/model priority', requestProvider ? 'request' : 'settings.imageConfig');
-  console.log('[IMAGE_PROVIDER]', provider);
-  console.log('[IMAGE_MODEL]', imageModel);
+  console.log('[api/generate] settings mediaConfig', settings.mediaConfig);
+  console.log('[api/generate] media priority', requestModel ? 'request.model' : 'settings.mediaConfig');
+  console.log('[MEDIA_PROVIDER]', mediaProvider);
+  console.log('[MEDIA_MODEL]', mediaModel);
   console.log('[REQUEST IMAGE PROVIDER]', body.provider ?? '(none)');
   console.log('[REQUEST IMAGE MODEL]', body.model ?? body.selectedModel ?? '(none)');
 
@@ -116,8 +92,8 @@ export const POST: RequestHandler = async ({ request }) => {
   const editMode = Boolean(body.editMode);
 
   console.log('[api/generate]', {
-    provider,
-    model: imageModel,
+    mediaProvider,
+    mediaModel,
     size,
     editMode,
     refImages: refImages.length,
@@ -125,10 +101,11 @@ export const POST: RequestHandler = async ({ request }) => {
     promptLength: prompt.length,
   });
 
-  const images = await generateWithProvider(provider, {
+  if (mediaProvider !== 'fal') throw error(400, `Unknown media provider: ${mediaProvider}`);
+  const images: GeneratedImage[] = await generateFalImage({
     prompt,
     size,
-    model: imageModel,
+    model: mediaModel,
     refImages,
     editMode,
   });

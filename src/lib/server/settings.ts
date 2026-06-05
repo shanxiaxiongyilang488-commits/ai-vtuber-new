@@ -4,8 +4,10 @@ import path from 'node:path';
 export type ApiSettings = {
   chatProvider: ChatProvider;
   imageProvider: ImageProvider;
+  mediaProvider: MediaProvider;
   chatConfig: ChatConfig;
   imageConfig: ImageConfig;
+  mediaConfig: MediaConfig;
   openai: { key: string; model: string };
   gemini: { key: string; model: string };
   anthropic: { key: string; model: string };
@@ -27,12 +29,17 @@ export type ApiSettings = {
 
 export type ChatProvider = 'openai' | 'gemini' | 'lmstudio';
 export type ImageProvider = 'openai' | 'gemini' | 'ideogram';
+export type MediaProvider = 'fal';
 export type ChatConfig = {
   provider: ChatProvider;
   model: string;
 };
 export type ImageConfig = {
   provider: ImageProvider;
+  model: string;
+};
+export type MediaConfig = {
+  provider: MediaProvider;
   model: string;
 };
 export type VoiceBackend = 'local' | 'colab';
@@ -59,8 +66,10 @@ const SETTINGS_PATH = path.join(process.cwd(), 'data', 'settings.json');
 export const DEFAULT_SETTINGS: ApiSettings = {
   chatProvider: 'gemini',
   imageProvider: 'openai',
+  mediaProvider: 'fal',
   chatConfig: { provider: 'gemini', model: 'gemini-2.5-flash' },
   imageConfig: { provider: 'openai', model: 'gpt-image-2' },
+  mediaConfig: { provider: 'fal', model: 'fal-ai/nano-banana' },
   openai: { key: '', model: 'gpt-4o-mini' },
   gemini: { key: '', model: 'gemini-2.5-flash' },
   anthropic: { key: '', model: 'claude-3-5-haiku-latest' },
@@ -148,10 +157,21 @@ function normalizeImageProvider(value: unknown): ImageProvider {
   return DEFAULT_SETTINGS.imageProvider;
 }
 
+function normalizeMediaProvider(value: unknown): MediaProvider {
+  const provider = stringValue(value).trim().toLowerCase();
+  if (provider === 'fal' || provider === 'fal-ai') return 'fal';
+  return DEFAULT_SETTINGS.mediaProvider;
+}
+
 function defaultImageModelForProvider(provider: ImageProvider): string {
   if (provider === 'gemini') return 'nano-banana';
   if (provider === 'ideogram') return 'ideogram-v3';
   return 'gpt-image-2';
+}
+
+function defaultMediaModelForProvider(provider: MediaProvider): string {
+  if (provider === 'fal') return 'fal-ai/nano-banana';
+  return DEFAULT_SETTINGS.mediaConfig.model;
 }
 
 function defaultChatModelForProvider(provider: ChatProvider, data: Record<string, unknown>): string {
@@ -200,11 +220,13 @@ export function normalizeSettings(value: unknown): ApiSettings {
   const image = asRecord(data.image);
   const chatConfigData = asRecord(data.chatConfig);
   const imageConfigData = asRecord(data.imageConfig);
+  const mediaConfigData = asRecord(data.mediaConfig);
   const legacyIrodoriUrl = stringValue(firstString(irodori.url, data.irodoriUrl, data.irodori_url, data.irodoriTtsUrl));
   const voiceSettings = normalizeVoiceBackend(voice, legacyIrodoriUrl);
 
   const chatProvider = normalizeChatProvider(firstString(chatConfigData.provider, data.chatProvider, data.chat_provider));
   const imageProvider = normalizeImageProvider(firstString(imageConfigData.provider, data.imageProvider, data.image_provider, image.provider));
+  const mediaProvider = normalizeMediaProvider(firstString(mediaConfigData.provider, data.mediaProvider, data.media_provider));
   const chatModel = stringValue(
     firstString(chatConfigData.model, data.chatModel, data.chat_model),
     defaultChatModelForProvider(chatProvider, data),
@@ -213,10 +235,15 @@ export function normalizeSettings(value: unknown): ApiSettings {
     firstString(imageConfigData.model, image.model, data.imageModel, data.image_model),
     defaultImageModelForProvider(imageProvider),
   );
+  const mediaModel = stringValue(
+    firstString(mediaConfigData.model, data.mediaModel, data.media_model),
+    defaultMediaModelForProvider(mediaProvider),
+  );
 
   return {
     chatProvider,
     imageProvider,
+    mediaProvider,
     chatConfig: {
       provider: chatProvider,
       model: chatModel,
@@ -224,6 +251,10 @@ export function normalizeSettings(value: unknown): ApiSettings {
     imageConfig: {
       provider: imageProvider,
       model: imageModel,
+    },
+    mediaConfig: {
+      provider: mediaProvider,
+      model: mediaModel,
     },
     openai: {
       key: stringValue(firstString(openai.key, data.openaiKey, data.openai_api_key, data.api_openai_key)),
@@ -286,6 +317,7 @@ export async function writeSettings(settings: unknown): Promise<ApiSettings> {
   const hasVoiceSettings = typeof incomingData.voice === 'object';
   const incomingChatConfig = asRecord(incomingData.chatConfig);
   const incomingImageConfig = asRecord(incomingData.imageConfig);
+  const incomingMediaConfig = asRecord(incomingData.mediaConfig);
   const hasChatProvider = typeof incomingData.chatProvider === 'string'
     || typeof incomingData.chat_provider === 'string'
     || typeof incomingChatConfig.provider === 'string';
@@ -300,13 +332,21 @@ export async function writeSettings(settings: unknown): Promise<ApiSettings> {
     || typeof incomingData.imageModel === 'string'
     || typeof incomingData.image_model === 'string'
     || typeof incomingImageConfig.model === 'string';
+  const hasMediaProvider = typeof incomingData.mediaProvider === 'string'
+    || typeof incomingData.media_provider === 'string'
+    || typeof incomingMediaConfig.provider === 'string';
+  const hasMediaModel = typeof incomingData.mediaModel === 'string'
+    || typeof incomingData.media_model === 'string'
+    || typeof incomingMediaConfig.model === 'string';
   const incoming = normalizeSettings(settings);
   const nextChatProvider = hasChatProvider ? incoming.chatConfig.provider : current.chatConfig.provider;
   const nextImageProvider = hasImageProvider ? incoming.imageConfig.provider : current.imageConfig.provider;
+  const nextMediaProvider = hasMediaProvider ? incoming.mediaConfig.provider : current.mediaConfig.provider;
   const activeIrodoriUrl = incoming.voice.backend === 'colab' ? incoming.voice.colabUrl : incoming.voice.localUrl;
   const normalized: ApiSettings = {
     chatProvider: nextChatProvider,
     imageProvider: nextImageProvider,
+    mediaProvider: nextMediaProvider,
     chatConfig: {
       provider: nextChatProvider,
       model: hasChatModel
@@ -318,6 +358,12 @@ export async function writeSettings(settings: unknown): Promise<ApiSettings> {
       model: hasImageModel
         ? incoming.imageConfig.model
         : (hasImageProvider ? defaultImageModelForProvider(nextImageProvider) : current.imageConfig.model),
+    },
+    mediaConfig: {
+      provider: nextMediaProvider,
+      model: hasMediaModel
+        ? incoming.mediaConfig.model
+        : (hasMediaProvider ? defaultMediaModelForProvider(nextMediaProvider) : current.mediaConfig.model),
     },
     openai: {
       key: incoming.openai.key || current.openai.key,
