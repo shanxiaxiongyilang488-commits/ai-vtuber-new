@@ -1,5 +1,18 @@
 [
   {
+    "id": "2a8d6f55-eb84-4160-8f07-44efc4d8f57e",
+    "scope": "shared",
+    "title": "じゃぁ、このYAMLと読み込んだ画像をもとにマンガを作ってくれないか",
+    "content": "じゃぁ、このYAMLと読み込んだ画像をもとにマンガを作ってくれないか",
+    "tags": [
+      "chat"
+    ],
+    "importance": 4,
+    "timestamp": "2026-06-05T02:01:53.965Z",
+    "source": "chat",
+    "updatedAt": "2026-06-05T02:01:53.977Z"
+  },
+  {
     "id": "4cede1bc-0245-4fc7-b8f0-d80d0b802b96",
     "scope": "shared",
     "title": "もっとアニメ調でお願いします",

@@ -7,7 +7,7 @@
   type ServerStatus = 'OK' | 'Missing API Key' | 'Unauthorized' | 'Quota' | 'Error';
   type ChatProvider = 'openai' | 'gemini' | 'lmstudio';
   type ImageProvider = 'openai' | 'gemini' | 'ideogram';
-  type MediaProvider = 'fal';
+  type MediaProvider = 'openai' | 'fal' | 'ideogram';
 
   function mapStatus(s: ServerStatus): Exclude<ConnectionStatus, 'not_tested' | 'testing'> {
     if (s === 'OK') return 'connected';
@@ -68,6 +68,20 @@
   let mediaProvider = $state<MediaProvider>('fal');
   let mediaModel = $state('fal-ai/nano-banana');
 
+  const MEDIA_MODELS = [
+    { id: 'gpt-image-2', label: 'OpenAI GPT Image 2', provider: 'openai' },
+    { id: 'fal-ai/nano-banana-pro', label: 'Nano Banana Pro', provider: 'fal' },
+    { id: 'fal-ai/nano-banana', label: 'Nano Banana', provider: 'fal' },
+    { id: 'fal-ai/nano-banana-2', label: 'Nano Banana 2', provider: 'fal' },
+    { id: 'ideogram-v3', label: 'Ideogram', provider: 'ideogram' },
+    { id: 'fal-ai/flux-pro/kontext', label: 'Flux Kontext', provider: 'fal' },
+    { id: 'fal-ai/flux-pro/v1.1', label: 'Flux Pro', provider: 'fal' },
+  ] as const;
+
+  function mediaProviderForModel(model: string): MediaProvider {
+    return MEDIA_MODELS.find((item) => item.id === model)?.provider ?? mediaProvider;
+  }
+
   function chatModelForProvider(provider: ChatProvider): string {
     if (provider === 'openai') return openai.model;
     if (provider === 'lmstudio') return local.model;
@@ -85,7 +99,7 @@
     return {
       chatProvider,
       imageProvider,
-      mediaProvider,
+      mediaProvider: mediaProviderForModel(mediaModel),
       chatConfig: {
         provider: chatProvider,
         model: chatModelForProvider(chatProvider),
@@ -95,7 +109,7 @@
         model: imageModelForProvider(imageProvider),
       },
       mediaConfig: {
-        provider: mediaProvider,
+        provider: mediaProviderForModel(mediaModel),
         model: mediaModel,
       },
       openai: { key: openai.key, model: openai.model },
@@ -131,8 +145,9 @@
     imageProvider = loadedImageProvider === 'openai' || loadedImageProvider === 'gemini' || loadedImageProvider === 'ideogram'
       ? loadedImageProvider
       : 'openai';
-    mediaProvider = loadedMediaProvider === 'fal' ? 'fal' : 'fal';
+    mediaProvider = loadedMediaProvider === 'openai' || loadedMediaProvider === 'fal' || loadedMediaProvider === 'ideogram' ? loadedMediaProvider : 'fal';
     mediaModel = data.mediaConfig?.model || data.mediaModel || 'fal-ai/nano-banana';
+    mediaProvider = mediaProviderForModel(mediaModel);
 
     openai.key = data.openai?.key ?? '';
     openai.model = chatProvider === 'openai'
@@ -325,17 +340,17 @@
         <label class="field">
           <span class="field-label">Media Provider</span>
           <select class="input select-input" bind:value={mediaProvider}>
+            <option value="openai">OpenAI</option>
             <option value="fal">FAL</option>
+            <option value="ideogram">Ideogram</option>
           </select>
         </label>
         <label class="field">
           <span class="field-label">Media Model</span>
           <select class="input select-input" bind:value={mediaModel}>
-            <option value="fal-ai/nano-banana">Nano Banana</option>
-            <option value="fal-ai/nano-banana-pro">Nano Banana Pro</option>
-            <option value="fal-ai/nano-banana-2">Nano Banana 2</option>
-            <option value="fal-ai/flux-pro/kontext">Flux Kontext</option>
-            <option value="fal-ai/flux-pro/v1.1">Flux Pro</option>
+            {#each MEDIA_MODELS as model}
+              <option value={model.id}>{model.label}</option>
+            {/each}
           </select>
         </label>
       </div>
@@ -477,7 +492,7 @@
         <div class="provider-badge fal-badge">FAL</div>
         {@render statusBadge(falStatus)}
       </div>
-      <p class="card-note">Experimental only. Active image providers are OpenAI, Gemini, and Ideogram.</p>
+      <p class="card-note">Experimental only. Media models include OpenAI GPT Image 2, Nano Banana Pro, and Ideogram.</p>
 
       <div class="fields" style="grid-template-columns: 1fr;">
         <label class="field">

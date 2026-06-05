@@ -2,7 +2,7 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { getCharacterReferenceDataUrl } from '$lib/server/characterRegistry';
 import { readSettings } from '$lib/server/settings';
-import { generateFalImage, resolveFalMediaModel } from '$lib/server/mediaProviders/fal';
+import { generateMediaImage, logAvailableMediaModels, resolveMediaModel } from '$lib/server/mediaProviders/registry';
 import type { GeneratedImage, ImageSize } from '$lib/server/imageProviders/types';
 
 const VALID_SIZES = ['1024x1024', '1024x1536', '1536x1024', '1792x1024', '1024x1792'] as const;
@@ -69,8 +69,9 @@ export const POST: RequestHandler = async ({ request }) => {
 
   const settings = await readSettings();
   const requestModel = (body.model || body.selectedModel || '').replace(/\s+edit$/i, '').trim();
-  const mediaProvider = settings.mediaConfig.provider;
-  const mediaModel = resolveFalMediaModel(requestModel || settings.mediaConfig.model || normalizeSelectedModel(body));
+  logAvailableMediaModels();
+  const mediaModel = resolveMediaModel(requestModel || settings.mediaConfig.model || normalizeSelectedModel(body));
+  const mediaProvider = mediaModel.provider;
 
   console.log('[api/generate] received provider/model', {
     provider: body.provider ?? null,
@@ -80,7 +81,7 @@ export const POST: RequestHandler = async ({ request }) => {
   console.log('[api/generate] settings mediaConfig', settings.mediaConfig);
   console.log('[api/generate] media priority', requestModel ? 'request.model' : 'settings.mediaConfig');
   console.log('[MEDIA_PROVIDER]', mediaProvider);
-  console.log('[MEDIA_MODEL]', mediaModel);
+  console.log('[MEDIA_MODEL]', mediaModel.id);
   console.log('[REQUEST IMAGE PROVIDER]', body.provider ?? '(none)');
   console.log('[REQUEST IMAGE MODEL]', body.model ?? body.selectedModel ?? '(none)');
 
@@ -93,7 +94,7 @@ export const POST: RequestHandler = async ({ request }) => {
 
   console.log('[api/generate]', {
     mediaProvider,
-    mediaModel,
+    mediaModel: mediaModel.id,
     size,
     editMode,
     refImages: refImages.length,
@@ -101,14 +102,15 @@ export const POST: RequestHandler = async ({ request }) => {
     promptLength: prompt.length,
   });
 
-  if (mediaProvider !== 'fal') throw error(400, `Unknown media provider: ${mediaProvider}`);
-  const images: GeneratedImage[] = await generateFalImage({
+  const result = await generateMediaImage({
     prompt,
     size,
-    model: mediaModel,
+    model: mediaModel.apiModel,
+    requestedModel: mediaModel.id,
     refImages,
     editMode,
   });
+  const images: GeneratedImage[] = result.images;
 
   return json({ images });
 };

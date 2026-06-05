@@ -531,7 +531,7 @@
   // ============================================================
   // AI config — sessionStore で一元管理
   // ============================================================
-  type LabImageProvider = 'fal';
+  type LabImageProvider = 'openai' | 'fal' | 'ideogram';
   type LabImageModelId = string;
   type LabImageModelOption = { id: LabImageModelId; label: string; provider: LabImageProvider; apiModel: string };
   type LabGenerationMode = 'text-to-image' | 'image-to-image' | 'manga-continue' | 'character-sheet' | 'expression-sheet';
@@ -545,27 +545,32 @@
   ];
 
   const LAB_IMAGE_PROVIDERS: { id: LabImageProvider; label: string }[] = [
+    { id: 'openai', label: 'OpenAI' },
     { id: 'fal', label: 'FAL' },
+    { id: 'ideogram', label: 'Ideogram' },
   ];
 
   const DEFAULT_LAB_IMAGE_MODELS: LabImageModelOption[] = [
+    { id: 'gpt-image-2', label: 'OpenAI GPT Image 2', provider: 'openai', apiModel: 'gpt-image-2' },
     { id: 'fal-ai/nano-banana', label: 'Nano Banana', provider: 'fal', apiModel: 'fal-ai/nano-banana' },
     { id: 'fal-ai/nano-banana-pro', label: 'Nano Banana Pro', provider: 'fal', apiModel: 'fal-ai/nano-banana-pro' },
     { id: 'fal-ai/nano-banana-2', label: 'Nano Banana 2', provider: 'fal', apiModel: 'fal-ai/nano-banana-2' },
+    { id: 'ideogram-v3', label: 'Ideogram', provider: 'ideogram', apiModel: 'ideogram-v3' },
     { id: 'fal-ai/flux-pro/kontext', label: 'Flux Kontext', provider: 'fal', apiModel: 'fal-ai/flux-pro/kontext' },
     { id: 'fal-ai/flux-pro/v1.1', label: 'Flux Pro', provider: 'fal', apiModel: 'fal-ai/flux-pro/v1.1' },
   ];
   let labImageModels = $state<LabImageModelOption[]>(DEFAULT_LAB_IMAGE_MODELS);
 
   function normalizeLabImageProvider(raw: string | null): LabImageProvider {
+    if (raw === 'openai' || raw === 'fal' || raw === 'ideogram') return raw;
     return 'fal';
   }
 
   function normalizeLabImageModel(raw: string | null): LabImageModelId {
     if (labImageModels.some((model) => model.id === raw)) return raw as LabImageModelId;
-    if (raw === 'openai/GPT Image 2' || raw === 'openai/GPT Image 2 Edit' || raw === 'gpt-image-2') return 'fal-ai/nano-banana';
+    if (raw === 'openai/GPT Image 2' || raw === 'openai/GPT Image 2 Edit' || raw === 'gpt-image-2') return 'gpt-image-2';
     if (raw?.includes('nano-banana')) return 'fal-ai/nano-banana';
-    if (raw?.toLowerCase().includes('ideogram')) return 'fal-ai/nano-banana';
+    if (raw?.toLowerCase().includes('ideogram')) return 'ideogram-v3';
     return 'fal-ai/nano-banana';
   }
 

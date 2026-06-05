@@ -10,7 +10,7 @@
   const OPENAI_IMAGE_SIZES: OpenAIImageSize[] = ['1024x1024', '1024x1536', '1536x1024'];
 
   let size          = $state<ImageSize>('1024x1024');
-  let imageProvider = $state<'fal'>('fal');
+  let imageProvider = $state<'openai' | 'fal' | 'ideogram'>('fal');
   let imageModel    = $state('fal-ai/nano-banana');
   let imageSize     = $state<OpenAIImageSize>('1024x1024');
   let generating    = $state(false);
@@ -308,21 +308,25 @@ ${lines.map(line => `  - ${line}`).join('\n')}
   let refPanelOpen = $state(true);
 
   // ── Model / media-type configuration ────────────────────
-  type StudioProvider = 'fal';
+  type StudioProvider = 'openai' | 'fal' | 'ideogram';
   type StudioProviderChoice = StudioProvider;
   type StudioModelId = string;
   type StudioModelOption = { id: StudioModelId; label: string; provider: StudioProvider; edit: boolean; apiModel: string };
   const DEFAULT_STUDIO_MODELS: StudioModelOption[] = [
+    { id: 'gpt-image-2', label: 'OpenAI GPT Image 2', provider: 'openai', edit: false, apiModel: 'gpt-image-2' },
     { id: 'fal-ai/nano-banana', label: 'Nano Banana', provider: 'fal', edit: false, apiModel: 'fal-ai/nano-banana' },
     { id: 'fal-ai/nano-banana-pro', label: 'Nano Banana Pro', provider: 'fal', edit: false, apiModel: 'fal-ai/nano-banana-pro' },
     { id: 'fal-ai/nano-banana-2', label: 'Nano Banana 2', provider: 'fal', edit: false, apiModel: 'fal-ai/nano-banana-2' },
+    { id: 'ideogram-v3', label: 'Ideogram', provider: 'ideogram', edit: false, apiModel: 'ideogram-v3' },
     { id: 'fal-ai/flux-pro/kontext', label: 'Flux Kontext', provider: 'fal', edit: false, apiModel: 'fal-ai/flux-pro/kontext' },
     { id: 'fal-ai/flux-pro/v1.1', label: 'Flux Pro', provider: 'fal', edit: false, apiModel: 'fal-ai/flux-pro/v1.1' },
   ];
   let studioModels = $state<StudioModelOption[]>(DEFAULT_STUDIO_MODELS);
 
   const STUDIO_PROVIDER_CHOICES: { id: StudioProviderChoice; label: string }[] = [
+    { id: 'openai', label: 'OpenAI' },
     { id: 'fal', label: 'FAL' },
+    { id: 'ideogram', label: 'Ideogram' },
   ];
 
   const VIDEO_MODELS = [
@@ -335,9 +339,9 @@ ${lines.map(line => `  - ${line}`).join('\n')}
   const _ls = (k: string) => (typeof localStorage !== 'undefined' ? localStorage.getItem(k) : null);
   function normalizeStudioModelId(raw: string | null): StudioModelId {
     if (studioModels.some(m => m.id === raw)) return raw as StudioModelId;
-    if (raw === 'gpt-image-2' || raw === 'openai/GPT Image 2' || raw === 'openai/GPT Image 2 Edit') return 'fal-ai/nano-banana';
+    if (raw === 'gpt-image-2' || raw === 'openai/GPT Image 2' || raw === 'openai/GPT Image 2 Edit') return 'gpt-image-2';
     if (raw === 'nanobanana2' || raw?.includes('nano-banana') || raw?.includes('flash-image')) return 'fal-ai/nano-banana';
-    if (raw?.toLowerCase().includes('ideogram')) return 'fal-ai/nano-banana';
+    if (raw?.toLowerCase().includes('ideogram')) return 'ideogram-v3';
     return 'fal-ai/nano-banana';
   }
 
@@ -391,13 +395,14 @@ ${lines.map(line => `  - ${line}`).join('\n')}
       if (!res.ok) return;
       const settings = await res.json();
       const image = settings?.image ?? {};
-      imageProvider = 'fal';
       const loadedImageModel = settings?.mediaConfig?.model ?? settings?.mediaModel ?? image.model;
       imageModel = typeof loadedImageModel === 'string' && loadedImageModel.trim() ? loadedImageModel : 'fal-ai/nano-banana';
       imageSize = normalizeOpenAIImageSize(image.size);
       size = imageSize;
       selectedStudioProviderChoice = imageProvider;
       selectedStudioModel = normalizeStudioModelId(imageModel);
+      selectedStudioProviderChoice = providerChoiceForModel(selectedStudioModel);
+      imageProvider = selectedStudioProviderChoice;
     } catch (error) {
       console.warn('[studio] image settings load failed:', error);
     }

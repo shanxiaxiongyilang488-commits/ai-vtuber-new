@@ -33,18 +33,19 @@ async function writeUsage(usage: MediaUsageState): Promise<void> {
 export async function recordImageGenerationUsage(input: {
   provider: string;
   model: string;
-  estimatedCost: number;
+  estimatedCost: number | null;
 }): Promise<MediaUsageState> {
   const current = await readUsage();
+  const cost = typeof input.estimatedCost === 'number' ? input.estimatedCost : 0;
   const next = {
     imageGenerationCount: current.imageGenerationCount + 1,
-    estimatedImageCostTotal: Number((current.estimatedImageCostTotal + input.estimatedCost).toFixed(6)),
+    estimatedImageCostTotal: Number((current.estimatedImageCostTotal + cost).toFixed(6)),
   };
   await writeUsage(next);
   console.log('[IMAGE_COST_ESTIMATE]');
   console.log('provider:', input.provider);
   console.log('model:', input.model);
-  console.log('estimated_cost:', `$${input.estimatedCost.toFixed(4)}`);
+  console.log('estimated_cost:', typeof input.estimatedCost === 'number' ? `$${input.estimatedCost.toFixed(4)}` : 'unknown');
   console.log('cumulative_generations:', next.imageGenerationCount);
   console.log('estimated_cost_total:', `$${next.estimatedImageCostTotal.toFixed(4)}`);
   return next;

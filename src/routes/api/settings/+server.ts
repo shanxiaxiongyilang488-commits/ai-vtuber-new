@@ -1,11 +1,13 @@
 import { json, type RequestHandler } from '@sveltejs/kit';
 import { readSettings, writeSettings } from '$lib/server/settings';
+import { AVAILABLE_MEDIA_MODELS, logAvailableMediaModels } from '$lib/server/mediaProviders/registry';
 
 export const GET: RequestHandler = async () => {
   const settings = await readSettings();
+  logAvailableMediaModels();
   console.log('[MEDIA_PROVIDER]', settings.mediaConfig.provider);
   console.log('[MEDIA_MODEL]', settings.mediaConfig.model);
-  return json(settings);
+  return json({ ...settings, availableMediaModels: AVAILABLE_MEDIA_MODELS });
 };
 
 export const POST: RequestHandler = async ({ request }) => {

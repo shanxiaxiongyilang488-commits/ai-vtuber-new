@@ -29,7 +29,7 @@ export type ApiSettings = {
 
 export type ChatProvider = 'openai' | 'gemini' | 'lmstudio';
 export type ImageProvider = 'openai' | 'gemini' | 'ideogram';
-export type MediaProvider = 'fal';
+export type MediaProvider = 'openai' | 'fal' | 'ideogram';
 export type ChatConfig = {
   provider: ChatProvider;
   model: string;
@@ -160,6 +160,7 @@ function normalizeImageProvider(value: unknown): ImageProvider {
 function normalizeMediaProvider(value: unknown): MediaProvider {
   const provider = stringValue(value).trim().toLowerCase();
   if (provider === 'fal' || provider === 'fal-ai') return 'fal';
+  if (provider === 'openai' || provider === 'ideogram') return provider;
   return DEFAULT_SETTINGS.mediaProvider;
 }
 
@@ -171,6 +172,8 @@ function defaultImageModelForProvider(provider: ImageProvider): string {
 
 function defaultMediaModelForProvider(provider: MediaProvider): string {
   if (provider === 'fal') return 'fal-ai/nano-banana';
+  if (provider === 'openai') return 'gpt-image-2';
+  if (provider === 'ideogram') return 'ideogram-v3';
   return DEFAULT_SETTINGS.mediaConfig.model;
 }
 
