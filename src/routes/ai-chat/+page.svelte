@@ -123,6 +123,7 @@ async function sendMessage() {
 // 音声（先）
 if (character.voiceEngine !== 'none' && reply) {
   const voice = createVoiceEngine({
+    name: character.name,
     voiceEngine: character.voiceEngine as any,
     voice: character.voice,
     voiceId: character.voiceId,

@@ -142,6 +142,6 @@ function getDefaultSettingsWithLocalHost(): MobileChatSettings {
 	return {
 		...defaultMobileChatSettings,
 		voicevoxEndpoint: `http://${host}:50021`,
-		irodoriEndpoint: `http://${host}:50110`
+		irodoriEndpoint: `http://${host}:8088`
 	};
 }

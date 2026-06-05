@@ -1,4 +1,5 @@
 import { generateReply } from '$lib/aiRouter';
+import { readSettings } from '$lib/server/settings';
 import type { Character } from '$lib/types/character';
 
 const CLASSIFIER_SYSTEM_PROMPT = [
@@ -7,12 +8,15 @@ const CLASSIFIER_SYSTEM_PROMPT = [
   '説明や補足は不要です。',
 ].join('\n');
 
-function getClassifierModel(): string {
-  return process.env.GEMINI_API_KEY ? 'gemini-2.5-flash' : 'gpt-4o-mini';
+async function getClassifierModel(): Promise<string> {
+  const settings = await readSettings();
+  return settings.gemini.key ? settings.gemini.model || 'gemini-2.5-flash' : settings.openai.model || 'gpt-4o-mini';
 }
 
-function getClassifierEngine(): 'openai' | 'gemini' {
-  return process.env.GEMINI_API_KEY ? 'gemini' : 'openai';
+async function getClassifierEngine(): Promise<'openai' | 'gemini'> {
+  const settings = await readSettings();
+  console.log(`[${settings.gemini.key ? 'GEMINI' : 'OPENAI'} KEY SOURCE] settings.json`);
+  return settings.gemini.key ? 'gemini' : 'openai';
 }
 
 const classifierCharacter: Character = {
@@ -31,8 +35,8 @@ export async function shouldRemember(userInput: string): Promise<boolean> {
 
   try {
     const result = await generateReply({
-      engine: getClassifierEngine(),
-      model: getClassifierModel(),
+      engine: await getClassifierEngine(),
+      model: await getClassifierModel(),
       character: classifierCharacter,
       prompt: `発言:\n「${text}」`,
     });

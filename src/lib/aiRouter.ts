@@ -1,4 +1,5 @@
 import type { Character } from "$lib/types/character";
+import { getProviderKey } from "$lib/server/settings";
 
 type Engine = "openai" | "gemini" | "claude" | "ollama" | "lmstudio" | "colab-ollama";
 type Provider = "openai" | "gemini" | "anthropic";
@@ -36,13 +37,8 @@ function detectProvider(model: string): Provider {
   return "openai";
 }
 
-function getApiKey(provider: Provider): string {
-  const apiKey =
-    provider === "gemini"
-      ? process.env.GEMINI_API_KEY
-      : provider === "anthropic"
-        ? process.env.ANTHROPIC_API_KEY
-        : process.env.OPENAI_API_KEY;
+async function getApiKey(provider: Provider): Promise<string> {
+  const apiKey = await getProviderKey(provider);
 
   if (!apiKey) {
     throw `${provider} API key is not configured`;
@@ -129,7 +125,7 @@ async function callAnthropic(apiKey: string, model: string, messages: Message[])
 export async function generateText({ model = "gpt-4o-mini", messages }: GenerateTextParams): Promise<string> {
   try {
     const provider = detectProvider(model);
-    const apiKey = getApiKey(provider);
+    const apiKey = await getApiKey(provider);
 
     if (provider === "gemini") {
       return await callGemini(apiKey, model, messages);

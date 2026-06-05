@@ -1,17 +1,18 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import OpenAI from 'openai';
-import { env } from '$env/dynamic/private';
+import { getProviderKey } from '$lib/server/settings';
 
 export const POST: RequestHandler = async ({ request }) => {
   const { basePrompt, refDescription, locale = 'ja' } = await request.json();
 
-  if (!env.OPENAI_API_KEY) {
-    throw error(500, 'OPENAI_API_KEY 未設定');
+  const apiKey = await getProviderKey('openai');
+  if (!apiKey) {
+    throw error(500, 'OpenAI API key 未設定');
   }
 
   const openai = new OpenAI({
-    apiKey: env.OPENAI_API_KEY
+    apiKey
   });
 
   const systemPrompt = `

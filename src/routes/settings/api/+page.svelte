@@ -1,10 +1,12 @@
-<script lang="ts">
+﻿<script lang="ts">
   import { onMount } from 'svelte';
   import { PROVIDER_MODELS, DEFAULT_MODELS } from '$lib/config/models';
 
-  // ── Types ──────────────────────────────────────────────────────────────────
+  // 笏笏 Types 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
   type ConnectionStatus = 'not_tested' | 'connected' | 'failed' | 'quota' | 'invalid_key' | 'testing';
   type ServerStatus = 'OK' | 'Missing API Key' | 'Unauthorized' | 'Quota' | 'Error';
+  type ChatProvider = 'openai' | 'gemini' | 'lmstudio';
+  type ImageProvider = 'openai' | 'gemini' | 'ideogram';
 
   function mapStatus(s: ServerStatus): Exclude<ConnectionStatus, 'not_tested' | 'testing'> {
     if (s === 'OK') return 'connected';
@@ -20,7 +22,7 @@
     status: ConnectionStatus;
   }
 
-  // ── State ──────────────────────────────────────────────────────────────────
+  // 笏笏 State 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
   let openai = $state<ApiSection>({
     key: '',
     model: DEFAULT_MODELS.openai,
@@ -47,55 +49,161 @@
   });
 
   let falKey = $state('');
+  let falStatus = $state<ConnectionStatus>('not_tested');
+  let ideogram = $state<ApiSection>({
+    key: '',
+    model: 'ideogram-v3',
+    status: 'not_tested',
+  });
+  let elevenlabs = $state<ApiSection>({
+    key: '',
+    model: '',
+    status: 'not_tested',
+  });
 
   let saveFlash = $state<Record<string, boolean>>({});
+  let chatProvider = $state<ChatProvider>('gemini');
+  let imageProvider = $state<ImageProvider>('openai');
+  let availableGeminiImageModels = $state<{ id: string; label: string; apiModel: string }[]>([]);
 
-  // ── LocalStorage helpers ───────────────────────────────────────────────────
-  function load() {
-    const g = (k: string) => localStorage.getItem(k) ?? '';
-
-    openai.key   = g('api_openai_key');
-    openai.model = g('api_openai_model') || DEFAULT_MODELS.openai;
-
-    claude.key   = g('api_claude_key');
-    claude.model = g('api_claude_model') || DEFAULT_MODELS.claude;
-
-    gemini.key   = g('api_gemini_key');
-    gemini.model = g('api_gemini_model') || DEFAULT_MODELS.gemini;
-
-    local.baseUrl = g('api_local_url') || 'http://localhost:1234';
-    local.model   = g('api_local_model') || 'qwen/qwen3-4b';
-
-    falKey = g('api_fal_key');
+  function chatModelForProvider(provider: ChatProvider): string {
+    if (provider === 'openai') return openai.model;
+    if (provider === 'lmstudio') return local.model;
+    return gemini.model;
   }
 
-  function saveOpenai() {
-    localStorage.setItem('api_openai_key',   openai.key);
-    localStorage.setItem('api_openai_model', openai.model);
+  function imageModelForProvider(provider: ImageProvider): string {
+    if (provider === 'gemini') return availableGeminiImageModels[0]?.apiModel ?? 'nano-banana';
+    if (provider === 'ideogram') return 'ideogram-v3';
+    return 'gpt-image-2';
+  }
+
+  // 笏笏 LocalStorage helpers 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
+  function settingsPayload() {
+    return {
+      chatProvider,
+      imageProvider,
+      chatConfig: {
+        provider: chatProvider,
+        model: chatModelForProvider(chatProvider),
+      },
+      imageConfig: {
+        provider: imageProvider,
+        model: imageModelForProvider(imageProvider),
+      },
+      openai: { key: openai.key, model: openai.model },
+      gemini: { key: gemini.key, model: gemini.model },
+      anthropic: { key: claude.key, model: claude.model },
+      fal: { key: falKey },
+      ideogram: { key: ideogram.key },
+      elevenlabs: { key: elevenlabs.key },
+      local: { baseUrl: local.baseUrl ?? '', model: local.model },
+      image: { provider: imageProvider, model: imageModelForProvider(imageProvider) },
+    };
+  }
+
+  async function saveSettings() {
+    const res = await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settingsPayload()),
+    });
+    if (!res.ok) throw new Error('settings save failed');
+  }
+
+  async function load() {
+    const res = await fetch('/api/settings');
+    if (!res.ok) return;
+    const data = await res.json();
+    availableGeminiImageModels = Array.isArray(data.availableGeminiImageModels)
+      ? data.availableGeminiImageModels
+          .map((model: unknown) => {
+            const item = model && typeof model === 'object' ? model as Record<string, unknown> : {};
+            const id = typeof item.id === 'string' ? item.id : '';
+            const label = typeof item.label === 'string' ? item.label : id;
+            const apiModel = typeof item.apiModel === 'string' ? item.apiModel : id;
+            return id && apiModel ? { id, label, apiModel } : null;
+          })
+          .filter((model: { id: string; label: string; apiModel: string } | null): model is { id: string; label: string; apiModel: string } => Boolean(model))
+      : [];
+    const loadedChatProvider = data.chatConfig?.provider ?? data.chatProvider;
+    const loadedImageProvider = data.imageConfig?.provider ?? data.imageProvider ?? data.image?.provider;
+    chatProvider = loadedChatProvider === 'openai' || loadedChatProvider === 'gemini' || loadedChatProvider === 'lmstudio'
+      ? loadedChatProvider
+      : 'gemini';
+    imageProvider = loadedImageProvider === 'openai' || loadedImageProvider === 'gemini' || loadedImageProvider === 'ideogram'
+      ? loadedImageProvider
+      : 'openai';
+
+    openai.key = data.openai?.key ?? '';
+    openai.model = chatProvider === 'openai'
+      ? (data.chatConfig?.model || data.openai?.model || DEFAULT_MODELS.openai)
+      : (data.openai?.model || DEFAULT_MODELS.openai);
+    {
+      const apiKey = openai.key;
+      console.log('[OPENAI KEY PREFIX]', apiKey?.slice(0,12));
+    }
+
+    claude.key = data.anthropic?.key ?? '';
+    claude.model = data.anthropic?.model || DEFAULT_MODELS.claude;
+
+    gemini.key = data.gemini?.key ?? '';
+    gemini.model = chatProvider === 'gemini'
+      ? (data.chatConfig?.model || data.gemini?.model || DEFAULT_MODELS.gemini)
+      : (data.gemini?.model || DEFAULT_MODELS.gemini);
+
+    local.baseUrl = data.local?.baseUrl || 'http://localhost:1234';
+    local.model = chatProvider === 'lmstudio'
+      ? (data.chatConfig?.model || data.local?.model || 'qwen/qwen3-4b')
+      : (data.local?.model || 'qwen/qwen3-4b');
+
+    falKey = data.fal?.key ?? '';
+    ideogram.key = data.ideogram?.key ?? '';
+    elevenlabs.key = data.elevenlabs?.key ?? '';
+  }
+
+  async function saveProviders() {
+    await saveSettings();
+    flashSave('providers');
+  }
+
+  async function saveOpenai() {
+    await saveSettings();
+    {
+      const apiKey = openai.key;
+      console.log('[OPENAI KEY PREFIX]', apiKey?.slice(0,12));
+    }
     flashSave('openai');
   }
 
-  function saveClaude() {
-    localStorage.setItem('api_claude_key',   claude.key);
-    localStorage.setItem('api_claude_model', claude.model);
+  async function saveClaude() {
+    await saveSettings();
     flashSave('claude');
   }
 
-  function saveGemini() {
-    localStorage.setItem('api_gemini_key',   gemini.key);
-    localStorage.setItem('api_gemini_model', gemini.model);
+  async function saveGemini() {
+    await saveSettings();
     flashSave('gemini');
   }
 
-  function saveLocal() {
-    localStorage.setItem('api_local_url',   local.baseUrl ?? '');
-    localStorage.setItem('api_local_model', local.model);
+  async function saveLocal() {
+    await saveSettings();
     flashSave('local');
   }
 
-  function saveFal() {
-    localStorage.setItem('api_fal_key', falKey);
+  async function saveFal() {
+    await saveSettings();
     flashSave('fal');
+  }
+
+  async function saveIdeogram() {
+    await saveSettings();
+    flashSave('ideogram');
+  }
+
+  async function saveElevenLabs() {
+    await saveSettings();
+    flashSave('elevenlabs');
   }
 
   function flashSave(id: string) {
@@ -103,7 +211,7 @@
     setTimeout(() => { saveFlash[id] = false; }, 1800);
   }
 
-  // ── Connection tests ───────────────────────────────────────────────────────
+  // 笏笏 Connection tests 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
   async function testOpenai() {
     openai.status = 'testing';
     try {
@@ -140,6 +248,18 @@
     }
   }
 
+  async function testElevenLabs() {
+    elevenlabs.status = 'testing';
+    try {
+      const res = await fetch('/api/check-api-status');
+      if (!res.ok) throw new Error();
+      const data: Record<string, ServerStatus> = await res.json();
+      elevenlabs.status = mapStatus(data.elevenlabs);
+    } catch {
+      elevenlabs.status = 'failed';
+    }
+  }
+
   async function testLocal() {
     local.status = 'testing';
     const url = (local.baseUrl ?? '').trim();
@@ -152,11 +272,11 @@
     }
   }
 
-  // ── Lifecycle ──────────────────────────────────────────────────────────────
-  onMount(load);
+  // 笏笏 Lifecycle 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
+  onMount(() => { void load(); });
 </script>
 
-<!-- ── Snippets ───────────────────────────────────────────────────────────── -->
+<!-- 笏笏 Snippets 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏 -->
 {#snippet statusBadge(status: ConnectionStatus)}
   {#if status === 'not_tested'}
     <span class="status not-tested">Not Tested</span>
@@ -175,12 +295,12 @@
   {/if}
 {/snippet}
 
-<!-- ── Markup ────────────────────────────────────────────────────────────── -->
+<!-- 笏笏 Markup 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏 -->
 <div class="page">
   <!-- Header -->
   <header class="header">
     <div class="header-inner">
-      <a href="/lab" class="back-link">← Back</a>
+      <a href="/lab" class="back-link">竊・Back</a>
       <div>
         <p class="header-label">CONTROL PANEL</p>
         <h1 class="header-title">API Settings</h1>
@@ -189,7 +309,38 @@
   </header>
 
   <main class="main">
-    <!-- ── OpenAI ─────────────────────────────────────────────────────────── -->
+    <section class="card">
+      <div class="card-header">
+        <div class="provider-badge local-badge">Providers</div>
+      </div>
+
+      <div class="fields">
+        <label class="field">
+          <span class="field-label">Chat Provider</span>
+          <select class="input select-input" bind:value={chatProvider}>
+            <option value="openai">OpenAI</option>
+            <option value="gemini">Gemini</option>
+            <option value="lmstudio">LM Studio</option>
+          </select>
+        </label>
+        <label class="field">
+          <span class="field-label">Image Provider</span>
+          <select class="input select-input" bind:value={imageProvider}>
+            <option value="openai">OpenAI (GPT Image 2)</option>
+            <option value="gemini">Gemini (Nano Banana)</option>
+            <option value="ideogram">Ideogram</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="actions">
+        <button class="btn btn-save" onclick={saveProviders}>
+          {saveFlash['providers'] ? 'Saved' : 'Save'}
+        </button>
+      </div>
+    </section>
+
+    <!-- 笏笏 OpenAI 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏 -->
     <section class="card">
       <div class="card-header">
         <div class="provider-badge openai-badge">OpenAI</div>
@@ -218,25 +369,25 @@
 
       <div class="actions">
         <button class="btn btn-save" onclick={saveOpenai}>
-          {saveFlash['openai'] ? 'Saved ✓' : 'Save'}
+          {saveFlash['openai'] ? 'Saved' : 'Save'}
         </button>
         <button
           class="btn btn-test"
           onclick={testOpenai}
           disabled={openai.status === 'testing'}
         >
-          {openai.status === 'testing' ? 'Testing…' : 'Test Connection'}
+          {openai.status === 'testing' ? 'Testing窶ｦ' : 'Test Connection'}
         </button>
       </div>
     </section>
 
-    <!-- ── Claude ─────────────────────────────────────────────────────────── -->
+    <!-- 笏笏 Claude 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏 -->
     <section class="card">
       <div class="card-header">
         <div class="provider-badge claude-badge">Claude</div>
         {@render statusBadge(claude.status)}
       </div>
-      <p class="card-note dev-note">⚠ 開発者専用 — 通常利用は Gemini / OpenAI を推奨</p>
+      <p class="card-note dev-note">笞 髢狗匱閠・ｰら畑 窶・騾壼ｸｸ蛻ｩ逕ｨ縺ｯ Gemini / OpenAI 繧呈耳螂ｨ</p>
 
       <div class="fields">
         <label class="field">
@@ -260,19 +411,19 @@
 
       <div class="actions">
         <button class="btn btn-save" onclick={saveClaude}>
-          {saveFlash['claude'] ? 'Saved ✓' : 'Save'}
+          {saveFlash['claude'] ? 'Saved' : 'Save'}
         </button>
         <button
           class="btn btn-test"
           onclick={testClaude}
           disabled={claude.status === 'testing'}
         >
-          {claude.status === 'testing' ? 'Testing…' : 'Test Connection'}
+          {claude.status === 'testing' ? 'Testing窶ｦ' : 'Test Connection'}
         </button>
       </div>
     </section>
 
-    <!-- ── Gemini ─────────────────────────────────────────────────────────── -->
+    <!-- 笏笏 Gemini 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏 -->
     <section class="card">
       <div class="card-header">
         <div class="provider-badge gemini-badge">Gemini</div>
@@ -301,24 +452,25 @@
 
       <div class="actions">
         <button class="btn btn-save" onclick={saveGemini}>
-          {saveFlash['gemini'] ? 'Saved ✓' : 'Save'}
+          {saveFlash['gemini'] ? 'Saved' : 'Save'}
         </button>
         <button
           class="btn btn-test"
           onclick={testGemini}
           disabled={gemini.status === 'testing'}
         >
-          {gemini.status === 'testing' ? 'Testing…' : 'Test Connection'}
+          {gemini.status === 'testing' ? 'Testing窶ｦ' : 'Test Connection'}
         </button>
       </div>
     </section>
 
-    <!-- ── FAL ──────────────────────────────────────────────────────────── -->
+    <!-- 笏笏 FAL 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏 -->
     <section class="card">
       <div class="card-header">
         <div class="provider-badge fal-badge">FAL</div>
+        {@render statusBadge(falStatus)}
       </div>
-      <p class="card-note">画像生成専用 — Flux Schnell（スタジオタブで使用）</p>
+      <p class="card-note">Experimental only. Active image providers are OpenAI, Gemini, and Ideogram.</p>
 
       <div class="fields" style="grid-template-columns: 1fr;">
         <label class="field">
@@ -334,12 +486,69 @@
 
       <div class="actions">
         <button class="btn btn-save" onclick={saveFal}>
-          {saveFlash['fal'] ? 'Saved ✓' : 'Save'}
+          {saveFlash['fal'] ? 'Saved' : 'Save'}
         </button>
       </div>
     </section>
 
-    <!-- ── Local AI ───────────────────────────────────────────────────────── -->
+    <section class="card">
+      <div class="card-header">
+        <div class="provider-badge ideogram-badge">Ideogram</div>
+        {@render statusBadge(ideogram.status)}
+      </div>
+
+      <div class="fields" style="grid-template-columns: 1fr;">
+        <label class="field">
+          <span class="field-label">API Key</span>
+          <input
+            type="password"
+            class="input"
+            placeholder="ideogram..."
+            bind:value={ideogram.key}
+          />
+        </label>
+      </div>
+
+      <div class="actions">
+        <button class="btn btn-save" onclick={saveIdeogram}>
+          {saveFlash['ideogram'] ? 'Saved' : 'Save'}
+        </button>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-header">
+        <div class="provider-badge elevenlabs-badge">ElevenLabs</div>
+        {@render statusBadge(elevenlabs.status)}
+      </div>
+
+      <div class="fields" style="grid-template-columns: 1fr;">
+        <label class="field">
+          <span class="field-label">API Key</span>
+          <input
+            type="password"
+            class="input"
+            placeholder="xi-..."
+            bind:value={elevenlabs.key}
+          />
+        </label>
+      </div>
+
+      <div class="actions">
+        <button class="btn btn-save" onclick={saveElevenLabs}>
+          {saveFlash['elevenlabs'] ? 'Saved' : 'Save'}
+        </button>
+        <button
+          class="btn btn-test"
+          onclick={testElevenLabs}
+          disabled={elevenlabs.status === 'testing'}
+        >
+          {elevenlabs.status === 'testing' ? 'Testing窶ｦ' : 'Test Connection'}
+        </button>
+      </div>
+    </section>
+
+    <!-- 笏笏 Local AI 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏 -->
     <section class="card">
       <div class="card-header">
         <div class="provider-badge local-badge">Local AI</div>
@@ -370,23 +579,23 @@
 
       <div class="actions">
         <button class="btn btn-save" onclick={saveLocal}>
-          {saveFlash['local'] ? 'Saved ✓' : 'Save'}
+          {saveFlash['local'] ? 'Saved' : 'Save'}
         </button>
         <button
           class="btn btn-test"
           onclick={testLocal}
           disabled={local.status === 'testing'}
         >
-          {local.status === 'testing' ? 'Testing…' : 'Test Connection'}
+          {local.status === 'testing' ? 'Testing窶ｦ' : 'Test Connection'}
         </button>
       </div>
     </section>
   </main>
 </div>
 
-<!-- ── Styles ─────────────────────────────────────────────────────────────── -->
+<!-- 笏笏 Styles 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏 -->
 <style>
-  /* ── Layout ── */
+  /* 笏笏 Layout 笏笏 */
   .page {
     min-height: 100vh;
     background: var(--bg, #0f1117);
@@ -394,7 +603,7 @@
     font-family: 'Segoe UI', 'Hiragino Sans', 'Noto Sans JP', system-ui, sans-serif;
   }
 
-  /* ── Header ── */
+  /* 笏笏 Header 笏笏 */
   .header {
     background: linear-gradient(135deg, #0f1117 0%, #1a1d27 100%);
     border-bottom: 1px solid #2a2d3e;
@@ -441,7 +650,7 @@
     margin: 0;
   }
 
-  /* ── Main ── */
+  /* 笏笏 Main 笏笏 */
   .main {
     max-width: 860px;
     margin: 0 auto;
@@ -451,7 +660,7 @@
     gap: 1.5rem;
   }
 
-  /* ── Card ── */
+  /* 笏笏 Card 笏笏 */
   .card {
     background: #1a1d27;
     border: 1px solid #2a2d3e;
@@ -476,7 +685,7 @@
   }
   .dev-note { color: #f59e0b; }
 
-  /* ── Provider badges ── */
+  /* 笏笏 Provider badges 笏笏 */
   .provider-badge {
     font-size: 0.75rem;
     font-weight: 700;
@@ -490,9 +699,11 @@
   .claude-badge { background: rgba(205,127,50,0.15);  color: #d97706; border: 1px solid rgba(205,127,50,0.3); }
   .gemini-badge { background: rgba(99,102,241,0.15);  color: #818cf8; border: 1px solid rgba(99,102,241,0.3); }
   .fal-badge    { background: rgba(168,85,247,0.15);  color: #c084fc; border: 1px solid rgba(168,85,247,0.3); }
+  .ideogram-badge { background: rgba(236,72,153,0.15); color: #f472b6; border: 1px solid rgba(236,72,153,0.3); }
+  .elevenlabs-badge { background: rgba(14,165,233,0.15); color: #38bdf8; border: 1px solid rgba(14,165,233,0.3); }
   .local-badge  { background: rgba(34,197,94,0.15);   color: #4ade80; border: 1px solid rgba(34,197,94,0.3);  }
 
-  /* ── Status badges ── */
+  /* 笏笏 Status badges 笏笏 */
   .status {
     font-size: 0.72rem;
     font-weight: 600;
@@ -511,7 +722,7 @@
   .quota       { background: rgba(234,179,8,0.15);   color: #facc15; border: 1px solid rgba(234,179,8,0.3);   }
   .invalid-key { background: rgba(251,146,60,0.15);  color: #fb923c; border: 1px solid rgba(251,146,60,0.3);  }
 
-  /* ── Dot pulse animation ── */
+  /* 笏笏 Dot pulse animation 笏笏 */
   .dot-pulse {
     width: 7px;
     height: 7px;
@@ -525,7 +736,7 @@
     50%       { opacity: 0.4; transform: scale(0.7); }
   }
 
-  /* ── Fields ── */
+  /* 笏笏 Fields 笏笏 */
   .fields {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -575,7 +786,7 @@
     box-shadow: 0 0 0 3px rgba(99,102,241,0.15);
   }
 
-  /* ── Action buttons ── */
+  /* 笏笏 Action buttons 笏笏 */
   .actions {
     display: flex;
     gap: 0.75rem;

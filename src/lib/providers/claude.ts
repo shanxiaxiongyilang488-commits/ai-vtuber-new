@@ -18,7 +18,7 @@ function claudeUserContent(userMessage: string, images: ChatImageInput[]) {
 }
 
 export async function chatClaude(input: ProviderChatInput & { apiKey?: string }): Promise<string> {
-  if (!input.apiKey) throw new Error('ANTHROPIC_API_KEY is not set');
+  if (!input.apiKey) throw new Error('Anthropic API key is not set');
 
   const images = input.images ?? [];
   const model = input.model || CLAUDE_DEFAULT_MODEL;

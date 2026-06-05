@@ -18,12 +18,13 @@ function playAudio(
 }
 
 export function createVoiceEngine(character: {
+  name?: string;
   voiceEngine: VoiceEngine;
   voice?: string;
   voiceId?: string;
   speakerId?: number;
 }) {
-  const { voiceEngine: engine, voice, voiceId, speakerId } = character;
+  const { name, voiceEngine: engine, voice, voiceId, speakerId } = character;
 
   return {
     async speak(
@@ -50,23 +51,24 @@ export function createVoiceEngine(character: {
         return;
       }
 
-      if (engine === 'colab-tts') {
+      if (engine === 'irodori-tts' || engine === 'colab-tts') {
         try {
           const res = await fetch('/api/speak', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               text,
-              provider: 'colab-tts',
+              provider: engine,
+              characterName: name,
               voice,
               voiceId: voiceId || ''
             })
           });
-          if (!res.ok) { console.error('Colab TTS failed:', res.status); return; }
+          if (!res.ok) { console.error('Irodori TTS failed:', res.status); return; }
           const url = URL.createObjectURL(await res.blob());
           await playAudio(url, onStart, onEnd);
         } catch (e) {
-          console.error('Colab TTS error:', e);
+          console.error('Irodori TTS error:', e);
         }
         return;
       }

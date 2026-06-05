@@ -1,5 +1,6 @@
 import { json, type RequestHandler } from '@sveltejs/kit';
 import OpenAI from 'openai';
+import { getProviderKey } from '$lib/server/settings';
 
 type Atmosphere = 'bright' | 'midnight' | 'news';
 
@@ -20,7 +21,11 @@ export const POST: RequestHandler = async ({ request }) => {
     const name2: string = characters?.[1]?.name ?? 'キャラB';
     const atmosphereDesc: string = ATMOSPHERE_DESC[(atmosphere as Atmosphere)] ?? ATMOSPHERE_DESC.bright;
 
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const apiKey = await getProviderKey('openai');
+    if (!apiKey) {
+      return json({ message: 'OpenAI API key is not configured' }, { status: 500 });
+    }
+    const openai = new OpenAI({ apiKey });
 
     const scriptPrompt = `あなたはラジオ台本作家です。以下の条件でラジオ台本を生成してください。
 

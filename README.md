@@ -29,6 +29,26 @@ npm run dev
 npm run dev -- --open
 ```
 
+## Irodori-TTS
+
+This app can proxy an OpenAI-compatible Irodori-TTS server through `/api/speak`.
+
+Expected server shape:
+
+```sh
+uv run python -m irodori_openai_tts --host 0.0.0.0 --port 8088
+```
+
+Set these in `.env`:
+
+```sh
+IRODORI_TTS_URL=http://localhost:8088
+IRODORI_TTS_MODEL=irodori-tts
+IRODORI_TTS_API_KEY=
+```
+
+Use `Irodori TTS` in the voice engine selector. The `voice` value is the reference voice ID exposed by the Irodori server, for example `sample` for `voices/sample.wav`; use `none` for text-only inference when the server allows it.
+
 ## Building
 
 To create a production version of your app:

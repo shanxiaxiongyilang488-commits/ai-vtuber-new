@@ -9,6 +9,7 @@ import { chatLMStudio, LM_STUDIO_DEFAULT_MODEL as PROVIDER_LM_STUDIO_DEFAULT_MOD
 import { chatOllama, OLLAMA_DEFAULT_MODEL } from '$lib/providers/ollama';
 import { chatOpenAI, OPENAI_DEFAULT_MODEL } from '$lib/providers/openai';
 import { extractReplyText, logEmptyReply } from '$lib/providers/types';
+import { getProviderKey, readSettings } from '$lib/server/settings';
 
 type Provider = 'openai' | 'gemini' | 'claude' | 'ollama' | 'lmstudio' | 'colab-ollama';
 const LM_STUDIO_BASE_URL = 'http://127.0.0.1:1234/v1';
@@ -17,7 +18,7 @@ const LM_STUDIO_DEFAULT_MODEL = 'qwen/qwen3-4b';
 const OLLAMA_TIMEOUT_MS = 120000;
 
 interface LabChatRequest {
-  provider: Provider;
+  provider?: Provider;
   model?: string;
   temperature?: number;
   max_tokens?: number;
@@ -53,8 +54,9 @@ async function parseRequest(request: Request): Promise<{ body: LabChatRequest; i
 
   if (ct.includes('multipart/form-data')) {
     const fd = await request.formData();
+    const providerValue = fd.get('provider');
     const body: LabChatRequest = {
-      provider:     (fd.get('provider') as Provider) ?? 'gemini',
+      provider:     typeof providerValue === 'string' && providerValue ? providerValue as Provider : undefined,
       model:        (fd.get('model') as string | null) ?? undefined,
       temperature:  Number(fd.get('temperature') ?? 0.7),
       max_tokens:   Number(fd.get('max_tokens') ?? 2048),
@@ -127,11 +129,15 @@ async function callOpenAI(
   model?:       string,
   images:       ImageInput[] = [],
 ): Promise<string> {
-  if (!env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY が未設定');
+  const apiKey = await getProviderKey('openai');
+  if (!apiKey) throw new Error('OpenAI API key が未設定');
+  const actualModel = model || 'gpt-4o-mini';
+  console.log('[OPENAI KEY PREFIX]', apiKey?.slice(0,12));
+  console.log('[OPENAI MODEL]', actualModel);
   const { default: OpenAI } = await import('openai');
-  const client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
+  const client = new OpenAI({ apiKey });
   const completion = await client.chat.completions.create({
-    model: model || 'gpt-4o-mini',
+    model: actualModel,
     messages: [
       { role: 'system', content: systemPrompt },
       { role: 'user',   content: openAIUserContent(userMessage, images) as any },
@@ -303,6 +309,8 @@ function claudeUserContent(userMessage: string, images: ImageInput[]) {
 // Main handler
 // ================================================================
 export const POST: RequestHandler = async ({ request }) => {
+  console.log('[LAB CHAT ENTRY]');
+
   let parsed: { body: LabChatRequest; images: ImageInput[]; enableMemoryByDefault: boolean };
   try {
     parsed = await parseRequest(request);
@@ -311,7 +319,12 @@ export const POST: RequestHandler = async ({ request }) => {
   }
 
   const { body, images, enableMemoryByDefault } = parsed;
-  const { provider, model, systemPrompt, userMessage } = body;
+  const settings = await readSettings();
+  const provider = body.provider ?? settings.chatConfig.provider;
+  const { model, systemPrompt, userMessage } = body;
+  const openaiApiKey = settings.openai.key;
+  const geminiApiKey = settings.gemini.key;
+  const anthropicApiKey = settings.anthropic.key;
   const temperature = Number.isFinite(body.temperature) ? body.temperature : 0.7;
   const maxTokens = Number.isFinite(body.max_tokens) ? body.max_tokens : 2048;
   const memory = body.memory ?? { enabled: enableMemoryByDefault };
@@ -337,6 +350,8 @@ export const POST: RequestHandler = async ({ request }) => {
     return memoryDebug ? { ...response, memory: memoryDebug } : response;
   };
 
+  console.log('[CHAT_PROVIDER]', provider);
+  console.log('[CHAT_MODEL]', model || (provider === settings.chatConfig.provider ? settings.chatConfig.model : '(default)'));
   console.log('[PROVIDER]', provider);
   console.log('[FINAL MODEL]', model || '(default)');
   console.log(`[lab-chat] provider=${provider} model=${model || '(default)'} images=${images.length}`);
@@ -345,10 +360,14 @@ export const POST: RequestHandler = async ({ request }) => {
   // OpenAI
   // ================================================================
   if (provider === 'openai') {
-    if (!env.OPENAI_API_KEY) throw error(500, 'OPENAI_API_KEY が未設定');
-    const actualModel = model || OPENAI_DEFAULT_MODEL;
+    if (!openaiApiKey) throw error(500, 'OpenAI API key が未設定');
+    const actualModel = model || (provider === settings.chatConfig.provider ? settings.chatConfig.model : settings.openai.model) || OPENAI_DEFAULT_MODEL;
+    const apiKey = openaiApiKey;
+    console.log('[OPENAI KEY SOURCE]', 'settings.json');
+    console.log('[OPENAI KEY PREFIX]', apiKey?.slice(0,12));
+    console.log('[OPENAI MODEL]', actualModel);
     const text = await chatOpenAI({
-      apiKey: env.OPENAI_API_KEY,
+      apiKey,
       systemPrompt: effectiveSystemPrompt,
       userMessage,
       model: actualModel,
@@ -367,7 +386,7 @@ export const POST: RequestHandler = async ({ request }) => {
       console.warn(`[lab-chat] ${provider} selected with ${images.length} image(s); local text endpoint will ignore images`);
     }
     try {
-      const actualModel = model || (provider === 'ollama' ? OLLAMA_DEFAULT_MODEL : PROVIDER_LM_STUDIO_DEFAULT_MODEL);
+      const actualModel = model || (provider === settings.chatConfig.provider ? settings.chatConfig.model : '') || (provider === 'ollama' ? OLLAMA_DEFAULT_MODEL : settings.local.model || PROVIDER_LM_STUDIO_DEFAULT_MODEL);
       const text = provider === 'ollama'
         ? await chatOllama({ systemPrompt: effectiveSystemPrompt, userMessage, model: actualModel })
         : await chatLMStudio({ systemPrompt: effectiveSystemPrompt, userMessage, model: actualModel, temperature, maxTokens });
@@ -412,11 +431,12 @@ export const POST: RequestHandler = async ({ request }) => {
   if (provider === 'gemini') {
     let geminiFailReason: string | null = null;
 
-    if (env.GEMINI_API_KEY) {
+    if (geminiApiKey) {
+      console.log('[GEMINI KEY SOURCE]', 'settings.json');
       try {
-        const geminiModel = model || GEMINI_DEFAULT_MODEL;
+        const geminiModel = model || (provider === settings.chatConfig.provider ? settings.chatConfig.model : settings.gemini.model) || GEMINI_DEFAULT_MODEL;
         const text = await chatGemini({
-          apiKey: env.GEMINI_API_KEY,
+          apiKey: geminiApiKey,
           systemPrompt: effectiveSystemPrompt,
           userMessage,
           model: geminiModel,
@@ -426,8 +446,8 @@ export const POST: RequestHandler = async ({ request }) => {
         logVisionText('gemini', images, text);
         return json(await withMemory({ text, provider: 'gemini', actualModel: geminiModel }, text));
 
-        const legacyGeminiModel = model || 'gemini-2.0-flash';
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${legacyGeminiModel}:generateContent?key=${env.GEMINI_API_KEY}`;
+        const legacyGeminiModel = model || (provider === settings.chatConfig.provider ? settings.chatConfig.model : settings.gemini.model) || 'gemini-2.0-flash';
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${legacyGeminiModel}:generateContent?key=${geminiApiKey}`;
 
         const userParts = geminiUserParts(userMessage, images);
         // ペイロード構造を base64 本体を除いてログ（スパム防止）
@@ -479,9 +499,14 @@ export const POST: RequestHandler = async ({ request }) => {
     console.warn(`[lab-chat] gemini failed (${geminiFailReason}) — trying OpenAI fallback`);
 
     try {
-      const fallbackModel = OPENAI_DEFAULT_MODEL;
+      const fallbackModel = settings.openai.model || OPENAI_DEFAULT_MODEL;
+      const apiKey = openaiApiKey;
+      if (!apiKey) throw error(500, 'OpenAI API key が未設定');
+      console.log('[OPENAI KEY SOURCE]', 'settings.json');
+      console.log('[OPENAI KEY PREFIX]', apiKey?.slice(0,12));
+      console.log('[OPENAI MODEL]', fallbackModel);
       const text = await chatOpenAI({
-        apiKey: env.OPENAI_API_KEY,
+        apiKey,
         systemPrompt: effectiveSystemPrompt,
         userMessage,
         model: fallbackModel,
@@ -500,10 +525,11 @@ export const POST: RequestHandler = async ({ request }) => {
   // Claude
   // ================================================================
   if (provider === 'claude') {
-    if (!env.ANTHROPIC_API_KEY) throw error(500, 'ANTHROPIC_API_KEY が未設定');
-    const claudeModel = model || CLAUDE_DEFAULT_MODEL;
+    if (!anthropicApiKey) throw error(500, 'Anthropic API key が未設定');
+    const claudeModel = model || settings.anthropic.model || CLAUDE_DEFAULT_MODEL;
+    console.log('[ANTHROPIC KEY SOURCE]', 'settings.json');
     const text = await chatClaude({
-      apiKey: env.ANTHROPIC_API_KEY,
+      apiKey: anthropicApiKey,
       systemPrompt: effectiveSystemPrompt,
       userMessage,
       model: claudeModel,

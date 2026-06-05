@@ -14,13 +14,18 @@ function openAIUserContent(userMessage: string, images: ChatImageInput[]) {
 }
 
 export async function chatOpenAI(input: ProviderChatInput & { apiKey?: string }): Promise<string> {
-  if (!input.apiKey) throw new Error('OPENAI_API_KEY is not set');
+  if (!input.apiKey) throw new Error('OpenAI API key is not set');
 
   const images = input.images ?? [];
+  const model = input.model || OPENAI_DEFAULT_MODEL;
+  const apiKey = input.apiKey;
+  console.log('[OPENAI KEY SOURCE]', 'settings.json');
+  console.log('[OPENAI KEY PREFIX]', apiKey?.slice(0,12));
+  console.log('[OPENAI MODEL]', model);
   const { default: OpenAI } = await import('openai');
-  const client = new OpenAI({ apiKey: input.apiKey });
+  const client = new OpenAI({ apiKey });
   const completion = await client.chat.completions.create({
-    model: input.model || OPENAI_DEFAULT_MODEL,
+    model,
     messages: [
       { role: 'system', content: input.systemPrompt },
       { role: 'user', content: openAIUserContent(input.userMessage, images) as any },

@@ -41,5 +41,5 @@ export const defaultMobileChatSettings: MobileChatSettings = {
 	voicevoxEndpoint: '',
 	voicevoxSpeakerId: 1,
 	irodoriEndpoint: '',
-	irodoriSpeakerId: 'default'
+	irodoriSpeakerId: 'none'
 };

@@ -168,12 +168,12 @@
     </div>
   {/if}
 
-  {#if character.voiceEngine === 'colab-tts'}
+  {#if character.voiceEngine === 'irodori-tts' || character.voiceEngine === 'colab-tts'}
     <div class="field">
       <label class="field-label">VOICE</label>
       <select
         class="select"
-        value={character.voice ?? 'irodori-tts-500m-v3'}
+        value={character.voice ?? 'none'}
         onchange={(e) =>
           onUpdate({
             voice: (e.target as HTMLSelectElement).value

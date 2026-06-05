@@ -1,0 +1,11 @@
+{
+  "summary": "AI: 【特別対応】ねえ、お兄ちゃん！覚えてる？前に「すごいな」って言ってくれたから、もっと素敵なプロンプト考えちゃった！バッテリーポッドで仲良く寝てるルナとソラのシーン、イメージしてみてね！\n\n**画像生成用プロンプト：**\n> Two cat-style android sisters, Luna and Sora, cuddling peacefully inside a large transparent battery charging pod. The pod softly glows with blue and purple ambient lights, creating a cozy atmosphere. Both have white hair and mechanical cat ear...",
+  "learned": [
+    "このネコ型アンドロイド姉妹のキャラクターの資料集を作ってください。名前や設定や製造シリアルナンバーなども作ってください",
+    "このネコ型アンドロイド姉妹のキャラクターの資料集を画像生成してください。名前や設定や製造シリアルナンバーなども作ってください"
+  ],
+  "emotion": "embarrassment",
+  "trust_delta": 0,
+  "affection_delta": 3,
+  "note": "1件の記憶を参照 / embarrassment / Trust 変化なし / Affection 変化なし"
+}

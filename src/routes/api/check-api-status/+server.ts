@@ -1,6 +1,6 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { env } from '$env/dynamic/private';
+import { getProviderKey } from '$lib/server/settings';
 
 type StatusResult =
   | 'OK'
@@ -13,10 +13,11 @@ type StatusResult =
   | 'Ollama Offline';
 
 async function checkOpenAI(): Promise<StatusResult> {
-  if (!env.OPENAI_API_KEY) return 'Missing API Key';
+  const apiKey = await getProviderKey('openai');
+  if (!apiKey) return 'Missing API Key';
   try {
     const res = await fetch('https://api.openai.com/v1/models', {
-      headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}` },
+      headers: { Authorization: `Bearer ${apiKey}` },
     });
     if (res.status === 401) return 'Unauthorized';
     if (res.status === 429) return 'Quota';
@@ -28,10 +29,11 @@ async function checkOpenAI(): Promise<StatusResult> {
 }
 
 async function checkGemini(): Promise<StatusResult> {
-  if (!env.GEMINI_API_KEY) return 'Missing API Key';
+  const apiKey = await getProviderKey('gemini');
+  if (!apiKey) return 'Missing API Key';
   try {
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models?key=${env.GEMINI_API_KEY}`
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`
     );
     if (res.status === 400 || res.status === 403) return 'Unauthorized';
     if (res.status === 429) return 'Quota';
@@ -43,15 +45,32 @@ async function checkGemini(): Promise<StatusResult> {
 }
 
 async function checkClaude(): Promise<StatusResult> {
-  if (!env.ANTHROPIC_API_KEY) return 'Missing API Key';
+  const apiKey = await getProviderKey('anthropic');
+  if (!apiKey) return 'Missing API Key';
   try {
     const res = await fetch('https://api.anthropic.com/v1/models', {
       headers: {
-        'x-api-key': env.ANTHROPIC_API_KEY,
+        'x-api-key': apiKey,
         'anthropic-version': '2023-06-01',
       },
     });
     if (res.status === 401) return 'Unauthorized';
+    if (res.status === 429) return 'Quota';
+    if (res.ok) return 'OK';
+    return 'Error';
+  } catch {
+    return 'Error';
+  }
+}
+
+async function checkElevenLabs(): Promise<StatusResult> {
+  const apiKey = await getProviderKey('elevenlabs');
+  if (!apiKey) return 'Missing API Key';
+  try {
+    const res = await fetch('https://api.elevenlabs.io/v1/user', {
+      headers: { 'xi-api-key': apiKey },
+    });
+    if (res.status === 401 || res.status === 403) return 'Unauthorized';
     if (res.status === 429) return 'Quota';
     if (res.ok) return 'OK';
     return 'Error';
@@ -81,12 +100,13 @@ async function checkOllama(): Promise<StatusResult> {
 }
 
 export const GET: RequestHandler = async () => {
-  const [openai, gemini, claude, lmstudio, ollama] = await Promise.all([
+  const [openai, gemini, claude, elevenlabs, lmstudio, ollama] = await Promise.all([
     checkOpenAI(),
     checkGemini(),
     checkClaude(),
+    checkElevenLabs(),
     checkLMStudio(),
     checkOllama(),
   ]);
-  return json({ openai, gemini, claude, lmstudio, ollama });
+  return json({ openai, gemini, claude, anthropic: claude, elevenlabs, lmstudio, ollama });
 };

@@ -4,10 +4,15 @@
   // ============================================================
   // State
   // ============================================================
-  type ImageSize = '1024x1024' | '1792x1024' | '1024x1792';
+  type ImageSize = '1024x1024' | '1024x1536' | '1536x1024' | '1792x1024' | '1024x1792';
+  type OpenAIImageSize = '1024x1024' | '1024x1536' | '1536x1024';
   const UI_LOCALE = 'ja' as const;
+  const OPENAI_IMAGE_SIZES: OpenAIImageSize[] = ['1024x1024', '1024x1536', '1536x1024'];
 
   let size          = $state<ImageSize>('1024x1024');
+  let imageProvider = $state<'openai' | 'gemini' | 'ideogram'>('openai');
+  let imageModel    = $state('gpt-image-2');
+  let imageSize     = $state<OpenAIImageSize>('1024x1024');
   let generating    = $state(false);
   let previewUrl      = $state<string | null>(null);
   let previewVideoUrl = $state<string | null>(null);
@@ -303,25 +308,20 @@ ${lines.map(line => `  - ${line}`).join('\n')}
   let refPanelOpen = $state(true);
 
   // ── Model / media-type configuration ────────────────────
-  const STUDIO_MODELS = [
-    { id: 'fal-ai/nano-banana-2',       label: 'fal-ai/nano-banana-2',       provider: 'fal-ai', edit: false, apiModel: 'nanobanana2' },
-    { id: 'fal-ai/nano-banana-2 edit',  label: 'fal-ai/nano-banana-2 edit',  provider: 'fal-ai', edit: true,  apiModel: 'nanobanana2' },
-    { id: 'fal-ai/nano-banana-pro',     label: 'fal-ai/nano-banana-pro',     provider: 'fal-ai', edit: false, apiModel: 'fal-ai/nano-banana-pro' },
-    { id: 'fal-ai/nano-banana-pro edit', label: 'fal-ai/nano-banana-pro edit', provider: 'fal-ai', edit: true, apiModel: 'fal-ai/nano-banana-pro' },
-    { id: 'openai/GPT Image 2',         label: 'openai/GPT Image 2',         provider: 'openai', edit: false, apiModel: 'gpt-image-2' },
-    { id: 'openai/GPT Image 2 Edit',    label: 'openai/GPT Image 2 Edit',    provider: 'openai', edit: true,  apiModel: 'gpt-image-2' },
-    { id: 'fal-ai/Flux 2 Max',          label: 'fal-ai/Flux 2 Max',          provider: 'fal-ai', edit: false, apiModel: 'fal-ai/flux-2-max' },
-    { id: 'fal-ai/Flux 2 Max Edit',     label: 'fal-ai/Flux 2 Max Edit',     provider: 'fal-ai', edit: true,  apiModel: 'fal-ai/flux-2-max' },
-  ] as const;
-  type StudioModelId = typeof STUDIO_MODELS[number]['id'];
-  type StudioProvider = typeof STUDIO_MODELS[number]['provider'];
-  type StudioProviderChoice = 'openai' | 'fal' | 'nanobanana' | 'flux';
+  type StudioProvider = 'openai' | 'gemini' | 'ideogram';
+  type StudioProviderChoice = StudioProvider;
+  type StudioModelId = string;
+  type StudioModelOption = { id: StudioModelId; label: string; provider: StudioProvider; edit: boolean; apiModel: string };
+  const DEFAULT_STUDIO_MODELS: StudioModelOption[] = [
+    { id: 'gpt-image-2',  label: 'GPT Image 2',  provider: 'openai', edit: false, apiModel: 'gpt-image-2' },
+    { id: 'ideogram-v3', label: 'Ideogram',     provider: 'ideogram', edit: false, apiModel: 'ideogram-v3' },
+  ];
+  let studioModels = $state<StudioModelOption[]>(DEFAULT_STUDIO_MODELS);
 
   const STUDIO_PROVIDER_CHOICES: { id: StudioProviderChoice; label: string }[] = [
-    { id: 'openai',     label: 'OpenAI' },
-    { id: 'fal',        label: 'FAL' },
-    { id: 'nanobanana', label: 'Nanobanana' },
-    { id: 'flux',       label: 'Flux' },
+    { id: 'openai', label: 'OpenAI' },
+    { id: 'gemini', label: 'Gemini' },
+    { id: 'ideogram', label: 'Ideogram' },
   ];
 
   const VIDEO_MODELS = [
@@ -333,10 +333,11 @@ ${lines.map(line => `  - ${line}`).join('\n')}
 
   const _ls = (k: string) => (typeof localStorage !== 'undefined' ? localStorage.getItem(k) : null);
   function normalizeStudioModelId(raw: string | null): StudioModelId {
-    if (STUDIO_MODELS.some(m => m.id === raw)) return raw as StudioModelId;
-    if (raw === 'nanobanana2') return 'fal-ai/nano-banana-2';
-    if (raw === 'gpt-image-2') return 'openai/GPT Image 2';
-    return 'fal-ai/nano-banana-2';
+    if (studioModels.some(m => m.id === raw)) return raw as StudioModelId;
+    if (raw === 'openai/GPT Image 2' || raw === 'openai/GPT Image 2 Edit') return 'gpt-image-2';
+    if (raw === 'nanobanana2' || raw?.includes('nano-banana') || raw?.includes('flash-image')) return 'nano-banana';
+    if (raw?.toLowerCase().includes('ideogram')) return 'ideogram-v3';
+    return 'gpt-image-2';
   }
 
   function normalizeProviderChoice(raw: string | null): StudioProviderChoice | null {
@@ -344,21 +345,12 @@ ${lines.map(line => `  - ${line}`).join('\n')}
   }
 
   function providerChoiceForModel(modelId: StudioModelId): StudioProviderChoice {
-    const model = STUDIO_MODELS.find(m => m.id === modelId);
-    if (model?.provider === 'openai') return 'openai';
-    if (model?.id.toLowerCase().includes('flux')) return 'flux';
-    if (model?.id.toLowerCase().includes('nano-banana')) return 'nanobanana';
-    return 'fal';
+    const model = studioModels.find(m => m.id === modelId);
+    return model?.provider ?? 'openai';
   }
 
   function studioModelsForProvider(choice: StudioProviderChoice) {
-    return STUDIO_MODELS.filter((m) => {
-      const id = m.id.toLowerCase();
-      if (choice === 'openai') return m.provider === 'openai';
-      if (choice === 'nanobanana') return id.includes('nano-banana');
-      if (choice === 'flux') return id.includes('flux');
-      return m.provider === 'fal-ai';
-    });
+    return studioModels.filter((m) => m.provider === choice);
   }
 
   function setStudioProviderChoice(choice: StudioProviderChoice): void {
@@ -367,6 +359,10 @@ ${lines.map(line => `  - ${line}`).join('\n')}
     if (!availableModels.some(m => m.id === selectedStudioModel) && availableModels[0]) {
       selectedStudioModel = availableModels[0].id;
     }
+    const model = studioModels.find(m => m.id === selectedStudioModel) ?? availableModels[0];
+    imageProvider = choice;
+    imageModel = model?.apiModel ?? (choice === 'gemini' ? 'nano-banana' : choice === 'ideogram' ? 'ideogram-v3' : 'gpt-image-2');
+    void saveImageSettings();
   }
 
   let studioMediaType  = $state<StudioMediaType>('image');
@@ -377,17 +373,103 @@ ${lines.map(line => `  - ${line}`).join('\n')}
   let studioVideoModel = $state<VideoModelId>(
     VIDEO_MODELS.some(m => m.id === _ls('studio-video-model')) ? (_ls('studio-video-model') as VideoModelId) : 'seedance'
   );
-  let selectedStudioModelConfig = $derived(STUDIO_MODELS.find(m => m.id === selectedStudioModel) ?? STUDIO_MODELS[0]);
+  let selectedStudioModelConfig = $derived(studioModels.find(m => m.id === selectedStudioModel) ?? studioModels[0]);
   let selectedProvider          = $derived<StudioProvider>(selectedStudioModelConfig.provider);
   let selectedEditMode          = $derived(selectedStudioModelConfig.edit);
   let studioImageModel          = $derived(selectedStudioModelConfig.apiModel);
   let videoDuration = $state<4 | 5 | 8>(5);
   let videoAspect   = $state<'16:9' | '9:16' | '1:1'>('16:9');
 
+  function normalizeOpenAIImageSize(value: unknown): OpenAIImageSize {
+    return OPENAI_IMAGE_SIZES.includes(value as OpenAIImageSize) ? value as OpenAIImageSize : '1024x1024';
+  }
+
+  function applyGeminiImageModels(models: unknown): void {
+    const geminiModels: StudioModelOption[] = [];
+    if (Array.isArray(models)) {
+      for (const model of models) {
+        const data = model && typeof model === 'object' ? model as Record<string, unknown> : {};
+        const id = typeof data.id === 'string' ? data.id : '';
+        const label = typeof data.label === 'string' ? data.label : id;
+        const apiModel = typeof data.apiModel === 'string' ? data.apiModel : id;
+        if (id && apiModel) geminiModels.push({ id, label, provider: 'gemini', edit: false, apiModel });
+      }
+    }
+    studioModels = [
+      ...DEFAULT_STUDIO_MODELS.filter((model) => model.provider !== 'gemini'),
+      ...geminiModels,
+    ];
+    if (!studioModelsForProvider(selectedStudioProviderChoice).some((model) => model.id === selectedStudioModel)) {
+      setStudioProviderChoice(selectedStudioProviderChoice);
+    }
+  }
+
+  async function loadAvailableGeminiImageModels(): Promise<void> {
+    try {
+      const res = await fetch('/api/gemini-image-models');
+      if (!res.ok) return;
+      const data = await res.json();
+      applyGeminiImageModels(data.models);
+    } catch (error) {
+      console.warn('[studio] gemini image model load failed:', error);
+    }
+  }
+
+  async function loadImageSettings(): Promise<void> {
+    try {
+      const res = await fetch('/api/settings');
+      if (!res.ok) return;
+      const settings = await res.json();
+      applyGeminiImageModels(settings?.availableGeminiImageModels);
+      const image = settings?.image ?? {};
+      const provider = settings?.imageConfig?.provider ?? settings?.imageProvider ?? image.provider;
+      imageProvider = provider === 'gemini' || provider === 'ideogram' ? provider : 'openai';
+      const loadedImageModel = settings?.imageConfig?.model ?? image.model;
+      imageModel = typeof loadedImageModel === 'string' && loadedImageModel.trim() ? loadedImageModel : (imageProvider === 'gemini' ? 'nano-banana' : imageProvider === 'ideogram' ? 'ideogram-v3' : 'gpt-image-2');
+      imageSize = normalizeOpenAIImageSize(image.size);
+      size = imageSize;
+      selectedStudioProviderChoice = imageProvider;
+      selectedStudioModel = normalizeStudioModelId(imageModel);
+    } catch (error) {
+      console.warn('[studio] image settings load failed:', error);
+    }
+  }
+
+  async function saveImageSettings(): Promise<void> {
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          imageProvider,
+          imageConfig: {
+            provider: imageProvider,
+            model: imageModel,
+          },
+          image: {
+            provider: imageProvider,
+            model: imageModel,
+            size: imageSize,
+          },
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      size = imageSize;
+    } catch (error) {
+      console.error('[studio] image settings save failed:', error);
+      errorMsg = 'IMAGE サイズ設定の保存に失敗しました。';
+    }
+  }
+
   $effect(() => { try { localStorage.setItem('studio-media-type',  studioMediaType);  } catch {} });
   $effect(() => { try { localStorage.setItem('studio-model',        selectedStudioModel); } catch {} });
   $effect(() => { try { localStorage.setItem('studio-provider-choice', selectedStudioProviderChoice); } catch {} });
   $effect(() => { try { localStorage.setItem('studio-video-model',  studioVideoModel); } catch {} });
+  $effect(() => { size = imageSize; });
+  $effect(() => {
+    imageProvider = selectedProvider;
+    imageModel = studioImageModel;
+  });
   $effect(() => {
     if (studioMediaType !== 'image') return;
     const availableModels = studioModelsForProvider(selectedStudioProviderChoice);
@@ -633,7 +715,7 @@ async function buildPrompt(basePrompt: string, refDescription: string) {
 
   async function callGenerateImage(p: string, s: ImageSize, modelOverride?: StudioModelId): Promise<string> {
     const modelConfig = modelOverride
-      ? (STUDIO_MODELS.find(m => m.id === modelOverride) ?? selectedStudioModelConfig)
+      ? (studioModels.find(m => m.id === modelOverride) ?? selectedStudioModelConfig)
       : selectedStudioModelConfig;
     const provider = modelConfig.provider;
     const editMode = modelConfig.edit;
@@ -657,15 +739,19 @@ async function buildPrompt(basePrompt: string, refDescription: string) {
       : 'locale=ja\n参照画像のキャラクターを正確に使用し、同じ顔、同じ髪型、同じ衣装を維持する。';
     const enhanced = await buildPrompt(injectRefs(p), refDesc);
     console.log('[studio] callGenerateImage final prompt preview:', enhanced.slice(0, 200));
-    const res = await fetch('/api/studio/generate', {
+    const payload = { prompt: enhanced, size: s, model: apiModel, provider, editMode, selectedModel: modelOverride ?? selectedStudioModel, refImages, locale: UI_LOCALE };
+    console.log('[studio] image generate button payload', payload);
+    console.log('[studio] fetch /api/generate provider/model', { provider: payload.provider, model: payload.model });
+    const res = await fetch('/api/generate', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ prompt: enhanced, size: s, model: apiModel, provider, editMode, selectedModel: modelOverride ?? selectedStudioModel, refImages, locale: UI_LOCALE }),
+      body:    JSON.stringify(payload),
     });
     if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.message ?? `HTTP ${res.status}`); }
     const data = await res.json();
-    if (!data.url) throw new Error('画像データが返されませんでした。');
-    return data.url as string;
+    const imageUrl = data?.images?.[0]?.url ?? data?.url;
+    if (!imageUrl) throw new Error('画像データが返されませんでした。');
+    return imageUrl as string;
   }
 
   async function callGenerateVideo(p: string): Promise<string> {
@@ -1800,7 +1886,7 @@ ${panelLines}
       else if (key === 'negative_prompt') curPanel.negativePrompt = parseYamlScalar(value);
       else if (key === 'model') {
         const model = parseYamlScalar(value) as StudioModelId;
-        if (STUDIO_MODELS.some(m => m.id === model)) curPanel.model = model;
+        if (studioModels.some(m => m.id === model)) curPanel.model = model;
       } else if (key === 'dialogue') {
         const parsed = parseDialogueValue(value);
         curPanel.dialogue = parsed;
@@ -3114,22 +3200,26 @@ REFの役割を推定してください（例: 背景資料、キャラクター
       imageSizes:     refImages.map(r => `${Math.round(r.length / 1024)}KB`),
     });
     try {
-      const res = await fetch('/api/studio/generate', {
+      const payload = { prompt: injectRefs(`${p}, ${buildNegativeHint()}`), size, model: studioImageModel, provider: selectedProvider, editMode: selectedEditMode, selectedModel: selectedStudioModel, refImages };
+      console.log('[studio] image generate button payload', payload);
+      console.log('[studio] fetch /api/generate provider/model', { provider: payload.provider, model: payload.model });
+      const res = await fetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: injectRefs(`${p}, ${buildNegativeHint()}`), size, model: studioImageModel, provider: selectedProvider, editMode: selectedEditMode, selectedModel: selectedStudioModel, refImages }),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.message ?? `HTTP ${res.status}`);
       }
       const data = await res.json();
-    if (!data.url) throw new Error('画像データが返されませんでした。');
-      previewUrl    = data.url;
+      const imageUrl = data?.images?.[0]?.url ?? data?.url;
+      if (!imageUrl) throw new Error('画像データが返されませんでした。');
+      previewUrl    = imageUrl;
       revisedPrompt = null;
-      await addToHistory(data.url, p, size);
+      await addToHistory(imageUrl, p, size);
       if (diaryNote) {
-        const thumb   = await createThumbnail(data.url);
+        const thumb   = await createThumbnail(imageUrl);
         const entryId = activeDiaryId ?? genId();
         const entry: DiaryEntry = {
           id: entryId, date: diaryNote.date, diaryText: diaryNote.diaryText,
@@ -3739,6 +3829,8 @@ REFの役割を推定してください（例: 背景資料、キャラクター
   loadDiaryHistory();
   onMount(() => {
     loadStudioSession();
+    void loadImageSettings();
+    void loadAvailableGeminiImageModels();
   });
 </script>
 
@@ -4310,20 +4402,19 @@ REFの役割を推定してください（例: 背景資料、キャラクター
           <!-- 3. モデル -->
           <div class="gen-ctrl gen-ctrl-wide">
             <span class="gen-ctrl-label">Model / Engine</span>
-            <select class="gen-select" bind:value={selectedStudioModel}>
+            <select
+              class="gen-select"
+              bind:value={selectedStudioModel}
+              onchange={() => {
+                const model = studioModels.find(m => m.id === selectedStudioModel) ?? selectedStudioModelConfig;
+                imageProvider = model.provider;
+                imageModel = model.apiModel;
+                void saveImageSettings();
+              }}
+            >
               {#each studioModelsForProvider(selectedStudioProviderChoice) as m}
                 <option value={m.id}>{m.label}</option>
               {/each}
-            </select>
-          </div>
-
-          <!-- 4. サイズ -->
-          <div class="gen-ctrl">
-            <span class="gen-ctrl-label">サイズ</span>
-            <select class="gen-select" bind:value={size}>
-              <option value="1024x1024">1:1 Square</option>
-              <option value="1792x1024">16:9 Wide</option>
-              <option value="1024x1792">9:16 Portrait</option>
             </select>
           </div>
 
@@ -4645,6 +4736,56 @@ REFの役割を推定してください（例: 背景資料、キャラクター
 
     <!-- ── RIGHT COLUMN ─────────────────────────────── -->
     <section class="col-right">
+
+      <div class="panel image-panel">
+        <div class="panel-hd">
+          <span class="panel-label">IMAGE</span>
+        </div>
+        <div class="image-settings-grid">
+          <label class="gen-ctrl">
+            <span class="gen-ctrl-label">Image Provider</span>
+            <select
+              class="gen-select"
+              bind:value={imageProvider}
+              onchange={() => setStudioProviderChoice(imageProvider)}
+            >
+              <option value="openai">OpenAI</option>
+              <option value="gemini">Gemini</option>
+              <option value="ideogram">Ideogram</option>
+            </select>
+          </label>
+          <label class="gen-ctrl">
+            <span class="gen-ctrl-label">Generation Model</span>
+            <select
+              class="gen-select"
+              bind:value={selectedStudioModel}
+              onchange={() => {
+                const model = studioModels.find(m => m.id === selectedStudioModel) ?? selectedStudioModelConfig;
+                selectedStudioProviderChoice = model.provider;
+                imageProvider = model.provider;
+                imageModel = model.apiModel;
+                void saveImageSettings();
+              }}
+            >
+              {#each studioModelsForProvider(imageProvider) as m}
+                <option value={m.id}>{m.label}</option>
+              {/each}
+            </select>
+          </label>
+          <label class="gen-ctrl">
+            <span class="gen-ctrl-label">Image Size</span>
+            <select
+              class="gen-select"
+              bind:value={imageSize}
+              onchange={() => { size = imageSize; void saveImageSettings(); }}
+            >
+              {#each OPENAI_IMAGE_SIZES as imageSettingSize}
+                <option value={imageSettingSize}>{imageSettingSize}</option>
+              {/each}
+            </select>
+          </label>
+        </div>
+      </div>
 
       <!-- Comic Panels -->
       <div class="panel comic-panel">
@@ -5071,7 +5212,7 @@ REFの役割を推定してください（例: 背景資料、キャラクター
           }}
         >
           <option value="">Default ({selectedStudioModel})</option>
-          {#each STUDIO_MODELS as m}
+          {#each studioModels as m}
             <option value={m.id}>{m.label}</option>
           {/each}
         </select>
@@ -6151,6 +6292,13 @@ REFの役割を推定してください（例: 背景資料、キャラクター
   gap: 6px;
 }
 .gen-select-pair .gen-select { flex: 1; min-width: 0; }
+
+.image-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 0 12px 12px;
+}
 
 /* ── Generation mode badge ── */
 .gen-mode-badge {

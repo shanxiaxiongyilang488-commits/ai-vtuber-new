@@ -22,7 +22,7 @@ function geminiUserParts(userMessage: string, images: ChatImageInput[]) {
 }
 
 export async function chatGemini(input: ProviderChatInput & { apiKey?: string }): Promise<string> {
-  if (!input.apiKey) throw new Error('GEMINI_API_KEY is not set');
+  if (!input.apiKey) throw new Error('Gemini API key is not set');
 
   const images = input.images ?? [];
   const model = input.model || GEMINI_DEFAULT_MODEL;

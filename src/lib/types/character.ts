@@ -22,19 +22,25 @@ export const AI_ENGINE_OPTIONS = [
 export type VoiceEngine =
   | 'none'
   | 'piper'
+  | 'irodori-tts'
   | 'colab-tts'
   | 'elevenlabs'
   | 'voicevox';
 
-export const COLAB_TTS_VOICE_OPTIONS = [
+export const IRODORI_TTS_VOICE_OPTIONS = [
+  'none',
+  'sample',
   'irodori-tts-500m-v3',
   'kokoro-82m',
   'openvoice-v2',
 ] as const;
 
+export const COLAB_TTS_VOICE_OPTIONS = IRODORI_TTS_VOICE_OPTIONS;
+
 export const VOICE_ENGINE_OPTIONS = [
   { value: 'none', label: 'None' },
   { value: 'voicevox', label: 'VOICEVOX' },
+  { value: 'irodori-tts', label: 'Irodori TTS' },
   { value: 'colab-tts', label: 'Colab TTS' },
   { value: 'elevenlabs', label: 'ElevenLabs' },
   { value: 'piper', label: 'Piper' },

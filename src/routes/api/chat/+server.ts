@@ -5,6 +5,7 @@ import { muryiPersona } from '$lib/ai/personas'
 import { buildCharacterPrompt } from '$lib/ai/prompts/buildCharacterPrompt'
 import { buildMemoryContext, recordMemoryCoreTurn, type BuiltMemoryPrompt, type MemoryCoreRequest } from '$lib/ai/memory-core/memoryCore';
 import { generateText } from '$lib/aiRouter';
+import { readSettings } from '$lib/server/settings';
 
 // =========================
 // 型定義
@@ -47,12 +48,17 @@ export const POST: RequestHandler = async ({ request }) => {
     speakerName = 'AI',
     listenerName = 'ユーザー',
     topic = '',
-    engine = 'openai',
+    engine,
     model,
     memory
   } = body as ChatRequest;
 
-  console.log(`[chat] engine=${engine}`);
+  const settings = await readSettings();
+  const actualEngine = engine ?? settings.chatConfig.provider;
+  const configuredChatModel = engine ? model : (model || settings.chatConfig.model);
+  console.log('[CHAT_PROVIDER]', actualEngine);
+  console.log('[CHAT_MODEL]', configuredChatModel || '(default)');
+  console.log(`[chat] engine=${actualEngine}`);
 
   // =========================
   // デフォルト人格（ベース）
@@ -106,8 +112,8 @@ export const POST: RequestHandler = async ({ request }) => {
   // =========================
   // Ollama
   // =========================
-  if (engine === 'ollama') {
-    const ollamaModel = model || 'qwen2.5:3b';
+  if (actualEngine === 'ollama') {
+    const ollamaModel = configuredChatModel || 'qwen2.5:3b';
 
     const res = await fetch('http://localhost:11434/api/chat', {
       method: 'POST',
@@ -125,9 +131,9 @@ export const POST: RequestHandler = async ({ request }) => {
   // =========================
   // Colab Ollama (OpenAI互換)
   // =========================
-  if (engine === 'colab-ollama') {
+  if (actualEngine === 'colab-ollama') {
     const baseUrl = env.COLAB_OLLAMA_URL?.replace(/\/+$/, '');
-    const colabModel = model || env.COLAB_OLLAMA_MODEL;
+    const colabModel = configuredChatModel || env.COLAB_OLLAMA_MODEL;
 
     if (!baseUrl) {
       throw error(500, 'COLAB_OLLAMA_URL が未設定');
@@ -158,8 +164,8 @@ export const POST: RequestHandler = async ({ request }) => {
   // =========================
   // LM Studio
   // =========================
-  if (engine === 'lmstudio') {
-    const lmModel = model || 'qwen/qwen3-4b';
+  if (actualEngine === 'lmstudio') {
+    const lmModel = configuredChatModel || settings.local.model || 'qwen/qwen3-4b';
 
     const res = await fetch('http://localhost:1234/v1/chat/completions', {
       method: 'POST',
@@ -178,17 +184,17 @@ export const POST: RequestHandler = async ({ request }) => {
   }
 
   const defaultModel =
-    engine === 'gemini'
-      ? 'gemini-2.5-flash'
-      : engine === 'claude'
-        ? 'claude-haiku-4-5-20251001'
-        : 'gpt-4o-mini';
+    actualEngine === 'gemini'
+      ? settings.gemini.model || 'gemini-2.5-flash'
+      : actualEngine === 'claude'
+        ? settings.anthropic.model || 'claude-haiku-4-5-20251001'
+        : settings.openai.model || 'gpt-4o-mini';
 
   let text: string;
 
   try {
     text = await generateText({
-      model: model || defaultModel,
+      model: configuredChatModel || defaultModel,
       messages
     });
   } catch (err) {

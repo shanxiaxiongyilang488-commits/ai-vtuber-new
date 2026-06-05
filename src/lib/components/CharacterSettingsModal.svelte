@@ -19,7 +19,7 @@
   let name = $state('');
   let aiEngine = $state<AIEngine>('openai');
   let voiceEngine = $state<VoiceEngine>('none');
-  let voice = $state('irodori-tts-500m-v3');
+  let voice = $state('none');
   let voiceId = $state('');
   let speakerId = $state(1);
   let systemPrompt = $state('');
@@ -35,7 +35,7 @@
       name = character.name;
       aiEngine = character.aiEngine;
       voiceEngine = character.voiceEngine;
-      voice = character.voice ?? character.voiceId ?? 'irodori-tts-500m-v3';
+      voice = character.voice ?? character.voiceId ?? 'none';
       voiceId = character.voiceId != null? String(character.voiceId): '4';
       speakerId = character.speakerId ?? 1;
       systemPrompt = character.systemPrompt;
@@ -84,13 +84,13 @@
         });
         if (!res.ok) { alert('ElevenLabs APIエラー: ' + res.status); return; }
         await new Audio(URL.createObjectURL(await res.blob())).play();
-      } else if (voiceEngine === 'colab-tts') {
+      } else if (voiceEngine === 'irodori-tts' || voiceEngine === 'colab-tts') {
         const res = await fetch('/api/speak', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text, provider: 'colab-tts', voice })
+          body: JSON.stringify({ text, provider: voiceEngine, voice })
         });
-        if (!res.ok) { alert('Colab TTS APIエラー: ' + res.status); return; }
+        if (!res.ok) { alert('Irodori TTS API error: ' + res.status); return; }
         await new Audio(URL.createObjectURL(await res.blob())).play();
       } else if (voiceEngine === 'voicevox') {
         const spId = speakerId || 1;
@@ -179,6 +179,7 @@
         <select class="cyber-select" bind:value={voiceEngine}>
           <option value="none">なし</option>
           <option value="voicevox">VOICEVOX</option>
+          <option value="irodori-tts">Irodori TTS</option>
           <option value="colab-tts">Colab TTS</option>
           <option value="elevenlabs">ElevenLabs</option>
           <option value="piper">Piper</option>
@@ -186,7 +187,7 @@
 
         {#if voiceEngine === 'elevenlabs'}
           <input class="cyber-input" bind:value={voiceId} placeholder="Voice ID" />
-        {:else if voiceEngine === 'colab-tts'}
+        {:else if voiceEngine === 'irodori-tts' || voiceEngine === 'colab-tts'}
           <select class="cyber-select" bind:value={voice}>
             {#each COLAB_TTS_VOICE_OPTIONS as option}
               <option value={option}>{option}</option>

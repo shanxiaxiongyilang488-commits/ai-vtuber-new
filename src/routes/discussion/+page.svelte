@@ -11,7 +11,7 @@
     avatar: string;
     aiEngine?: string;
     modelName?: string;
-    voiceEngine: 'elevenlabs' | 'voicevox' | 'colab-tts' | 'piper' | 'none';
+    voiceEngine: 'elevenlabs' | 'voicevox' | 'irodori-tts' | 'colab-tts' | 'piper' | 'none';
     voice?: string;
     voiceId?: string;
     speakerId?: number;
@@ -202,6 +202,7 @@
       if (char && char.voiceEngine !== 'none') {
         try {
           const engine = createVoiceEngine({
+            name: char.name,
             voiceEngine: char.voiceEngine,
             voice: char.voice,
             voiceId: char.voiceId,
@@ -335,6 +336,7 @@
         if (char && char.voiceEngine !== 'none') {
           try {
             const engine = createVoiceEngine({
+              name: char.name,
               voiceEngine: char.voiceEngine,
               voice: char.voice,
               voiceId: char.voiceId,

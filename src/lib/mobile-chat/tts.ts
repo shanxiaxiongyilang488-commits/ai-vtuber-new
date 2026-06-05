@@ -34,12 +34,17 @@ async function speakVoiceVox(text: string, settings: MobileChatSettings): Promis
 
 async function speakIrodori(text: string, settings: MobileChatSettings): Promise<void> {
 	const endpoint = trimSlash(settings.irodoriEndpoint);
-	const res = await fetch(`${endpoint}/synthesis`, {
+	const res = await fetch(`${endpoint}/v1/audio/speech`, {
 		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
+		headers: {
+			'Content-Type': 'application/json',
+			Accept: 'audio/wav'
+		},
 		body: JSON.stringify({
-			text,
-			speaker: settings.irodoriSpeakerId
+			model: 'irodori-tts',
+			input: text,
+			voice: settings.irodoriSpeakerId || 'none',
+			response_format: 'wav'
 		})
 	});
 

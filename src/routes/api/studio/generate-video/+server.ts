@@ -1,6 +1,6 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { env } from '$env/dynamic/private';
+import { getProviderKey } from '$lib/server/settings';
 
 // ── Model registry ────────────────────────────────────────────────────────────
 // Add new video models here; everything else adapts automatically.
@@ -51,14 +51,15 @@ export const POST: RequestHandler = async ({ request }) => {
 
   if (!prompt?.trim()) throw error(400, 'prompt is required');
   if (!(model in VIDEO_MODEL_CONFIG)) throw error(400, `Unknown video model: ${model}`);
-  if (!env.FAL_KEY) throw error(500, 'FAL_KEY が未設定');
+  const falKey = await getProviderKey('fal');
+  if (!falKey) throw error(500, 'FAL API key が未設定');
 
   const cfg = VIDEO_MODEL_CONFIG[model as VideoModelId];
   console.log(`[studio/generate-video] model=${model} duration=${duration} aspect=${aspectRatio}`);
 
   const falRes = await fetch(cfg.endpoint, {
     method:  'POST',
-    headers: { 'Authorization': `Key ${env.FAL_KEY}`, 'Content-Type': 'application/json' },
+    headers: { 'Authorization': `Key ${falKey}`, 'Content-Type': 'application/json' },
     body:    JSON.stringify(cfg.buildBody(prompt.trim(), duration, aspectRatio, resolution)),
     // Video generation can take 60-120 s; rely on platform timeout (e.g. Vercel 300 s).
   });

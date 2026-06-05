@@ -17,6 +17,9 @@
   import { buildEmotionStyleHint } from '$lib/ai/emotion/emotionStyleEngine';
   import { buildToneHints } from '$lib/ai/conversationCore/toneHints';
   import { COLAB_TTS_VOICE_OPTIONS } from '$lib/types/character';
+  import { classifyIntent, classifyIntentByRules } from '$lib/intentRouter';
+  import { routerStateStore } from '$lib/stores/routerStateStore';
+  import { resolveCharacterContextForImagePrompt } from '$lib/characterContextRouter';
 
   // ============================================================
   // Types
@@ -207,6 +210,30 @@
     return new Date().toLocaleTimeString('ja-JP', { hour12: false });
   }
 
+  async function speakReply(text: string): Promise<void> {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+
+    try {
+      console.log('[TTS REQUEST]');
+      const res = await fetch('/api/speak', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: trimmed, characterName: charName }),
+      });
+      const data = await res.json() as { audioUrl?: string; error?: string };
+      if (!res.ok || !data.audioUrl) {
+        throw new Error(data.error ?? `TTS failed: ${res.status}`);
+      }
+
+      console.log('[TTS PLAY]');
+      const audio = new Audio(`${data.audioUrl}?t=${Date.now()}`);
+      await audio.play();
+    } catch (error) {
+      console.error('[TTS PLAY]', error);
+    }
+  }
+
   function getFilteredMemoryViewerItems(): MemoryViewerItem[] {
     const query = memoryViewerQuery.trim().toLowerCase();
     if (!query) return memoryViewerItems;
@@ -353,6 +380,8 @@
   let memoryViewerQuery = $state('');
   let memoryViewerLoading = $state(false);
   let memoryViewerError = $state<string | null>(null);
+  let lastRouterAction = $state('none');
+  let lastRouterActionAt = $state('—');
   let cognitiveMonitor = $state<CognitiveMonitor>({
     retrievedMemories: [],
     emotionLabel: 'neutral',
@@ -491,9 +520,9 @@
   // ============================================================
   // Voice config (independent of avatar / personality)
   // ============================================================
-  type VoiceEngineType = 'elevenlabs' | 'voicevox' | 'colab-tts' | 'piper' | 'none';
+  type VoiceEngineType = 'elevenlabs' | 'voicevox' | 'irodori-tts' | 'colab-tts' | 'piper' | 'none';
   let voiceEngine = $state<VoiceEngineType>('voicevox');
-  let voice       = $state('irodori-tts-500m-v3');
+  let voice       = $state('none');
   let speakerId   = $state(20);
   let voiceId     = $state('');
   let voiceSpeed  = $state(1.0);
@@ -502,6 +531,138 @@
   // ============================================================
   // AI config — sessionStore で一元管理
   // ============================================================
+  type LabImageProvider = 'openai' | 'gemini' | 'ideogram';
+  type LabImageModelId = string;
+  type LabImageModelOption = { id: LabImageModelId; label: string; provider: LabImageProvider; apiModel: string };
+  type LabGenerationMode = 'text-to-image' | 'image-to-image' | 'manga-continue' | 'character-sheet' | 'expression-sheet';
+
+  const LAB_GENERATION_MODES: { id: LabGenerationMode; label: string }[] = [
+    { id: 'text-to-image', label: 'Text to Image' },
+    { id: 'image-to-image', label: 'Image to Image' },
+    { id: 'manga-continue', label: 'Manga Continue' },
+    { id: 'character-sheet', label: 'Character Sheet' },
+    { id: 'expression-sheet', label: 'Expression Sheet' },
+  ];
+
+  const LAB_IMAGE_PROVIDERS: { id: LabImageProvider; label: string }[] = [
+    { id: 'openai', label: 'OpenAI' },
+    { id: 'gemini', label: 'Gemini' },
+    { id: 'ideogram', label: 'Ideogram' },
+  ];
+
+  const DEFAULT_LAB_IMAGE_MODELS: LabImageModelOption[] = [
+    { id: 'gpt-image-2', label: 'GPT Image 2', provider: 'openai', apiModel: 'gpt-image-2' },
+    { id: 'ideogram-v3', label: 'Ideogram', provider: 'ideogram', apiModel: 'ideogram-v3' },
+  ];
+  let labImageModels = $state<LabImageModelOption[]>(DEFAULT_LAB_IMAGE_MODELS);
+
+  function normalizeLabImageProvider(raw: string | null): LabImageProvider {
+    if (raw === 'openai' || raw === 'gemini' || raw === 'ideogram') return raw;
+    if (raw === 'fal' || raw === 'fal-ai') return 'gemini';
+    return 'openai';
+  }
+
+  function normalizeLabImageModel(raw: string | null): LabImageModelId {
+    if (labImageModels.some((model) => model.id === raw)) return raw as LabImageModelId;
+    if (raw === 'openai/GPT Image 2' || raw === 'openai/GPT Image 2 Edit') return 'gpt-image-2';
+    if (raw?.includes('nano-banana')) return 'nano-banana';
+    if (raw?.toLowerCase().includes('ideogram')) return 'ideogram-v3';
+    return 'gpt-image-2';
+  }
+
+  function normalizeLabGenerationMode(raw: string | null): LabGenerationMode {
+    return LAB_GENERATION_MODES.some((mode) => mode.id === raw) ? raw as LabGenerationMode : 'text-to-image';
+  }
+
+  function localStorageValue(key: string): string | null {
+    return typeof localStorage === 'undefined' ? null : localStorage.getItem(key);
+  }
+
+  function imageModelsForProvider(provider: LabImageProvider) {
+    return labImageModels.filter((model) => model.provider === provider);
+  }
+
+  function applyLabGeminiImageModels(models: unknown): void {
+    const geminiModels: LabImageModelOption[] = [];
+    if (Array.isArray(models)) {
+      for (const model of models) {
+        const data = model && typeof model === 'object' ? model as Record<string, unknown> : {};
+        const id = typeof data.id === 'string' ? data.id : '';
+        const label = typeof data.label === 'string' ? data.label : id;
+        const apiModel = typeof data.apiModel === 'string' ? data.apiModel : id;
+        if (id && apiModel) geminiModels.push({ id, label, provider: 'gemini', apiModel });
+      }
+    }
+    labImageModels = [
+      ...DEFAULT_LAB_IMAGE_MODELS.filter((model) => model.provider !== 'gemini'),
+      ...geminiModels,
+    ];
+    const available = imageModelsForProvider(labImageProvider);
+    if (!available.some((model) => model.id === labImageModel) && available[0]) {
+      labImageModel = available[0].id;
+    }
+  }
+
+  async function loadLabGeminiImageModels(): Promise<void> {
+    try {
+      const res = await fetch('/api/gemini-image-models');
+      if (!res.ok) return;
+      const data = await res.json();
+      applyLabGeminiImageModels(data.models);
+    } catch (error) {
+      console.warn('[lab] gemini image model load failed:', error);
+    }
+  }
+
+  function setLabImageProvider(provider: LabImageProvider): void {
+    labImageProvider = provider;
+    const available = imageModelsForProvider(provider);
+    if (!available.some((model) => model.id === labImageModel) && available[0]) {
+      labImageModel = available[0].id;
+    }
+  }
+
+  function imageProviderLabel(provider: LabImageProvider): string {
+    return LAB_IMAGE_PROVIDERS.find((item) => item.id === provider)?.label ?? provider;
+  }
+
+  function routerConfidenceTone(confidence: number | undefined): 'high' | 'mid' | 'low' {
+    const value = typeof confidence === 'number' ? confidence : 0;
+    if (value >= 0.9) return 'high';
+    if (value >= 0.7) return 'mid';
+    return 'low';
+  }
+
+  let currentCharacter = $derived({
+    id: activePreset,
+    name: activePreset === 'custom'
+      ? (customProfile.name.trim() || charName || 'CUSTOM')
+      : (AVATARS.find((avatar) => avatar.presetId === activePreset)?.name ?? activePreset),
+  });
+
+  let labImageProvider = $state<LabImageProvider>(normalizeLabImageProvider(localStorageValue('studio-provider-choice')));
+  let labImageModel = $state<LabImageModelId>(normalizeLabImageModel(localStorageValue('studio-model')));
+  let labGenerationMode = $state<LabGenerationMode>(normalizeLabGenerationMode(localStorageValue('lab-generation-mode')));
+  let labImageModelConfig = $derived(labImageModels.find((model) => model.id === labImageModel) ?? labImageModels[0]);
+  let labGenerationModeConfig = $derived(LAB_GENERATION_MODES.find((mode) => mode.id === labGenerationMode) ?? LAB_GENERATION_MODES[0]);
+  let labGenerationNeedsImage = $derived(labGenerationMode === 'image-to-image' || labGenerationMode === 'manga-continue');
+  let labImageApiProvider = $derived<LabImageProvider>(labImageModelConfig.provider);
+
+  $effect(() => {
+    const available = imageModelsForProvider(labImageProvider);
+    if (!available.some((model) => model.id === labImageModel) && available[0]) {
+      labImageModel = available[0].id;
+    }
+  });
+  $effect(() => {
+    try { localStorage.setItem('studio-provider-choice', labImageProvider); } catch {}
+  });
+  $effect(() => {
+    try { localStorage.setItem('studio-model', labImageModel); } catch {}
+  });
+  $effect(() => {
+    try { localStorage.setItem('lab-generation-mode', labGenerationMode); } catch {}
+  });
 
   // API Status check
   type APIStatus = 'OK' | 'Missing API Key' | 'Unauthorized' | 'Error' | '---';
@@ -2350,56 +2511,61 @@ function removeReferenceImage(i: number): void {
   // ============================================================
   // Chat
   // ============================================================
-  const IMAGE_GENERATION_KEYWORDS = [
-    '描いて',
-    'イラスト',
-    '画像生成',
-    '立ち絵',
-    'キャラデザ',
-    '設定画',
-    '資料集',
-    'キャラクターシート',
-    'デザインシート',
-    '4コマ',
-    '漫画',
-    'マンガ',
-    'ポスター',
-    '表紙',
-    '一枚絵',
-  ];
-
   function isImageGenerationRequest(text: string): boolean {
-    const normalized = text.replace(/\s+/g, '');
-    if (/ya?ml/i.test(normalized)) return false;
-    return IMAGE_GENERATION_KEYWORDS.some((keyword) => normalized.includes(keyword));
+    return classifyIntentByRules(text).intent === 'image';
   }
 
   async function generateImageFromLabChat(prompt: string): Promise<void> {
-    const provider = 'openai';
-    const model = 'gpt-image-2';
-    const selectedModel = 'openai/GPT Image 2';
+    const provider = labImageApiProvider;
+    const model = labImageModelConfig.apiModel;
+    const selectedModel = labImageModel;
+    const characterContext = resolveCharacterContextForImagePrompt(prompt, currentCharacter);
+    const generationPrompt = characterContext.imagePrompt;
+    const refImages = labGenerationNeedsImage
+      ? referenceImages.map((ref) => ref.dataUrl).filter((url) => url.startsWith('data:'))
+      : [];
+
+    if (labGenerationNeedsImage && refImages.length === 0) {
+      messages = [...messages, {
+        role: 'error',
+        text: `${labGenerationModeConfig.label} では参照画像のアップロードが必要です。`,
+        time: getTime(),
+      }];
+      isThinking = false;
+      setTimeout(() => chatEl?.scrollTo({ top: chatEl.scrollHeight, behavior: 'smooth' }), 50);
+      return;
+    }
 
     try {
-      const res = await fetch('/api/studio/generate', {
+      const payload = {
+        prompt: generationPrompt,
+        size: '1024x1024',
+        provider,
+        model,
+        selectedModel,
+        editMode: refImages.length > 0,
+        refImages,
+        generationMode: labGenerationMode,
+      };
+      console.log('[lab] image generate button payload', payload);
+      console.log('[lab] fetch /api/generate provider/model', { provider: payload.provider, model: payload.model });
+      const res = await fetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt,
-          size: '1024x1024',
-          model,
-          selectedModel,
-        }),
+        body: JSON.stringify(payload),
       });
 
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
       const data = await res.json();
-      const imageUrl = typeof data?.url === 'string' ? data.url : '';
+      const imageUrl = typeof data?.images?.[0]?.url === 'string'
+        ? data.images[0].url
+        : (typeof data?.url === 'string' ? data.url : '');
       if (!imageUrl) throw new Error('No image URL');
 
       void saveImageMemory({
         imageUrl,
-        imagePrompt: prompt,
+        imagePrompt: generationPrompt,
         provider,
         model,
       }).catch((error) => {
@@ -2408,7 +2574,7 @@ function removeReferenceImage(i: number): void {
 
       messages = [
         ...messages,
-        { role: 'ai', text: 'IMAGE GENERATED', time: getTime(), avatar: selectedAvatar, imageUrl, imagePrompt: prompt },
+        { role: 'ai', text: 'IMAGE GENERATED', time: getTime(), avatar: selectedAvatar, imageUrl, imagePrompt: generationPrompt },
       ];
     } catch (err) {
       console.error('[Lab] image generation fail:', err);
@@ -2431,7 +2597,11 @@ function removeReferenceImage(i: number): void {
     if (!text || isThinking) return;
     inputText = '';
     messages = [...messages, { role: 'user', text, time: getTime() }];
-    if (isImageGenerationRequest(text)) {
+    const intent = await classifyIntent(text);
+    console.log('[Lab] intent:', intent);
+    lastRouterAction = intent.intent === 'image' ? 'image_generation' : `${intent.intent}_route`;
+    lastRouterActionAt = new Date().toLocaleString('ja-JP');
+    if (intent.intent === 'image') {
       isThinking = true;
       await generateImageFromLabChat(text);
       return;
@@ -2603,6 +2773,7 @@ function removeReferenceImage(i: number): void {
     if (voiceEngine !== 'none') {
       try {
         const engine = createVoiceEngine({
+          name: charName,
           voiceEngine,
           voice,
           voiceId: voiceId || undefined,
@@ -3276,7 +3447,7 @@ ${recent}
           isSpeaking = true;
           if (voiceEngine !== 'none') {
             try {
-              const eng = createVoiceEngine({ voiceEngine, voice, voiceId: voiceId || undefined, speakerId });
+              const eng = createVoiceEngine({ name: charName, voiceEngine, voice, voiceId: voiceId || undefined, speakerId });
               await eng.speak(aiText, {
                 onStart: () => { isSpeaking = true; },
                 onEnd:   () => { isSpeaking = false; },
@@ -3567,6 +3738,7 @@ ${recent}
     void restoreChatHistory(greetingMsg);
 
     sessionStore.init();
+    void loadLabGeminiImageModels();
     resetIdleTimer(); // autoTalk ON の場合、起動直後からタイマー開始
 
     // PNGTuber 瞬きスケジューラー起動
@@ -3808,6 +3980,11 @@ ${recent}
                 <div class="msg-time">{msg.time}</div>
                 {#if msg.role === 'ai' && !msg.isGreeting}
                   <div class="msg-action-row">
+                    <button
+                      class="speak-send-btn"
+                      onclick={() => speakReply(msg.text)}
+                      title="返信をIrodori-TTSで音声再生"
+                    >🔊 SPEAK</button>
                     <button
                       class="manga-send-btn"
                       class:loading={mangaConverting === msg.time}
@@ -4542,6 +4719,119 @@ ${recent}
         </button>
       </div>
 
+      <div class="av-effects router-state-block">
+        <div class="section-lbl">ROUTER STATE</div>
+        <div class="router-state-grid">
+          <div class="router-state-section-title">ROUTER STATE</div>
+          <div class="router-state-row">
+            <span class="router-state-label">Intent</span>
+            <span class="router-state-value intent">{($routerStateStore?.intent ?? 'chat')}</span>
+          </div>
+          <div class="router-state-row">
+            <span class="router-state-label">Subtype</span>
+            <span class="router-state-value">{($routerStateStore?.subtype ?? '-')}</span>
+          </div>
+          <div class="router-state-row">
+            <span class="router-state-label">Confidence</span>
+            <span class="router-state-value confidence-{routerConfidenceTone($routerStateStore?.confidence)}">{Math.round(($routerStateStore?.confidence ?? 0) * 100) / 100}</span>
+          </div>
+          <div class="router-state-row">
+            <span class="router-state-label">Source</span>
+            <span class="router-state-value source-{($routerStateStore?.source ?? 'rules')}">{($routerStateStore?.source ?? 'rules')}</span>
+          </div>
+          <div class="router-state-reason">
+            <span class="router-state-label">Reason</span>
+            <span>{($routerStateStore?.reason ?? '送信後に更新されます')}</span>
+          </div>
+          <div class="router-state-divider"></div>
+          <div class="router-state-section-title">MODEL ROUTING</div>
+          <div class="router-state-row">
+            <span class="router-state-label">Provider</span>
+            <span class="router-state-value">{imageProviderLabel(labImageApiProvider)}</span>
+          </div>
+          <div class="router-state-row">
+            <span class="router-state-label">Model</span>
+            <span class="router-state-value">{labImageModelConfig.label}</span>
+          </div>
+          <div class="router-state-row">
+            <span class="router-state-label">Generation Mode</span>
+            <span class="router-state-value">{labGenerationMode}</span>
+          </div>
+          <div class="router-state-divider"></div>
+          <div class="router-state-section-title">LAST ACTION</div>
+          <div class="router-state-row">
+            <span class="router-state-label">Action</span>
+            <span class="router-state-value">{lastRouterAction}</span>
+          </div>
+          <div class="router-state-row">
+            <span class="router-state-label">Timestamp</span>
+            <span class="router-state-value">{lastRouterActionAt}</span>
+          </div>
+          <div class="router-state-divider"></div>
+          <div class="router-state-section-title">MEMORY</div>
+          <div class="router-state-row">
+            <span class="router-state-label">Memory</span>
+            <span class="router-state-value router-state-muted">future reserved</span>
+          </div>
+          <div class="router-state-section-title">Emotion</div>
+          <div class="router-state-row">
+            <span class="router-state-label">Emotion</span>
+            <span class="router-state-value router-state-muted">future reserved</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="av-effects ai-cfg-block">
+        <div class="section-lbl">IMAGE GENERATION</div>
+        <div class="vc-rows">
+          <div class="vc-row">
+            <span class="vc-lbl vc-lbl-wide">Generation Mode</span>
+            <select class="vc-select" bind:value={labGenerationMode}>
+              {#each LAB_GENERATION_MODES as mode}
+                <option value={mode.id}>{mode.label}</option>
+              {/each}
+            </select>
+          </div>
+          <div class="vc-row">
+            <span class="vc-lbl vc-lbl-wide">Image Provider</span>
+            <span class="vc-note vc-current">{LAB_IMAGE_PROVIDERS.find((provider) => provider.id === labImageProvider)?.label ?? labImageProvider}</span>
+          </div>
+          <div class="vc-row">
+            <span class="vc-lbl vc-lbl-wide">Image Model</span>
+            <span class="vc-note vc-current">{labImageModelConfig.label}</span>
+          </div>
+          <div class="vc-row">
+            <span class="vc-lbl vc-lbl-wide">Reference Image Count</span>
+            <span class="vc-note vc-current" class:vc-warn={labGenerationNeedsImage && referenceImages.length === 0}>
+              {referenceImages.length}
+              {#if labGenerationNeedsImage && referenceImages.length === 0}
+                · required
+              {/if}
+            </span>
+          </div>
+          <div class="vc-row">
+            <span class="vc-lbl vc-lbl-wide">Provider</span>
+            <select
+              class="vc-select"
+              value={labImageProvider}
+              onchange={(e) => setLabImageProvider((e.currentTarget as HTMLSelectElement).value as LabImageProvider)}
+            >
+              {#each LAB_IMAGE_PROVIDERS as provider}
+                <option value={provider.id}>{provider.label}</option>
+              {/each}
+            </select>
+          </div>
+          <div class="vc-row">
+            <span class="vc-lbl vc-lbl-wide">Model</span>
+            <select class="vc-select" bind:value={labImageModel}>
+              {#each imageModelsForProvider(labImageProvider) as model}
+                <option value={model.id}>{model.label}</option>
+              {/each}
+            </select>
+          </div>
+        </div>
+      </div>
+
       <!-- 7. VOICE CONFIG -->
       <div class="av-effects voice-cfg-block">
         <div class="section-lbl">VOICE CONFIG</div>
@@ -4551,6 +4841,7 @@ ${recent}
             <select class="vc-select" bind:value={voiceEngine}>
               <option value="none">NONE</option>
               <option value="voicevox">VOICEVOX</option>
+              <option value="irodori-tts">IRODORI TTS</option>
               <option value="colab-tts">COLAB TTS</option>
               <option value="elevenlabs">ELEVENLABS</option>
             </select>
@@ -4561,7 +4852,7 @@ ${recent}
               <input type="number" class="vc-input" bind:value={speakerId} min="0" max="999" />
             </div>
           {/if}
-          {#if voiceEngine === 'colab-tts'}
+          {#if voiceEngine === 'irodori-tts' || voiceEngine === 'colab-tts'}
             <div class="vc-row">
               <span class="vc-lbl">VOICE</span>
               <select class="vc-select" bind:value={voice}>
@@ -6121,6 +6412,11 @@ ${recent}
   width: 70px;
   flex-shrink: 0;
 }
+.vc-lbl-wide {
+  width: 128px;
+  letter-spacing: 0.8px;
+  white-space: normal;
+}
 
 .vc-select,
 .vc-input {
@@ -6145,6 +6441,121 @@ ${recent}
 }
 .vc-select option { background: #040d1a; }
 .vc-input::placeholder { color: var(--muted); }
+.vc-note {
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.35;
+  letter-spacing: 0.8px;
+}
+.vc-current {
+  color: var(--cy);
+  font-weight: 700;
+  text-shadow: 0 0 7px rgba(0,229,255,0.35);
+}
+.vc-warn {
+  color: #fb923c;
+  text-shadow: 0 0 7px rgba(251,146,60,0.35);
+}
+
+.router-state-block {
+  border-color: rgba(0,229,255,0.24);
+  background:
+    linear-gradient(135deg, rgba(0,229,255,0.055), rgba(168,85,247,0.035)),
+    rgba(2,9,18,0.42);
+}
+
+.router-state-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.router-state-section-title {
+  color: rgba(204,232,240,0.72);
+  font-size: 11px;
+  line-height: 1.3;
+  letter-spacing: 1.8px;
+  font-weight: 800;
+}
+
+.router-state-divider {
+  height: 1px;
+  margin: 4px 0;
+  background: linear-gradient(90deg, transparent, rgba(0,229,255,0.28), transparent);
+}
+
+.router-state-row,
+.router-state-reason {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+  padding: 7px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+
+.router-state-reason {
+  align-items: start;
+  border-bottom: 0;
+}
+
+.router-state-label {
+  color: rgba(204,232,240,0.5);
+  font-size: 11px;
+  line-height: 1.4;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+}
+
+.router-state-value,
+.router-state-reason span:last-child {
+  min-width: 0;
+  color: var(--cy);
+  font-size: 13px;
+  line-height: 1.45;
+  letter-spacing: 0.5px;
+  overflow-wrap: anywhere;
+}
+
+.router-state-value.intent {
+  color: #34d399;
+  font-weight: 800;
+  text-shadow: 0 0 9px rgba(52,211,153,0.35);
+}
+
+.router-state-value.source-gemini {
+  color: #a78bfa;
+  text-shadow: 0 0 9px rgba(167,139,250,0.35);
+}
+
+.router-state-value.source-rules {
+  color: #00e5ff;
+  text-shadow: 0 0 9px rgba(0,229,255,0.35);
+}
+
+.router-state-value.confidence-high {
+  color: #34d399;
+  font-weight: 800;
+  text-shadow: 0 0 9px rgba(52,211,153,0.36);
+}
+
+.router-state-value.confidence-mid {
+  color: #facc15;
+  font-weight: 800;
+  text-shadow: 0 0 9px rgba(250,204,21,0.34);
+}
+
+.router-state-value.confidence-low {
+  color: #f43f5e;
+  font-weight: 800;
+  text-shadow: 0 0 9px rgba(244,63,94,0.36);
+}
+
+.router-state-muted {
+  color: rgba(204,232,240,0.42);
+  text-shadow: none;
+}
 
 
 /* Stats */
@@ -7792,6 +8203,27 @@ ${recent}
   gap: 6px;
   flex-wrap: wrap;
   margin-top: 2px;
+}
+
+.speak-send-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  font-size: 10px;
+  letter-spacing: 1.2px;
+  font-family: inherit;
+  font-weight: 600;
+  color: #38bdf8;
+  background: rgba(56,189,248,0.06);
+  border: 1px solid rgba(56,189,248,0.25);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.speak-send-btn:hover {
+  background: rgba(56,189,248,0.12);
+  border-color: rgba(56,189,248,0.5);
 }
 
 .yaml-send-btn {

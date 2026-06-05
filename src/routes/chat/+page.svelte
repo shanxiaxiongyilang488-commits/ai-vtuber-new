@@ -3,6 +3,7 @@ import Sidebar from '$lib/components/chat/Sidebar.svelte';
 import ControlPanel from '$lib/components/chat/ControlPanel.svelte';
 import CharacterSettingsModal from '$lib/components/CharacterSettingsModal.svelte';
 import type { Character } from '$lib/types/character';
+import { speakIrodoriText } from '$lib/tts/irodori';
 import { tick } from 'svelte';
 
 type Message = {
@@ -37,6 +38,8 @@ let modalOpen = $state(false);
 let selectedCharacter = $state<Character | null>(null);
 let messages = $state<Message[]>([]);
 let selectedEngine = $state<"openai" | "gemini" | "claude">("openai");
+let speakingMessageKey = $state<string | null>(null);
+let speechError = $state<string | null>(null);
 // 長文モード：true のとき bubble 幅を拡張し pre-wrap を強制する
 let longMode = $state(false);
 
@@ -147,6 +150,33 @@ async function speak(text: string, speaker?: string) {
 // ----------------------------
 // 会話開始
 // ----------------------------
+async function handleSpeakMessage(msg: Message, index: number) {
+  const key = `${index}:${msg.speaker}`;
+  if (speakingMessageKey) return;
+
+  const character =
+    msg.speaker === char1.name ? char1 :
+    msg.speaker === char2.name ? char2 :
+    null;
+
+  speakingMessageKey = key;
+  speechError = null;
+
+  try {
+    await speakIrodoriText(msg.text, {
+      context: {
+        speaker: msg.speaker,
+        character,
+      },
+    });
+  } catch (e) {
+    console.error('Irodori TTS failed:', e);
+    speechError = e instanceof Error ? e.message : 'Irodori TTS failed';
+  } finally {
+    speakingMessageKey = null;
+  }
+}
+
 async function handleStartDiscussion() {
   console.log("🔥 会話開始:", topic);
 
@@ -231,7 +261,7 @@ function downloadText(text: string, filename = "output.md") {
 function generateMarkdown() {
   if (messages.length === 0) return;
   const lines = messages.map(m => `## ${m.speaker}\n\n${m.text}`);
-  const content = `# AI ディスカッション\n\nトピック：${topic}\n\n---\n\n${lines.join('\n\n---\n\n')}`;
+  const content = `# MEMORY CORE\n\nトピック：${topic}\n\n---\n\n${lines.join('\n\n---\n\n')}`;
   downloadText(content, 'discussion.md');
 }
 
@@ -298,8 +328,8 @@ async function generateDocFlow() {
           </span>
         </div>
         <h1 class="page-title">
-          AI ディスカッション
-          <span class="title-accent">ターミナル</span>
+          MEMORY CORE
+          <span class="title-accent">人格記憶・対話コアシステム</span>
         </h1>
         <div class="header-right">
           <!-- 資料生成ボタン -->
@@ -333,8 +363,8 @@ async function generateDocFlow() {
             <div class="diamond-core"></div>
           </div>
 
-          <p class="empty-text">トピックを入力して会話を開始してください</p>
-          <p class="empty-sub">AWAITING INPUT — NEURAL LINK STANDBY</p>
+          <p class="empty-text">キャラクター人格の記憶、会話履歴、対話ログ研究中核システム</p>
+          <p class="empty-sub">MEMORY LINK READY</p>
         </div>
       {:else}
         <div class="messages">
@@ -363,6 +393,11 @@ async function generateDocFlow() {
 </div>
 
 <div class="action-buttons">
+  <button
+    class:speaking={speakingMessageKey === `${index}:${msg.speaker}`}
+    disabled={speakingMessageKey !== null}
+    onclick={() => handleSpeakMessage(msg, index)}
+  >{speakingMessageKey === `${index}:${msg.speaker}` ? '🔊 Speaking...' : '🔊 Speak'}</button>
   <button onclick={() => copyText(msg.text)}>📋 COPY</button>
   <button onclick={() => downloadText(msg.text)}>💾 DL</button>
 </div>
@@ -385,6 +420,9 @@ async function generateDocFlow() {
 
     <!-- Control Panel -->
     <ControlPanel bind:topic onStart={handleStartDiscussion} />
+    {#if speechError}
+      <div class="speech-error">{speechError}</div>
+    {/if}
 
   </div>
 </div>
@@ -926,6 +964,24 @@ async function generateDocFlow() {
 .action-buttons button:hover {
   background: #38bdf8;
   color: black;
+}
+
+.action-buttons button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.action-buttons button.speaking {
+  color: #f8fafc;
+  border-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.18);
+}
+
+.speech-error {
+  margin: 6px 40px 0;
+  color: #fca5a5;
+  font-size: 12px;
+  letter-spacing: 0.02em;
 }
 
 /* ── 長文モードトグルボタン ── */

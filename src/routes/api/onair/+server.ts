@@ -1,15 +1,16 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
+import { getProviderKey } from '$lib/server/settings';
 
 export const POST: RequestHandler = async ({ request }) => {
   try {
     const body = await request.json();
     const message = body.message ?? '';
 
-    const apiKey = process.env.OPENAI_API_KEY;
+    const apiKey = await getProviderKey('openai');
 
     if (!apiKey) {
-      return json({ error: 'OPENAI_API_KEY が未設定です' }, { status: 500 });
+      return json({ error: 'OpenAI API key が未設定です' }, { status: 500 });
     }
 
     console.log('[onair] dynamic import start');

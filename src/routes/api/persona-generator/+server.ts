@@ -1,7 +1,7 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import OpenAI from 'openai';
-import { env } from '$env/dynamic/private';
+import { getProviderKey } from '$lib/server/settings';
 
 type PersonaGeneratorResponse = {
   name: string;
@@ -70,11 +70,12 @@ export const POST: RequestHandler = async ({ request }) => {
     throw error(400, 'prompt is required');
   }
 
-  if (!env.OPENAI_API_KEY) {
-    throw error(500, 'OPENAI_API_KEY 未設定');
+  const apiKey = await getProviderKey('openai');
+  if (!apiKey) {
+    throw error(500, 'OpenAI API key 未設定');
   }
 
-  const openai = new OpenAI({ apiKey: env.OPENAI_API_KEY });
+  const openai = new OpenAI({ apiKey });
 
   const res = await openai.chat.completions.create({
     model: 'gpt-4o-mini',
