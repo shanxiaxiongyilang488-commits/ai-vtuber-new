@@ -63,12 +63,11 @@ export const POST: RequestHandler = async ({ request }) => {
 
   const prompt = buildImagePromptFromYamlPanel(document, panel);
   const mediaModel = resolveFalImageModel(panel.model || body.model);
-  const chars = Array.from(new Set([...document.chars, ...panel.chars]));
+  const chars = panel.chars.length > 0 ? panel.chars : document.chars;
+  const charNames = chars.map((char) => char.name).filter(Boolean);
   const plan = {
     panel: 'panel_1',
     chars,
-    pose: panel.pose,
-    line: panel.line,
     scene: panel.scene,
     model: mediaModel.id,
   };
@@ -78,12 +77,11 @@ export const POST: RequestHandler = async ({ request }) => {
   console.log('[YAML_PANEL]', 'panel_1');
   console.log('[YAML_SCENE]', panel.scene || '(none)');
   console.log('[YAML_CHARS]', chars);
-  console.log('[YAML_POSE]', panel.pose || '(none)');
-  console.log('[YAML_LINE]', panel.line || '(none)');
+  console.log('[PANEL_CHAR_COUNT]', chars.length);
   console.log('[YAML_IMAGE_PROMPT]', prompt);
   console.log('[MEDIA_PROVIDER]', 'fal');
   console.log('[MEDIA_MODEL]', mediaModel.id);
-  const refImages = registryReferenceImagesFromText(`${prompt}\n${chars.join('\n')}`);
+  const refImages = registryReferenceImagesFromText(`${prompt}\n${charNames.join('\n')}`);
   console.log('[YAML_IMAGE_REF_COUNT]', refImages.length);
 
   const result = await generateMediaImage({
@@ -103,8 +101,6 @@ export const POST: RequestHandler = async ({ request }) => {
     panel: 'panel_1',
     scene: panel.scene,
     chars,
-    pose: panel.pose,
-    line: panel.line,
     provider: 'fal',
     model: mediaModel.id,
   });
