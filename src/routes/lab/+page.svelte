@@ -52,7 +52,7 @@
   };
 
   type ChatMessage = {
-    role: 'user' | 'assistant'
+    role: 'user' | 'assistant' | 'ai' | 'error'
     text: string;
     time: string;
     avatar?: string;
@@ -2557,6 +2557,112 @@ function removeReferenceImage(i: number): void {
     }
   }
 
+  function isYamlImageGenerationRequest(text: string): boolean {
+    const normalized = text.replace(/\s+/g, '').toLowerCase();
+    return (
+      /このyamlを画像化/.test(normalized) ||
+      /yamlを画像化/.test(normalized) ||
+      /yamlから画像生成/.test(normalized) ||
+      /yaml.*image/.test(normalized)
+    );
+  }
+
+  function extractYamlBlockFromText(text: string): string | null {
+    const fenced = text.match(/```ya?ml\s*([\s\S]*?)```/i);
+    if (fenced?.[1]?.trim()) return fenced[1].trim();
+    if (/^\s*pages\s*:/m.test(text) || /^\s*panel_?1\s*:/im.test(text)) {
+      const start = text.search(/^\s*(pages|panel_?1)\s*:/im);
+      return start >= 0 ? text.slice(start).trim() : text.trim();
+    }
+    return null;
+  }
+
+  function latestYamlForImageGeneration(): string | null {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i];
+      if (msg.role === 'error') continue;
+      const yonkoma = parseYonkomaYaml(msg.text);
+      if (yonkoma?.yaml) return yonkoma.yaml;
+      const yaml = extractYamlBlockFromText(msg.text);
+      if (yaml) return yaml;
+    }
+    try {
+      const saved = localStorage.getItem('studio-yaml');
+      return saved?.trim() || null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function generateImageFromLatestYaml(): Promise<void> {
+    const yaml = latestYamlForImageGeneration();
+    if (!yaml) {
+      messages = [...messages, { role: 'error', text: '画像化できるYAMLが見つかりません。先にYAMLを生成してください。', time: getTime() }];
+      isThinking = false;
+      setTimeout(() => chatEl?.scrollTo({ top: chatEl.scrollHeight, behavior: 'smooth' }), 50);
+      return;
+    }
+
+    const model = labImageModelConfig.provider === 'fal'
+      ? labImageModelConfig.apiModel
+      : 'fal-ai/nano-banana-pro';
+
+    try {
+      const payload = {
+        yaml,
+        panel: 'panel_1',
+        model,
+        size: '1024x1024',
+      };
+      console.log('[lab] yaml image payload', { panel: payload.panel, model: payload.model, yamlLength: yaml.length });
+      console.log('[lab] fetch /api/yaml-image provider/model', { provider: 'fal', model: payload.model });
+
+      const res = await fetch('/api/yaml-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData?.message ?? `HTTP ${res.status}`);
+      }
+
+      const data = await res.json();
+      const imageUrl = typeof data?.images?.[0]?.url === 'string'
+        ? data.images[0].url
+        : (typeof data?.url === 'string' ? data.url : '');
+      if (!imageUrl) throw new Error('No image URL');
+
+      const imagePrompt = typeof data?.prompt === 'string' ? data.prompt : '';
+      void saveImageMemory({
+        imageUrl,
+        imagePrompt,
+        provider: 'fal',
+        model: typeof data?.model === 'string' ? data.model : model,
+      }).catch((error) => {
+        console.warn('[Lab] yaml image memory save failed:', error);
+      });
+
+      messages = [
+        ...messages,
+        {
+          role: 'ai',
+          text: 'YAML panel_1 IMAGE GENERATED',
+          time: getTime(),
+          avatar: selectedAvatar,
+          imageUrl,
+          imagePrompt,
+        },
+      ];
+    } catch (err) {
+      console.error('[Lab] YAML image generation fail:', err);
+      messages = [...messages, { role: 'error', text: `YAML画像化に失敗しました: ${err instanceof Error ? err.message : String(err)}`, time: getTime() }];
+    } finally {
+      isThinking = false;
+      setTimeout(() => chatEl?.scrollTo({ top: chatEl.scrollHeight, behavior: 'smooth' }), 50);
+    }
+  }
+
   async function sendYonkomaPrompt() {
     yonkomaGenerating = true;
     inputText = 'この画像のキャラを使って4コマ漫画のYAMLを作って。\nギャグ寄り、キャラの個性を活かして。';
@@ -2569,6 +2675,13 @@ function removeReferenceImage(i: number): void {
     if (!text || isThinking) return;
     inputText = '';
     messages = [...messages, { role: 'user', text, time: getTime() }];
+    if (isYamlImageGenerationRequest(text)) {
+      isThinking = true;
+      lastRouterAction = 'yaml_image_generation';
+      lastRouterActionAt = new Date().toLocaleString('ja-JP');
+      await generateImageFromLatestYaml();
+      return;
+    }
     const intent = await classifyIntent(text);
     console.log('[Lab] intent:', intent);
     lastRouterAction = intent.intent === 'image' ? 'image_generation' : `${intent.intent}_route`;
