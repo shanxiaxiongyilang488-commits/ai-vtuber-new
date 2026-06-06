@@ -75,6 +75,7 @@ export const POST: RequestHandler = async ({ request }) => {
   console.log('[YAML_IMAGE_PIPELINE]', 'YAML -> Parser -> Scene -> Character -> Prompt -> Media Provider(FAL)');
   console.log('[YAML_IMAGE_PLAN]', plan);
   console.log('[YAML_PANEL]', 'panel_1');
+  console.log('[YAML_PANEL_PARSED]', panel);
   console.log('[YAML_SCENE]', panel.scene || '(none)');
   console.log('[YAML_CHARS]', chars);
   console.log('[PANEL_CHAR_COUNT]', chars.length);

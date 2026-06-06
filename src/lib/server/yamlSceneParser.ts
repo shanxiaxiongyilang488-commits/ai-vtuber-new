@@ -175,10 +175,42 @@ function emptyPanel(panel = 1): YamlScenePanel {
   return { panel, scene: '', chars: [], prompt: '' };
 }
 
+function firstPanelRawBlock(yaml: string): string {
+  const lines = yaml.split('\n');
+  const start = lines.findIndex((line) => {
+    const trimmed = line.trim();
+    return /^-\s*panel\s*:\s*1\b/i.test(trimmed) || /^panel_?1\s*:\s*$/i.test(trimmed);
+  });
+  if (start < 0) return yaml.slice(0, 2000);
+
+  const startIndent = lines[start].match(/^\s*/)?.[0].length ?? 0;
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const indent = line.match(/^\s*/)?.[0].length ?? 0;
+    if (indent <= startIndent && (/^-\s*panel\s*:/i.test(trimmed) || /^panel_?[0-9]+\s*:\s*$/i.test(trimmed))) {
+      end = i;
+      break;
+    }
+  }
+  return lines.slice(start, end).join('\n').trim();
+}
+
+function logPanelParseDebug(raw: string, panel: YamlScenePanel | null): void {
+  console.log('[YAML_PANEL_RAW]', raw);
+  console.log('[YAML_PANEL_PARSED]', panel);
+  console.log('[PANEL_CHAR_COUNT]', panel?.chars.length ?? 0);
+}
+
 export function parseYamlSceneDocument(source: string): YamlSceneDocument {
   const yaml = stripCodeFence(source);
   const jsonDoc = parseJsonDocument(yaml);
-  if (jsonDoc) return jsonDoc;
+  if (jsonDoc) {
+    logPanelParseDebug(firstPanelRawBlock(yaml), jsonDoc.panels[0] ?? null);
+    return jsonDoc;
+  }
 
   const document: YamlSceneDocument = {
     pagePrompt: '',
@@ -397,6 +429,7 @@ export function parseYamlSceneDocument(source: string): YamlSceneDocument {
     ...speakers,
   ]);
 
+  logPanelParseDebug(firstPanelRawBlock(yaml), document.panels[0] ?? null);
   return document;
 }
 

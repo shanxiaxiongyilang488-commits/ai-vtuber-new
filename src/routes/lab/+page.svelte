@@ -2668,6 +2668,32 @@ function removeReferenceImage(i: number): void {
     return '';
   }
 
+  function extractYamlListField(block: string, keys: string[]): string[] {
+    const lines = block.split('\n');
+    for (const key of keys) {
+      const start = lines.findIndex((line) => new RegExp(`^\\s*(?:-\\s*)?${key}:\\s*$`, 'i').test(line));
+      if (start < 0) continue;
+      const baseIndent = lines[start].match(/^\s*/)?.[0].length ?? 0;
+      const values: string[] = [];
+      for (let i = start + 1; i < lines.length; i++) {
+        const line = lines[i];
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) continue;
+        const indent = line.match(/^\s*/)?.[0].length ?? 0;
+        if (indent <= baseIndent && /^[A-Za-z0-9_]+:/.test(trimmed)) break;
+        const scalarItem = trimmed.match(/^-\s*(.+)$/);
+        if (scalarItem?.[1] && !scalarItem[1].includes(':')) {
+          values.push(yamlScalar(scalarItem[1]));
+          continue;
+        }
+        const nameItem = trimmed.match(/^(?:-\s*)?(?:name|id|character):\s*(.+)$/i);
+        if (nameItem?.[1]) values.push(yamlScalar(nameItem[1]));
+      }
+      if (values.length > 0) return values.filter(Boolean);
+    }
+    return [];
+  }
+
   function firstYamlPanelBlock(yaml: string): string {
     const panelHeader = yaml.match(/^\s*(?:-\s*)?panel_?1:\s*$/im);
     if (panelHeader?.index !== undefined) {
@@ -2681,10 +2707,12 @@ function removeReferenceImage(i: number): void {
   function buildYamlImagePlanForSidebar(yaml: string, model: string) {
     const block = firstYamlPanelBlock(yaml);
     const charsRaw = extractYamlField(block, ['chars', 'characters', 'character']) || extractYamlField(yaml, ['chars', 'characters', 'character']);
+    const blockCharsList = extractYamlListField(block, ['chars', 'characters']);
+    const charsList = blockCharsList.length > 0 ? blockCharsList : extractYamlListField(yaml, ['chars', 'characters']);
     const line = extractYamlField(block, ['line']) || extractYamlField(block, ['dialogue']);
     return {
       panel: 'panel_1',
-      chars: charsRaw ? charsRaw.split(/[,/]/).map((item) => item.trim()).filter(Boolean) : [],
+      chars: charsRaw ? charsRaw.split(/[,/]/).map((item) => item.trim()).filter(Boolean) : charsList,
       pose: extractYamlField(block, ['pose']),
       line,
       scene: extractYamlField(block, ['scene']),
