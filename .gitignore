@@ -18,6 +18,9 @@ Thumbs.db
 !.env.example
 !.env.test
 
+# Local API settings (may contain secrets)
+/data/settings.json
+
 # Vite
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*

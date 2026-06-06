@@ -1,0 +1,56 @@
+{
+  "chatProvider": "gemini",
+  "imageProvider": "openai",
+  "mediaProvider": "fal",
+  "chatConfig": {
+    "provider": "gemini",
+    "model": "gemini-2.5-flash"
+  },
+  "imageConfig": {
+    "provider": "openai",
+    "model": "gpt-image-2"
+  },
+  "mediaConfig": {
+    "provider": "fal",
+    "model": "fal-ai/nano-banana"
+  },
+  "openai": {
+    "key": "",
+    "model": "gpt-4o-mini"
+  },
+  "gemini": {
+    "key": "",
+    "model": "gemini-2.5-flash"
+  },
+  "anthropic": {
+    "key": "",
+    "model": "claude-3-5-haiku-latest"
+  },
+  "fal": {
+    "key": ""
+  },
+  "ideogram": {
+    "key": ""
+  },
+  "elevenlabs": {
+    "key": ""
+  },
+  "irodori": {
+    "url": "",
+    "voiceProfiles": {}
+  },
+  "voice": {
+    "backend": "local",
+    "localUrl": "http://127.0.0.1:7860",
+    "colabUrl": ""
+  },
+  "local": {
+    "baseUrl": "http://localhost:1234",
+    "model": "qwen/qwen3-4b"
+  },
+  "image": {
+    "provider": "openai",
+    "model": "gpt-image-2",
+    "size": "1024x1024"
+  }
+}

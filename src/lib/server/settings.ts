@@ -62,6 +62,7 @@ export type IrodoriVoiceProfile = {
 export type ProviderKeyName = 'openai' | 'gemini' | 'anthropic' | 'fal' | 'elevenlabs' | 'ideogram';
 
 const SETTINGS_PATH = path.join(process.cwd(), 'data', 'settings.json');
+const SETTINGS_TEMPLATE_PATH = path.join(process.cwd(), 'data', 'settings.template.json');
 
 export const DEFAULT_SETTINGS: ApiSettings = {
   chatProvider: 'gemini',
@@ -302,8 +303,27 @@ export async function readSettings(): Promise<ApiSettings> {
     const raw = await fs.readFile(SETTINGS_PATH, 'utf-8');
     return normalizeSettings(JSON.parse(raw));
   } catch (error) {
-    console.warn('[SETTINGS] using defaults:', error);
-    return DEFAULT_SETTINGS;
+    const fileError = error as NodeJS.ErrnoException;
+    if (fileError.code !== 'ENOENT') {
+      console.warn('[SETTINGS] using defaults:', error);
+      return DEFAULT_SETTINGS;
+    }
+
+    try {
+      const template = await fs.readFile(SETTINGS_TEMPLATE_PATH, 'utf-8');
+      const settings = normalizeSettings(JSON.parse(template));
+      await fs.mkdir(path.dirname(SETTINGS_PATH), { recursive: true });
+      await fs.writeFile(SETTINGS_PATH, `${JSON.stringify(settings, null, 2)}\n`, {
+        encoding: 'utf-8',
+        flag: 'wx',
+      }).catch((writeError: NodeJS.ErrnoException) => {
+        if (writeError.code !== 'EEXIST') throw writeError;
+      });
+      return settings;
+    } catch (templateError) {
+      console.warn('[SETTINGS] using defaults:', templateError);
+      return DEFAULT_SETTINGS;
+    }
   }
 }
 

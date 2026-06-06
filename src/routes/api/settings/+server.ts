@@ -20,12 +20,12 @@ export const POST: RequestHandler = async ({ request }) => {
   console.log('[IMAGE_MODEL]', saved.imageConfig.model);
   console.log('[MEDIA_PROVIDER]', saved.mediaConfig.provider);
   console.log('[MEDIA_MODEL]', saved.mediaConfig.model);
-  console.log('[OPENAI KEY SAVED]', Boolean(saved.openai.key), saved.openai.key.slice(0, 12));
-  console.log('[GEMINI KEY SAVED]', Boolean(saved.gemini.key), saved.gemini.key.slice(0, 12));
-  console.log('[FAL KEY SAVED]', Boolean(saved.fal.key), saved.fal.key.slice(0, 12));
-  console.log('[IDEOGRAM KEY SAVED]', Boolean(saved.ideogram.key), saved.ideogram.key.slice(0, 12));
-  console.log('[ANTHROPIC KEY SAVED]', Boolean(saved.anthropic.key), saved.anthropic.key.slice(0, 12));
-  console.log('[ELEVENLABS KEY SAVED]', Boolean(saved.elevenlabs.key), saved.elevenlabs.key.slice(0, 12));
+  console.log('[OPENAI KEY SAVED]', Boolean(saved.openai.key));
+  console.log('[GEMINI KEY SAVED]', Boolean(saved.gemini.key));
+  console.log('[FAL KEY SAVED]', Boolean(saved.fal.key));
+  console.log('[IDEOGRAM KEY SAVED]', Boolean(saved.ideogram.key));
+  console.log('[ANTHROPIC KEY SAVED]', Boolean(saved.anthropic.key));
+  console.log('[ELEVENLABS KEY SAVED]', Boolean(saved.elevenlabs.key));
   console.log('[IRODORI URL SAVED]', Boolean(saved.irodori.url));
   return json(saved);
 };
