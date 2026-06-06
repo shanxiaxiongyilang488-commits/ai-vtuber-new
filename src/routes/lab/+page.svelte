@@ -2630,8 +2630,11 @@ function removeReferenceImage(i: number): void {
     const normalized = text.replace(/\s+/g, '').toLowerCase();
     return (
       /このyamlを画像化/.test(normalized) ||
+      /yaml画像化/.test(normalized) ||
       /yamlを画像化/.test(normalized) ||
       /yamlから画像生成/.test(normalized) ||
+      /panel_?1を画像化/.test(normalized) ||
+      /panel_?1から画像生成/.test(normalized) ||
       /yaml.*image/.test(normalized)
     );
   }
@@ -2823,7 +2826,15 @@ function removeReferenceImage(i: number): void {
     messages = [...messages, { role: 'user', text, time: getTime() }];
     if (isYamlImageGenerationRequest(text)) {
       isThinking = true;
-      lastRouterAction = 'yaml_image_generation';
+      routerStateStore.set({
+        intent: 'yaml',
+        subtype: 'yaml_image',
+        confidence: 1,
+        reason: 'yaml_image > vision_analysis',
+        source: 'rules',
+      });
+      console.log('[ROUTER_PRIORITY]', 'yaml_image > vision_analysis');
+      lastRouterAction = 'yaml_image';
       lastRouterActionAt = new Date().toLocaleString('ja-JP');
       await generateImageFromLatestYaml();
       return;
