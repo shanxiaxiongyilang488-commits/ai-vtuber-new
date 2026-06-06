@@ -1817,9 +1817,10 @@ function removeReferenceImage(i: number): void {
 	      if (referenceImages.length > 0) {
 	        parsed.refs = {
 	          ...(parsed.refs ?? {}),
-	          a: parsed.refs?.a ?? referenceImages[0]?.registryName ?? referenceImages[0]?.note ?? referenceImages[0]?.name,
-	          b: parsed.refs?.b ?? referenceImages[1]?.registryName ?? referenceImages[1]?.note ?? referenceImages[1]?.name,
+	          a: referenceImages[0]?.registryName ?? parsed.refs?.a ?? referenceImages[0]?.note ?? referenceImages[0]?.name,
+	          b: referenceImages[1]?.registryName ?? parsed.refs?.b ?? referenceImages[1]?.note ?? referenceImages[1]?.name,
 	        };
+	        console.log('[YAML_REFS]', parsed.refs);
 	      }
 	
 	      const yamlData = {
@@ -2697,6 +2698,39 @@ function removeReferenceImage(i: number): void {
     return [];
   }
 
+  function extractYamlRefs(yaml: string): string[] {
+    const refsBlock = yaml.match(/(?:^|\n)refs:\s*\n([\s\S]*?)(?=\n[A-Za-z0-9_]+:|\n\s*-\s*[A-Za-z0-9_]+:|$)/i)?.[1] ?? '';
+    if (!refsBlock.trim()) return [];
+    return refsBlock
+      .split('\n')
+      .map((line) => line.match(/^\s*[a-z0-9_-]+:\s*(.+)$/i)?.[1] ?? '')
+      .map((value) => yamlScalar(value))
+      .filter(Boolean);
+  }
+
+  async function lookupYamlCharacters(names: string[]): Promise<string[]> {
+    const found: string[] = [];
+    for (const name of names) {
+      const id = name.trim().toLowerCase();
+      if (!id) continue;
+      console.log('[YAML_CHARACTER_LOOKUP]', id);
+      try {
+        const res = await fetch(`/api/characters/${encodeURIComponent(id)}`);
+        if (res.ok) {
+          const data = await res.json();
+          const characterName = data?.character?.name ?? name;
+          console.log('[YAML_CHARACTER_FOUND]', { id, name: characterName });
+          found.push(name);
+        } else {
+          console.log('[YAML_CHARACTER_LOOKUP]', { id, found: false, status: res.status });
+        }
+      } catch (error) {
+        console.warn('[YAML_CHARACTER_LOOKUP]', { id, error });
+      }
+    }
+    return found;
+  }
+
   function firstYamlPanelBlock(yaml: string): string {
     const panelHeader = yaml.match(/^\s*(?:-\s*)?panel_?1:\s*$/im);
     if (panelHeader?.index !== undefined) {
@@ -2707,15 +2741,20 @@ function removeReferenceImage(i: number): void {
     return yaml;
   }
 
-  function buildYamlImagePlanForSidebar(yaml: string, model: string) {
+  async function buildYamlImagePlanForSidebar(yaml: string, model: string) {
     const block = firstYamlPanelBlock(yaml);
     const charsRaw = extractYamlField(block, ['chars', 'characters', 'character']) || extractYamlField(yaml, ['chars', 'characters', 'character']);
     const blockCharsList = extractYamlListField(block, ['chars', 'characters']);
     const charsList = blockCharsList.length > 0 ? blockCharsList : extractYamlListField(yaml, ['chars', 'characters']);
+    const refs = extractYamlRefs(yaml);
+    const plannedChars = charsRaw ? charsRaw.split(/[,/]/).map((item) => item.trim()).filter(Boolean) : (charsList.length > 0 ? charsList : refs);
+    console.log('[YAML_REFS]', refs);
+    console.log('[YAML_PLAN_CHARS]', plannedChars);
+    void lookupYamlCharacters(plannedChars);
     const line = extractYamlField(block, ['line']) || extractYamlField(block, ['dialogue']);
     return {
       panel: 'panel_1',
-      chars: charsRaw ? charsRaw.split(/[,/]/).map((item) => item.trim()).filter(Boolean) : charsList,
+      chars: plannedChars,
       pose: extractYamlField(block, ['pose']),
       line,
       scene: extractYamlField(block, ['scene']),
@@ -2752,7 +2791,7 @@ function removeReferenceImage(i: number): void {
     const model = labImageModelConfig.provider === 'fal'
       ? labImageModelConfig.apiModel
       : 'fal-ai/nano-banana-pro';
-    yamlImagePlan = buildYamlImagePlanForSidebar(yaml, model);
+    yamlImagePlan = await buildYamlImagePlanForSidebar(yaml, model);
     lastRouterAction = 'YAML_IMAGE_PLAN';
     lastRouterActionAt = new Date().toLocaleString('ja-JP');
 

@@ -29,8 +29,12 @@ function registryReferenceImagesFromText(text: string): string[] {
   return ids
     .map((id) => {
       try {
+        console.log('[YAML_CHARACTER_LOOKUP]', id);
         const ref = getCharacterReferenceDataUrl(id);
-        if (ref) console.log('[YAML_IMAGE_REF]', id);
+        if (ref) {
+          console.log('[YAML_CHARACTER_FOUND]', id);
+          console.log('[YAML_IMAGE_REF]', id);
+        }
         return ref;
       } catch (caughtError) {
         console.warn('[YAML_IMAGE_REF_ERROR]', id, caughtError);
@@ -65,6 +69,8 @@ export const POST: RequestHandler = async ({ request }) => {
   const mediaModel = resolveFalImageModel(panel.model || body.model);
   const chars = panel.chars.length > 0 ? panel.chars : document.chars;
   const charNames = chars.map((char) => char.name).filter(Boolean);
+  console.log('[YAML_PLAN_CHARS]', charNames);
+  console.log('[YAML_REFS]', document.chars.map((char) => char.name).filter(Boolean));
   const plan = {
     panel: 'panel_1',
     chars,
