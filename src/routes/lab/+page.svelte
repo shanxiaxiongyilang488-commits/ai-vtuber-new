@@ -4262,7 +4262,7 @@ async function removeReferenceImage(i: number): Promise<void> {
         characterBibleMeta: bible ? {
           source: characterBibleSource || 'unknown',
           id: bible.unitId,
-          fileName: 'profile.json',
+          fileName: 'character.yaml',
         } : null,
         storyRefs: storyReferences.map((ref) => ({
           source: 'lab_story_ref',

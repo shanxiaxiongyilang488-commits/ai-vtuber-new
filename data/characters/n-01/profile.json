@@ -3,32 +3,5 @@
   "name": "Im3 g77aBQYwApWJSmq6n SCeClIVY",
   "role": "",
   "description": "",
-  "image": "data/characters/n-01/reference.png",
-  "characterBible": {
-    "unitId": "S-22",
-    "characters": [
-      {
-        "id": "N-01",
-        "hairColor": "black",
-        "eyeColor": "purple",
-        "ears": "black cat ears",
-        "tail": "black cat tail",
-        "androidParts": "visible mechanical joints, arms, legs, neck, and hands with metallic parts and illuminated markings",
-        "outfit": "white/gray futuristic bodysuit with dark accents and integrated mechanical design",
-        "accessories": "hair clips with geometric and bow designs, choker with a triangle pendant, hair bow on left side, small mechanical details",
-        "appearance": "female android with long black hair, light skin, cat ears and tail, intricate futuristic mechanical elements, sitting closely with another similar android in a bright, modern room"
-      },
-      {
-        "id": "N-01",
-        "hairColor": "white/silver",
-        "eyeColor": "blue",
-        "ears": "white cat ears",
-        "tail": "white cat tail",
-        "androidParts": "visible mechanical joints, arms, legs, neck, and hands with metallic parts and illuminated markings",
-        "outfit": "white/gray futuristic bodysuit with dark accents and integrated mechanical design",
-        "accessories": "hair clips with geometric and bow designs, choker with a triangle pendant, large bow on right side, small mechanical details",
-        "appearance": "female android with long white/silver hair, light skin, cat ears and tail, intricate futuristic mechanical elements, sitting closely with another similar android in a bright, modern room"
-      }
-    ]
-  }
+  "image": "data/characters/n-01/reference.png"
 }

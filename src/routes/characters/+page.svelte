@@ -3,6 +3,7 @@
   import CharacterLibraryCard, {
     type CharacterLibraryItem,
   } from '$lib/components/characters/CharacterLibraryCard.svelte';
+  import { sessionStore } from '$lib/stores/sessionStore';
 
   let characters = $state<CharacterLibraryItem[]>([]);
   let loading = $state(true);
@@ -118,6 +119,81 @@
       busyId = '';
     }
   }
+
+  function parseVisionCharacterYaml(text: string, characterId: string) {
+    const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
+    const jsonText = fenced ?? text.match(/\{[\s\S]*\}/)?.[0] ?? text;
+    const parsed = JSON.parse(jsonText);
+    if (!Array.isArray(parsed?.characters) || parsed.characters.length === 0) {
+      throw new Error('Vision解析結果にcharactersがありません。');
+    }
+    return {
+      unitId: String(parsed.unitId || characterId.toUpperCase()),
+      characters: parsed.characters.map((entry: Record<string, unknown>, index: number) => ({
+        id: String(entry.id || (index === 0 ? characterId.toUpperCase() : `${characterId.toUpperCase()}-${index + 1}`)),
+        hairColor: String(entry.hair_color ?? entry.hairColor ?? 'unknown'),
+        eyeColor: String(entry.eye_color ?? entry.eyeColor ?? 'unknown'),
+        ears: String(entry.ears ?? 'unknown'),
+        tail: String(entry.tail ?? 'unknown'),
+        androidParts: String(entry.android_parts ?? entry.androidParts ?? 'unknown'),
+        outfit: String(entry.outfit ?? 'unknown'),
+        accessories: String(entry.accessories ?? 'unknown'),
+        appearance: String(entry.appearance ?? 'unknown'),
+      })),
+    };
+  }
+
+  async function generateCharacterYaml(character: CharacterLibraryItem): Promise<void> {
+    if (!character.imageDataUrl) {
+      errorMessage = 'Character Ref画像が必要です。';
+      return;
+    }
+    busyId = character.id;
+    errorMessage = '';
+    try {
+      const provider = $sessionStore.provider === 'openai'
+        || $sessionStore.provider === 'gemini'
+        || $sessionStore.provider === 'claude'
+        ? $sessionStore.provider
+        : 'gemini';
+      const response = await fetch('/api/lab-chat', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          route: 'image_analysis',
+          provider,
+          model: provider === $sessionStore.provider ? ($sessionStore.model || undefined) : undefined,
+          visionMode: 'strict',
+          memory: { enabled: false },
+          systemPrompt: [
+            'Analyze only directly visible facts in the attached Character Ref image.',
+            'The image is the sole source for appearance. Do not infer from the character name.',
+            'Do not invent personality, favorite foods, hobbies, preferences, biography, or relationships.',
+            'Return JSON only using this schema:',
+            '{"unitId":"...","characters":[{"id":"...","hair_color":"...","eye_color":"...","ears":"...","tail":"...","android_parts":"...","outfit":"...","accessories":"...","appearance":"..."}]}',
+            'Use "unknown" when a detail cannot be seen and "none visible" when visibly absent.',
+          ].join('\n'),
+          userMessage: `Analyze this Character Ref. The label ${character.id} identifies the record only and is not appearance evidence.`,
+          images: [character.imageDataUrl],
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.message ?? `Vision HTTP ${response.status}`);
+      const characterBible = parseVisionCharacterYaml(String(data?.text ?? ''), character.id);
+      const saveResponse = await fetch(`/api/characters/${encodeURIComponent(character.id)}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ characterBible }),
+      });
+      const saved = await saveResponse.json();
+      if (!saveResponse.ok) throw new Error(saved?.message ?? 'Character YAMLの保存に失敗しました。');
+      await loadCharacters();
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      busyId = '';
+    }
+  }
 </script>
 
 <svelte:head>
@@ -177,6 +253,7 @@
           onCancel={() => (editingId = '')}
           onSave={(input) => updateCharacter(character.id, input)}
           onImageChange={(file) => changeImage(character.id, file)}
+          onGenerateSheet={() => generateCharacterYaml(character)}
           onChat={() => (window.location.href = `/characters/${encodeURIComponent(character.id)}/chat`)}
         />
       {/each}

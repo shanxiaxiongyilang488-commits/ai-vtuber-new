@@ -385,7 +385,7 @@ export const POST: RequestHandler = async ({ request }) => {
     characterBible: characterBible ? {
       source: body.characterBibleMeta?.source?.trim() || 'request_character_bible',
       id: body.characterBibleMeta?.id?.trim() || characterBible.unitId || '(unknown)',
-      fileName: body.characterBibleMeta?.fileName?.trim() || 'profile.json',
+      fileName: body.characterBibleMeta?.fileName?.trim() || 'character.yaml',
     } : null,
     storyRefs: storyRefs.map((ref) => ({
       source: ref.source,

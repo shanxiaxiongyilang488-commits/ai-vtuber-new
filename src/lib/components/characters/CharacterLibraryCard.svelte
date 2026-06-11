@@ -8,6 +8,8 @@
     description: string;
     image: string;
     imageDataUrl?: string;
+    characterYaml?: string;
+    hasReference?: boolean;
   };
 
   let {
@@ -18,6 +20,7 @@
     onCancel,
     onSave,
     onImageChange,
+    onGenerateSheet,
     onChat,
   }: {
     character: CharacterLibraryItem;
@@ -27,6 +30,7 @@
     onCancel: () => void;
     onSave: (input: Pick<CharacterLibraryItem, 'name' | 'role' | 'description'>) => void | Promise<void>;
     onImageChange: (file: File) => void | Promise<void>;
+    onGenerateSheet: () => void | Promise<void>;
     onChat: () => void;
   } = $props();
 
@@ -90,6 +94,27 @@
       <div class="role">{character.role || '役割未設定'}</div>
       <p>{character.description || '説明はまだありません。'}</p>
       <div class="image-path">IMAGE: {character.image || '未登録'}</div>
+      <section class="character-sheet">
+        <div class="sheet-heading">
+          <span>CHARACTER YAML</span>
+          <button
+            class="generate-button"
+            onclick={onGenerateSheet}
+            disabled={busy || !character.hasReference}
+          >
+            {busy ? 'VISION解析中...' : 'YAML生成'}
+          </button>
+        </div>
+        {#if character.characterYaml}
+          <pre>{character.characterYaml}</pre>
+        {:else}
+          <div class="yaml-empty">
+            {character.hasReference
+              ? 'Character RefをVision解析してYAMLを生成してください。'
+              : 'Character Ref画像が必要です。'}
+          </div>
+        {/if}
+      </section>
       <div class="card-actions">
         <button class="chat-button" onclick={onChat}>Character Chat</button>
         <button class="edit-button" onclick={onEdit}>編集</button>
@@ -149,6 +174,43 @@
   .role { color: #fbbf24; font-size: 11px; font-weight: 700; }
   p { min-height: 48px; margin: 10px 0; color: #94a3b8; font-size: 12px; line-height: 1.55; }
   .image-path { overflow-wrap: anywhere; color: #64748b; font: 9px/1.4 Consolas, monospace; }
+  .character-sheet {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(34, 211, 238, 0.16);
+  }
+  .sheet-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    color: #67e8f9;
+    font: 800 9px/1.2 Consolas, monospace;
+    letter-spacing: 0.12em;
+  }
+  .generate-button { padding: 6px 8px; }
+  pre {
+    max-height: 260px;
+    margin: 9px 0 0;
+    padding: 10px;
+    overflow: auto;
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-radius: 6px;
+    background: #020617;
+    color: #cbd5e1;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font: 10px/1.55 Consolas, monospace;
+  }
+  .yaml-empty {
+    margin-top: 9px;
+    padding: 12px;
+    border: 1px dashed rgba(148, 163, 184, 0.2);
+    border-radius: 6px;
+    color: #64748b;
+    font-size: 10px;
+    line-height: 1.5;
+  }
 
   label { display: grid; gap: 4px; margin-top: 9px; }
   label span { color: #94a3b8; font-size: 9px; font-weight: 800; }
