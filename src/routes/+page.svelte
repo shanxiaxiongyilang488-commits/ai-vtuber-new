@@ -44,6 +44,14 @@
       tone: 'cyan',
     },
     {
+      id: 'characters',
+      label: 'CHARACTERS',
+      href: '/characters',
+      status: 'CHARACTER SHEET',
+      description: 'キャラクター画像・名前・役割・説明の管理',
+      tone: 'purple',
+    },
+    {
       id: 'settings',
       label: 'SETTINGS',
       href: '/settings/api',

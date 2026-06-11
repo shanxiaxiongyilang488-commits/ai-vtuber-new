@@ -6,6 +6,7 @@ export interface CharacterProfile {
   name: string;
   role: string;
   description: string;
+  image: string;
   characterBible?: CharacterBible;
 }
 
@@ -81,6 +82,10 @@ function imagePath(id: string, fileName: typeof REFERENCE_FILE | typeof SHEET_FI
   return join(characterDir(id), fileName);
 }
 
+function referenceAssetPath(id: string): string {
+  return `data/characters/${normalizeId(id)}/${REFERENCE_FILE}`;
+}
+
 function dataUrlToBuffer(dataUrl: string): Buffer {
   const match = dataUrl.match(/^data:image\/(?:png|jpeg|jpg|webp);base64,(.+)$/i);
   if (!match) throw new Error('image must be a data URL');
@@ -101,6 +106,10 @@ function readProfile(id: string): CharacterProfile | null {
     name: String(parsed.name ?? normalizedId),
     role: String(parsed.role ?? ''),
     description: String(parsed.description ?? ''),
+    image: String(
+      parsed.image
+      ?? (existsSync(imagePath(normalizedId, REFERENCE_FILE)) ? referenceAssetPath(normalizedId) : ''),
+    ),
     ...(parsed.characterBible ? { characterBible: parsed.characterBible } : {}),
   };
 }
@@ -126,6 +135,7 @@ export function registerCharacter(input: RegisterCharacterInput): CharacterRegis
     name: input.name.trim() || id,
     role: input.role?.trim() ?? '',
     description: input.description?.trim() ?? '',
+    image: input.referenceImageDataUrl ? referenceAssetPath(id) : '',
   };
 
   writeFileSync(profilePath(id), JSON.stringify(profile, null, 2), 'utf-8');
@@ -143,7 +153,16 @@ export function saveCharacterReferenceImage(id: string, imageDataUrl: string): C
   const character = getCharacter(id);
   if (!character) throw new Error('character not found');
   writeFileSync(imagePath(character.id, REFERENCE_FILE), dataUrlToBuffer(imageDataUrl));
-  return toEntry(character);
+  const next: CharacterProfile = {
+    id: character.id,
+    name: character.name,
+    role: character.role,
+    description: character.description,
+    image: referenceAssetPath(character.id),
+    ...(character.characterBible ? { characterBible: character.characterBible } : {}),
+  };
+  writeFileSync(profilePath(character.id), JSON.stringify(next, null, 2), 'utf-8');
+  return toEntry(next);
 }
 
 export function updateCharacter(id: string, input: UpdateCharacterInput): CharacterRegistryEntry {
