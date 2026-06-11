@@ -17,6 +17,7 @@ export type YamlSceneDocument = {
   layout: string;
   pagePrompt: string;
   storySummary: string;
+  allowedCharacters: string[];
   chars: YamlPanelCharacter[];
   panels: YamlScenePanel[];
 };
@@ -53,7 +54,14 @@ function splitNames(value: unknown): string[] {
       return [];
     }).map((item) => item.trim()).filter(Boolean);
   }
-  if (typeof value === 'string') return value.split(/[,/]/).map((item) => item.trim()).filter(Boolean);
+  if (typeof value === 'string') {
+    return value
+      .trim()
+      .replace(/^\[|\]$/g, '')
+      .split(/[,/]/)
+      .map((item) => item.trim().replace(/^["']|["']$/g, ''))
+      .filter(Boolean);
+  }
   return [];
 }
 
@@ -183,6 +191,9 @@ function parseJsonDocument(text: string): YamlSceneDocument | null {
       refs?: Record<string, unknown>;
       chars?: unknown;
       characters?: unknown;
+      summary?: unknown;
+      story_summary?: unknown;
+      overview?: unknown;
     };
     const pages = Array.isArray(parsed.pages) ? parsed.pages : [];
     const panels = pages.flatMap((page) => Array.isArray(page.panels) ? page.panels : []);
@@ -195,7 +206,13 @@ function parseJsonDocument(text: string): YamlSceneDocument | null {
     return {
       layout: pages.map((page) => page.layout).find(Boolean) ?? '',
       pagePrompt: pages.map((page) => page.prompt).filter(Boolean).join('\n'),
-      storySummary: pages.map((page) => page.story_summary).filter(Boolean).join('\n'),
+      storySummary: [
+        typeof parsed.summary === 'string' ? parsed.summary : '',
+        typeof parsed.story_summary === 'string' ? parsed.story_summary : '',
+        typeof parsed.overview === 'string' ? parsed.overview : '',
+        ...pages.map((page) => page.story_summary ?? ''),
+      ].filter(Boolean).join('\n'),
+      allowedCharacters: splitNames(parsed.characters),
       chars: uniqueCharacters([
         ...charactersFromUnknown(refs),
         ...charactersFromUnknown(parsed.chars),
@@ -253,6 +270,7 @@ export function parseYamlSceneDocument(source: string): YamlSceneDocument {
     layout: '',
     pagePrompt: '',
     storySummary: '',
+    allowedCharacters: [],
     chars: [],
     panels: [],
   };
@@ -273,11 +291,18 @@ export function parseYamlSceneDocument(source: string): YamlSceneDocument {
     currentCharacter.pose = [currentCharacter.pose, detail].filter(Boolean).join(', ');
   };
 
-  const pushDocumentChars = (value: string) => {
+  const pushDocumentChars = (value: string, allowInStory = false) => {
+    const parsedCharacters = charactersFromUnknown(parseScalar(value));
     document.chars = uniqueCharacters([
       ...document.chars,
-      ...charactersFromUnknown(parseScalar(value)),
+      ...parsedCharacters,
     ]);
+    if (allowInStory) {
+      document.allowedCharacters = Array.from(new Set([
+        ...document.allowedCharacters,
+        ...parsedCharacters.map((character) => character.name.trim()).filter(Boolean),
+      ]));
+    }
   };
 
   const flushCharacter = () => {
@@ -331,7 +356,7 @@ export function parseYamlSceneDocument(source: string): YamlSceneDocument {
         continue;
       }
       if (inDocumentChars) {
-        pushDocumentChars(item);
+        pushDocumentChars(item, true);
         continue;
       }
     }
@@ -376,19 +401,21 @@ export function parseYamlSceneDocument(source: string): YamlSceneDocument {
 
     if (!inPanels && (key === 'chars' || key === 'characters')) {
       inDocumentChars = true;
-      if (value) pushDocumentChars(value);
+      if (value) pushDocumentChars(value, true);
       continue;
     }
 
     if (!inPanels && inDocumentChars && trimmed.startsWith('- ')) {
-      pushDocumentChars(value || trimmed.replace(/^-\s*/, ''));
+      pushDocumentChars(value || trimmed.replace(/^-\s*/, ''), true);
       continue;
     }
 
     if (!inPanels && indent <= 4) {
       if (key === 'layout') document.layout = parseScalar(value);
       else if (key === 'prompt') document.pagePrompt = parseScalar(value);
-      else if (key === 'story_summary') document.storySummary = parseScalar(value);
+      else if (key === 'story_summary' || key === 'summary' || key === 'overview') {
+        document.storySummary = parseScalar(value);
+      }
       else if (key === 'character') pushDocumentChars(value);
       continue;
     }
@@ -516,14 +543,14 @@ export function buildImagePromptFromYamlPanel(document: YamlSceneDocument, panel
   const dialogue = chars.map((character) => character.line.trim()).filter(Boolean);
   return [
     'Japanese manga panel',
-    document.storySummary ? `story summary: ${document.storySummary}` : '',
-    document.pagePrompt ? `page direction: ${document.pagePrompt}` : '',
-    panel.scene ? `scene: ${panel.scene}` : '',
+    document.pagePrompt ? `ACTIVE PAGE DIRECTION (PRIMARY): ${document.pagePrompt}` : '',
+    panel.scene ? `PANEL SCENE (HIGHEST DETAIL PRIORITY): ${panel.scene}` : '',
     chars.length > 0 ? `characters: ${chars.map(characterPrompt).join(' | ')}` : '',
     panel.prompt ? `visual prompt: ${panel.prompt}` : '',
     dialogue.length > 0
       ? `MANDATORY SPEECH BUBBLES: Draw a clear manga speech bubble for every dialogue line. Preserve the exact dialogue text: ${dialogue.join(' | ')}. Do not omit speech bubbles.`
       : 'No dialogue is present; do not add an empty speech bubble.',
+    document.storySummary ? `SUPPLEMENTAL STORY SUMMARY (LOWEST PRIORITY): ${document.storySummary}` : '',
     'anime style, clean lineart, highly detailed, consistent character design, cinematic composition',
     panel.negativePrompt ? `avoid: ${panel.negativePrompt}` : '',
   ].filter(Boolean).join(', ');
@@ -551,10 +578,24 @@ export function buildComicPagePromptFromPanels(
   document: YamlSceneDocument,
   panels: YamlScenePanel[],
 ): string {
-  const panelStoryText = buildComicPanelStoryText(panels);
-  const dialogueLines = panels.flatMap((panel) =>
-    panel.chars.map((character) => character.line.trim()).filter(Boolean),
-  );
+  const panelScenes = panels.map((panel, index) => [
+    `Panel ${panel.panel || index + 1} scene: ${panel.scene || '(no scene specified)'}`,
+    panel.prompt ? `Panel ${panel.panel || index + 1} visual direction: ${panel.prompt}` : '',
+    ...panel.chars
+      .filter((character) => character.name || character.pose)
+      .map((character) => [
+        character.name || 'Character',
+        character.pose ? `action/pose: ${character.pose}` : '',
+      ].filter(Boolean).join(', ')),
+  ].filter(Boolean).join('\n')).join('\n\n');
+  const panelDialogue = panels.map((panel, index) => {
+    const lines = panel.chars
+      .map((character) => character.line.trim())
+      .filter(Boolean);
+    return lines.length > 0
+      ? `Panel ${panel.panel || index + 1}: ${lines.join(' | ')}`
+      : '';
+  }).filter(Boolean);
   return [
     'STRICT REQUIREMENTS:',
     '',
@@ -575,13 +616,21 @@ export function buildComicPagePromptFromPanels(
     'Japanese manga page',
     'comic storytelling',
     'clear panel layout',
-    dialogueLines.length > 0
-      ? `MANDATORY SPEECH BUBBLES: Every dialogue line must appear in a readable manga speech bubble using the exact text. Do not omit any speech bubble. Dialogue: ${dialogueLines.join(' | ')}`
+    '',
+    'PRIORITY 1 - ACTIVE PAGE:',
+    document.pagePrompt || 'Follow only the selected active page below.',
+    '',
+    'PRIORITY 2 - PANEL SCENES (PRIMARY VISUAL SOURCE):',
+    'The scene of each panel overrides broad story-summary implications.',
+    panelScenes,
+    '',
+    'PRIORITY 3 - PANEL DIALOGUE:',
+    panelDialogue.length > 0
+      ? `MANDATORY SPEECH BUBBLES: Every dialogue line must appear in a readable manga speech bubble using the exact text. Do not omit any speech bubble.\n${panelDialogue.join('\n')}`
       : 'No dialogue is present; do not add empty speech bubbles.',
     '',
-    document.storySummary ? `Overall story: ${document.storySummary}` : '',
-    document.pagePrompt ? `Page direction: ${document.pagePrompt}` : '',
-    '',
-    panelStoryText,
+    document.storySummary
+      ? `PRIORITY 4 - SUPPLEMENTAL STORY SUMMARY (LOWEST PRIORITY):\n${document.storySummary}\nUse this only for background context. Never replace or generalize the active-page panel scenes with the summary.`
+      : '',
   ].filter((line, index, lines) => line !== '' || (index > 0 && lines[index - 1] !== '')).join('\n');
 }

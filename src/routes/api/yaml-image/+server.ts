@@ -89,6 +89,35 @@ type YamlImageRequest = {
 type CharacterBible = NonNullable<YamlImageRequest['characterBible']>;
 const MANGA_PROMPT_DEBUG_TERMS = ['猫耳メンテ', 'N-01', 'N-02'] as const;
 
+function namesFromUnknown(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return Array.from(new Set(value.flatMap((item) => {
+    if (typeof item === 'string') return [item.trim()];
+    if (!item || typeof item !== 'object') return [];
+    const record = item as { name?: unknown };
+    return typeof record.name === 'string' ? [record.name.trim()] : [];
+  }).filter(Boolean)));
+}
+
+function activePagePanelCount(pages: unknown[] | undefined): number {
+  const page = pages?.at(-1);
+  if (!page || typeof page !== 'object') return 0;
+  const record = page as { scenes?: unknown; panels?: unknown };
+  if (Array.isArray(record.scenes)) return record.scenes.length;
+  if (Array.isArray(record.panels)) return record.panels.length;
+  return 0;
+}
+
+function buildAllowedCharactersPrompt(names: string[]): string {
+  if (names.length === 0) return '';
+  return [
+    'STRICT CHARACTER ALLOWLIST:',
+    `Only these characters may appear: ${names.join(', ')}.`,
+    'Do not invent, add, imply, silhouette, or place any other person in the foreground or background.',
+    'Every visible person must be one of the allowed characters. Background crowds and unnamed extras are forbidden.',
+  ].join('\n');
+}
+
 function matchingLines(text: string, term: string): string[] {
   const normalizedTerm = term.toLocaleLowerCase('ja-JP');
   return text
@@ -110,10 +139,18 @@ function buildMangaPromptKeywordTrace(stages: Record<string, string>) {
   ]));
 }
 
-function buildCharacterConsistencyPrompt(characterBible: CharacterBible | null): string {
+function buildCharacterConsistencyPrompt(
+  characterBible: CharacterBible | null,
+  allowedIds: Set<string> | null = null,
+): string {
   if (!characterBible) return '';
 
   const characterRules = characterBible.characters
+    ?.filter((character) =>
+      !allowedIds
+      || allowedIds.size === 0
+      || allowedIds.has(character.id?.trim().toLocaleLowerCase('ja-JP') ?? ''),
+    )
     ?.map((character) => {
       const id = character.id?.trim();
       if (!id) return '';
@@ -140,8 +177,16 @@ function buildCharacterConsistencyPrompt(characterBible: CharacterBible | null):
   ].join('\n');
 }
 
-function buildRegisteredCharacterPrompt(characterRefs: YamlImageRequest['characterRefs']): string {
+function buildRegisteredCharacterPrompt(
+  characterRefs: YamlImageRequest['characterRefs'],
+  allowedNames: Set<string> | null = null,
+): string {
   const characters = (characterRefs ?? [])
+    .filter((ref) =>
+      !allowedNames
+      || allowedNames.size === 0
+      || allowedNames.has(ref?.name?.trim().toLocaleLowerCase('ja-JP') ?? ''),
+    )
     .filter((ref) => ref?.name?.trim() || ref?.id?.trim())
     .map((ref) => [
       `id=${ref.id?.trim() || 'unknown'}`,
@@ -266,6 +311,10 @@ export const POST: RequestHandler = async ({ request }) => {
   const selectedStoryRef = storyRefs.at(-1) ?? null;
   const yaml = selectedStoryRef?.content ?? body.yaml?.trim();
   if (!yaml) throw error(400, 'yaml or storyRefs is required');
+  const requestedStoryCharacterNames = namesFromUnknown(body.activeStory?.characters);
+  const requestedStoryCharacterSet = new Set(
+    requestedStoryCharacterNames.map((name) => name.toLocaleLowerCase('ja-JP')),
+  );
   const projectCharacterIds = storyCharacterRefIds(yaml);
   const projectCharacters = projectCharacterIds.flatMap((id) => {
     const character = getCharacter(id);
@@ -318,7 +367,10 @@ export const POST: RequestHandler = async ({ request }) => {
       fileName: meta?.fileName?.trim() || `character-ref-${index + 1}.png`,
       image,
     };
-  });
+  }).filter((ref) =>
+    requestedStoryCharacterSet.size === 0
+    || requestedStoryCharacterSet.has(ref.name.toLocaleLowerCase('ja-JP')),
+  );
   console.log('[MANGA_LAB_INPUT_STATUS]', {
     characterRefCount: requestCharacterRefImages.length,
     storyRefCount: storyRefs.length,
@@ -338,7 +390,7 @@ export const POST: RequestHandler = async ({ request }) => {
     yamlLoaded: Boolean(yaml),
     referenceImages: storyReferenceImages.length,
   });
-  if (characterBible && requestCharacterRefImages.length === 0) {
+  if (characterBible && activeCharacterRefs.length === 0) {
     console.warn('[MANGA_LAB_ABORT]', 'CharacterBible exists but REF image count is 0');
     throw error(400, 'CharacterBible exists but REF images are required');
   }
@@ -349,23 +401,65 @@ export const POST: RequestHandler = async ({ request }) => {
   logAvailableMediaModels();
 
   const document = parseYamlSceneDocument(yaml);
-  const comicPageLayout = document.panels.length > 1
+  const allowedCharacterNames = requestedStoryCharacterNames.length > 0
+    ? requestedStoryCharacterNames
+    : document.allowedCharacters;
+  const allowedCharacterSet = new Set(
+    allowedCharacterNames.map((name) => name.toLocaleLowerCase('ja-JP')),
+  );
+  const isAllowedCharacter = (name: string) =>
+    !name.trim()
+    || allowedCharacterSet.size === 0
+    || allowedCharacterSet.has(name.trim().toLocaleLowerCase('ja-JP'));
+  const isAllowedDialogue = (line: string) => {
+    const speaker = line.trim().match(/^([^:：]{1,40})[:：]/)?.[1]?.trim();
+    return !speaker || isAllowedCharacter(speaker);
+  };
+  const activePanelCount = activePagePanelCount(body.activeStory?.pages);
+  const activePanels = activePanelCount > 0
+    ? document.panels.slice(-activePanelCount)
+    : document.panels;
+  const filteredPanels = activePanels.map((item) => ({
+    ...item,
+    chars: item.chars.filter((character) =>
+      isAllowedCharacter(character.name) && isAllowedDialogue(character.line),
+    ),
+  }));
+  const promptDocument = {
+    ...document,
+    storySummary: document.storySummary || body.activeStory?.summary?.trim() || '',
+    chars: document.chars.filter((character) =>
+      isAllowedCharacter(character.name) && isAllowedDialogue(character.line),
+    ),
+    panels: filteredPanels,
+  };
+  const comicPageLayout = filteredPanels.length > 1
     || ['4panel', 'manga4', 'comic', 'manga', 'manga8', '8panel'].includes(document.layout.trim().toLowerCase());
-  if (comicPageLayout && requestCharacterRefImages.length === 0 && storyReferenceImages.length === 0) {
+  if (comicPageLayout && activeCharacterRefs.length === 0 && storyReferenceImages.length === 0) {
     console.warn('[MANGA_LAB_ABORT]', 'Comic page generation requires REF images');
     throw error(400, 'REF images are required for comic page generation');
   }
-  const panel = comicPageLayout ? null : getYamlScenePanel(document);
-  const comicPanels = comicPageLayout ? document.panels : [];
+  const panel = comicPageLayout ? null : getYamlScenePanel(promptDocument);
+  const comicPanels = comicPageLayout ? filteredPanels : [];
   if (comicPageLayout && comicPanels.length === 0) throw error(400, 'comic page panels were not found in YAML');
   if (!comicPageLayout && !panel) throw error(400, 'first scene/panel was not found in YAML');
 
   const basePrompt = comicPageLayout
-    ? buildComicPagePromptFromPanels(document, comicPanels)
-    : buildImagePromptFromYamlPanel(document, panel!);
+    ? buildComicPagePromptFromPanels(promptDocument, comicPanels)
+    : buildImagePromptFromYamlPanel(promptDocument, panel!);
   const panelStoryText = comicPageLayout ? buildComicPanelStoryText(comicPanels) : '';
-  const characterConsistencyPrompt = buildCharacterConsistencyPrompt(characterBible);
-  const registeredCharacterPrompt = buildRegisteredCharacterPrompt(body.characterRefs);
+  const allowedCharactersPrompt = buildAllowedCharactersPrompt(allowedCharacterNames);
+  const allowedCharacterRefIds = new Set(
+    activeCharacterRefs.map((ref) => ref.id.toLocaleLowerCase('ja-JP')),
+  );
+  const characterConsistencyPrompt = buildCharacterConsistencyPrompt(
+    characterBible,
+    allowedCharacterRefIds,
+  );
+  const registeredCharacterPrompt = buildRegisteredCharacterPrompt(
+    body.characterRefs,
+    allowedCharacterSet,
+  );
   const continuityPrompt = extractContinuityPrompt(yaml);
   const storyPageReferencePrompt = storyReferenceImages.length > 0
     ? [
@@ -379,6 +473,7 @@ export const POST: RequestHandler = async ({ request }) => {
     : '';
   const prompt = [
     basePrompt,
+    allowedCharactersPrompt,
     body.renderMode === 'illustration'
       ? 'ILLUSTRATION MODE: Do not draw speech bubbles or dialogue text.'
       : 'MANGA MODE: speech_bubble=true. If dialogue exists, every line must be drawn in a readable manga speech bubble. Never omit a speech bubble for existing dialogue.',
@@ -386,7 +481,7 @@ export const POST: RequestHandler = async ({ request }) => {
     registeredCharacterPrompt,
     continuityPrompt,
     storyPageReferencePrompt,
-    requestCharacterRefImages.length > 0 && !characterConsistencyPrompt
+    activeCharacterRefs.length > 0 && !characterConsistencyPrompt
       ? 'Use the supplied reference images as the primary and authoritative character appearance source.'
       : '',
   ].filter(Boolean).join('\n\n');
@@ -395,11 +490,17 @@ export const POST: RequestHandler = async ({ request }) => {
     : panel!.model;
   const mediaModel = resolveFalImageModel(panelModel || body.model);
   const chars = comicPageLayout
-    ? document.chars
-    : (panel!.chars.length > 0 ? panel!.chars : document.chars);
+    ? promptDocument.chars
+    : (panel!.chars.length > 0 ? panel!.chars : promptDocument.chars);
   const charNames = chars.map((char) => char.name).filter(Boolean);
   console.log('[YAML_PLAN_CHARS]', charNames);
   console.log('[YAML_REFS]', document.chars.map((char) => char.name).filter(Boolean));
+  console.log('[YAML_ACTIVE_PAGE]', {
+    requestedPageCount: body.activeStory?.pages?.length ?? 0,
+    activePanelCount: filteredPanels.length,
+    totalParsedPanels: document.panels.length,
+  });
+  console.log('[YAML_ALLOWED_CHARACTERS]', allowedCharacterNames);
   const plan = {
     panel: comicPageLayout ? 'comic_page' : 'panel_1',
     layout: document.layout,
@@ -443,7 +544,7 @@ export const POST: RequestHandler = async ({ request }) => {
   ].filter((image, index, images) => images.indexOf(image) === index);
   console.log('[YAML_IMAGE_REF_COUNT]', refImages.length);
   console.log('[YAML_IMAGE_REF_PRIORITY]', {
-    primaryCharacterRefs: requestCharacterRefImages.length,
+    primaryCharacterRefs: activeCharacterRefs.length,
     supplementalRegistryRefs: registryRefs.length,
   });
   console.log('[STORY_REFS]', storyRefs.map((ref) => ({
