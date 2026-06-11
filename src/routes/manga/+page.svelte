@@ -32,14 +32,14 @@
     </section>
 
     <section class="panel-grid">
-      <a href="/studio" class="panel main-panel">
+      <a href="/project" class="panel main-panel">
         <div class="panel-header">
           <span>PRIMARY WORKSPACE</span>
           <b>ONLINE</b>
         </div>
-        <h2>STUDIO</h2>
-        <p>Manga production tools are currently routed through the studio workspace.</p>
-        <span class="open-link">OPEN STUDIO</span>
+        <h2>PROJECT</h2>
+        <p>Manga production tools are available in the project workspace.</p>
+        <span class="open-link">OPEN PROJECT</span>
       </a>
 
       <div class="panel side-panel">

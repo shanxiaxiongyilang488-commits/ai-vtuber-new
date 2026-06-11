@@ -3840,6 +3840,7 @@ REFの役割を推定してください（例: 背景資料、キャラクター
 </script>
 
 <svelte:head>
+  <title>PROJECT | AI VTuber</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
   <link href="https://fonts.googleapis.com/css2?family=BIZ+UDGothic:wght@400;700&family=Klee+One:wght@400;600&family=Noto+Sans+JP:wght@400;700&display=swap" rel="stylesheet" />
@@ -3855,7 +3856,7 @@ REFの役割を推定してください（例: 背景資料、キャラクター
         <circle cx="20" cy="20" r="3" fill="#00e5ff" opacity="0.9"/>
       </svg>
       <div class="title-group">
-        <div class="main-title">IMAGE STUDIO</div>
+        <div class="main-title">PROJECT</div>
         <div class="sub-title">MANGA · PANEL · GENERATOR</div>
       </div>
     </div>

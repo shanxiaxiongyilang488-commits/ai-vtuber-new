@@ -29,8 +29,8 @@
     },
     {
       id: 'manga',
-      label: 'MANGA LAB',
-      href: '/studio',
+      label: 'PROJECT',
+      href: '/project',
       status: 'VISUAL GEN',
       description: 'コマ割り・画像生成・マンガ制作研究',
       tone: 'purple',
@@ -45,9 +45,9 @@
     },
   ];
 
-  function openStudio() {
-    console.log('OPEN STUDIO');
-    goto('/studio');
+  function openProject() {
+    console.log('OPEN PROJECT');
+    goto('/project');
   }
 
   function openSettings() {
@@ -58,7 +58,7 @@
   function openModule(event: MouseEvent, module: LabModule) {
     if (module.id === 'manga') {
       event.preventDefault();
-      openStudio();
+      openProject();
     }
 
     if (module.id === 'settings') {

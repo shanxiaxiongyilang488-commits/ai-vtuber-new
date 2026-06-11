@@ -1600,7 +1600,7 @@
         sourceText: `4コマ panel${panel.num}`,
       }));
     } catch { /* quota */ }
-    window.open('/studio', '_blank');
+    window.open('/project', '_blank');
   }
 
   function downloadYonkomaYaml(yaml: string, title: string) {
@@ -1762,7 +1762,7 @@
           storyYaml,
         }));
       }
-      window.open('/studio', '_blank');
+      window.open('/project', '_blank');
     } catch (e) {
       console.error('[Lab] convertToManga:', e);
     } finally {
@@ -2800,7 +2800,7 @@ async function removeReferenceImage(i: number): Promise<void> {
           localStorage.setItem('studio-yaml', yamlText);
         } catch { /* quota */ }
       }
-      window.open('/studio', '_blank');
+      window.open('/project', '_blank');
       return yamlText;
     } catch (e) {
       console.error('[Lab] convertToYaml:', e);
@@ -2974,7 +2974,7 @@ async function removeReferenceImage(i: number): Promise<void> {
           date: new Date().toLocaleDateString('ja-JP'),
         }));
       }
-      window.open('/studio', '_blank');
+      window.open('/project', '_blank');
     } catch (e) {
       console.error('[Lab] generateDiary:', e);
     } finally {
@@ -7302,8 +7302,8 @@ ${recent}
 
       <div class="ctrl-section">
         <div class="section-lbl">QUICK ACTIONS</div>
-        <button class="studio-btn" onclick={() => window.open('/studio', '_blank')}>
-          ◼ Open Image Studio
+        <button class="studio-btn" onclick={() => window.open('/project', '_blank')}>
+          ◼ Open Project
         </button>
       </div>
 
