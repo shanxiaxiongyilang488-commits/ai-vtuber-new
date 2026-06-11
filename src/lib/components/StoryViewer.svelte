@@ -67,6 +67,11 @@
     anchor.click();
     URL.revokeObjectURL(url);
   }
+
+  async function copyStoryYaml(): Promise<void> {
+    if (!story) return;
+    await navigator.clipboard.writeText(story.rawYaml);
+  }
 </script>
 
 {#if story}
@@ -157,13 +162,14 @@
     </details>
 
     <div class="viewer-actions">
-      <button class="download-action" onclick={downloadStoryYaml}>📥 YAML保存</button>
-      <button onclick={() => onManga?.(story.rawYaml)}>漫画化</button>
-      <button onclick={() => onContinuityCheck?.(story.rawYaml)}>継続メモリ確認</button>
-      <button onclick={() => onSequel?.(story.rawYaml)}>次ページYAML作成</button>
-      <button onclick={() => onContinueManga?.(story.rawYaml)}>この続きで漫画化</button>
-      <button onclick={() => onCharacterSheet?.(story.rawYaml)}>キャラ資料化</button>
-      <button onclick={() => onWorldSetting?.(story.rawYaml)}>設定資料化</button>
+      <button class="download-action" onclick={downloadStoryYaml}>YAMLダウンロード</button>
+      <button onclick={copyStoryYaml}>YAMLコピー</button>
+      {#if onManga}<button onclick={() => onManga(story.rawYaml)}>漫画生成</button>{/if}
+      {#if onContinuityCheck}<button onclick={() => onContinuityCheck(story.rawYaml)}>継続メモリ確認</button>{/if}
+      {#if onSequel}<button onclick={() => onSequel(story.rawYaml)}>次ページYAML作成</button>{/if}
+      {#if onContinueManga}<button onclick={() => onContinueManga(story.rawYaml)}>この続きで漫画化</button>{/if}
+      {#if onCharacterSheet}<button onclick={() => onCharacterSheet(story.rawYaml)}>キャラ資料化</button>{/if}
+      {#if onWorldSetting}<button onclick={() => onWorldSetting(story.rawYaml)}>設定資料化</button>{/if}
     </div>
 
     <details class="raw-yaml">

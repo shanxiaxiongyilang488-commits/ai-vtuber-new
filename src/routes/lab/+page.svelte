@@ -13,7 +13,6 @@
   import AvatarViewer          from '$lib/components/AvatarViewer.svelte';
   import PNGTuberViewer        from '$lib/components/PNGTuberViewer.svelte';
   import MotionPNGTuberViewer  from '$lib/components/MotionPNGTuberViewer.svelte';
-  import StoryViewer           from '$lib/components/StoryViewer.svelte';
   import { avatarState, initAvatarWs, sendAvatarPatch } from '$lib/ws/avatarSocket';
   import { addMemory, getRecentMemoryText, getMemoryEntries } from '$lib/ai/memory/rootMemory';
   import { addSpecialMemory, getSpecialMemoryHint } from '$lib/ai/memory/specialMemory';
@@ -36,6 +35,7 @@
     storyContinuityToYaml,
     type StoryContinuityMemory,
   } from '$lib/storyYaml';
+  import { saveStoryYaml } from '$lib/storyLibrary';
 
   // ============================================================
   // Types
@@ -2777,14 +2777,8 @@ async function removeReferenceImage(i: number): Promise<void> {
       saveYamlAsStoryReference(yamlText);
 
       if (mode === 'chat') {
-        messages = [
-          ...messages,
-          {
-            role: 'ai',
-            text: yamlText,
-            time: getTime(),
-          },
-        ];
+        saveStoryYaml(yamlText);
+        window.location.href = '/story';
         return yamlText;
       }
 
@@ -5431,7 +5425,7 @@ ${recent}
 
   function saveChatHistory() {
     const toSave = messages
-      .filter(m => m.role !== 'error' && !m.isGreeting) // エラー・起動挨拶は保存しない
+      .filter(m => m.role !== 'error' && !m.isGreeting && !isStoryYaml(m.text))
       .slice(-HISTORY_MAX);                              // 最新 50 件に制限
     const latest = toSave.at(-1);
     if (latest) {
@@ -6018,6 +6012,15 @@ ${recent}
       history = parseLocalStorageChatHistory();
     }
 
+    const storyMessages = history.filter((message) => isStoryYaml(message.text));
+    for (const message of storyMessages) saveStoryYaml(message.text);
+    history = history.filter((message) => !isStoryYaml(message.text));
+    if (storyMessages.length > 0) {
+      void saveLabChatHistory(history).catch((e) => {
+        console.warn('[Lab] Story YAML history cleanup failed', e);
+      });
+    }
+
     if (history.length > 0) {
       messages = greetingMsg ? [...history, greetingMsg] : [...history];
       historyLoaded = true;
@@ -6344,7 +6347,7 @@ ${recent}
 
       <!-- Messages -->
       <div class="chat-messages" bind:this={chatEl}>
-        {#each messages as msg (msg.time + msg.role + msg.text.slice(0, 8))}
+        {#each messages.filter((message) => !isStoryYaml(message.text)) as msg (msg.time + msg.role + msg.text.slice(0, 8))}
           {#if msg.role === 'error'}
             <div class="msg-wrap error">
               <div class="msg-bubble error-bubble">
@@ -6389,19 +6392,7 @@ ${recent}
                     </div>
                   </details>
                 {/if}
-                {#if isStoryYaml(msg.text)}
-                  <div class="msg-text">Story YAMLを作成しました</div>
-                  <StoryViewer
-                    rawYaml={msg.text}
-                    onManga={mangaFromStoryViewer}
-                    onSequel={createStorySequel}
-                    onContinuityCheck={showStoryContinuity}
-                    onContinueManga={createContinuationManga}
-                    onContinuityExtracted={saveYamlAsStoryReference}
-                    onCharacterSheet={(yaml) => createMaterialFromStoryViewer(yaml, 'character_sheet')}
-                    onWorldSetting={(yaml) => createMaterialFromStoryViewer(yaml, 'world_setting')}
-                  />
-                {:else if parseLabYamlDisplay(msg.text) !== null}
+                {#if parseLabYamlDisplay(msg.text) !== null}
                   {@const _labYaml = parseLabYamlDisplay(msg.text)!}
                   <div class="lab-yaml-display">
                     {#if _labYaml.preamble}

@@ -36,6 +36,14 @@
       tone: 'purple',
     },
     {
+      id: 'story',
+      label: 'STORY',
+      href: '/story',
+      status: 'YAML ARCHIVE',
+      description: '生成したStory YAMLのカード表示・保存・漫画化',
+      tone: 'cyan',
+    },
+    {
       id: 'settings',
       label: 'SETTINGS',
       href: '/settings/api',
