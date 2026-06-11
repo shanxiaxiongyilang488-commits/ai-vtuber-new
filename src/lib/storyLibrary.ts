@@ -79,3 +79,21 @@ export function deleteStory(id: string): SavedStory[] {
   writeStoryLibrary(stories);
   return stories;
 }
+
+export function updateStoryYaml(id: string, rawYaml: string): SavedStory | null {
+  const parsed = parseStoryYaml(rawYaml);
+  if (!parsed || typeof localStorage === 'undefined') return null;
+  const stories = loadStoryLibrary();
+  const existing = stories.find((story) => story.id === id);
+  if (!existing) return null;
+
+  const updated: SavedStory = {
+    ...existing,
+    rawYaml: parsed.rawYaml,
+    title: parsed.title,
+    storyType: parsed.storyType,
+    updatedAt: new Date().toISOString(),
+  };
+  writeStoryLibrary([updated, ...stories.filter((story) => story.id !== id)]);
+  return updated;
+}

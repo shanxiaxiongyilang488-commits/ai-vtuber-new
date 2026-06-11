@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
+  import StoryPanelEditor from '$lib/components/story/StoryPanelEditor.svelte';
+  import { updateStoryPanelYaml, type StoryPanelPatch } from '$lib/storyPanelYaml';
   import { parseStoryYaml } from '$lib/storyYaml';
 
   type ViewerAction = (rawYaml: string) => void | Promise<void>;
@@ -12,6 +15,8 @@
     onContinuityExtracted,
     onCharacterSheet,
     onWorldSetting,
+    editable = false,
+    onSave,
   }: {
     rawYaml: string;
     onManga?: ViewerAction;
@@ -21,9 +26,22 @@
     onContinuityExtracted?: ViewerAction;
     onCharacterSheet?: ViewerAction;
     onWorldSetting?: ViewerAction;
+    editable?: boolean;
+    onSave?: ViewerAction;
   } = $props();
-  let story = $derived(parseStoryYaml(rawYaml));
+  let draftYaml = $state(untrack(() => rawYaml));
+  let syncedRawYaml = $state(untrack(() => rawYaml));
+  let saveStatus = $state('');
+  let story = $derived(parseStoryYaml(draftYaml));
+  let hasChanges = $derived(draftYaml !== rawYaml);
   let extractedYaml = '';
+
+  $effect(() => {
+    if (rawYaml === syncedRawYaml) return;
+    syncedRawYaml = rawYaml;
+    draftYaml = rawYaml;
+    saveStatus = '';
+  });
 
   $effect(() => {
     const yaml = story?.rawYaml ?? '';
@@ -71,6 +89,18 @@
   async function copyStoryYaml(): Promise<void> {
     if (!story) return;
     await navigator.clipboard.writeText(story.rawYaml);
+  }
+
+  function updatePanel(pageIndex: number, panelIndex: number, patch: StoryPanelPatch): void {
+    draftYaml = updateStoryPanelYaml(draftYaml, pageIndex, panelIndex, patch);
+    saveStatus = '';
+  }
+
+  async function saveChanges(): Promise<void> {
+    if (!story || !onSave) return;
+    await onSave(story.rawYaml);
+    syncedRawYaml = story.rawYaml;
+    saveStatus = '保存しました';
   }
 </script>
 
@@ -125,7 +155,7 @@
       <section class="story-card">
         <div class="story-section-title"><span>📚</span> ページ構成</div>
         <div class="page-list">
-          {#each story.pages as page}
+          {#each story.pages as page, pageIndex}
             <details class="page-card" open={story.pages.length <= 2}>
               <summary>
                 <span>PAGE {page.page}</span>
@@ -134,14 +164,22 @@
               </summary>
               {#if page.summary}<div class="page-summary">{page.summary}</div>{/if}
               <div class="panel-list">
-                {#each page.panels as panel}
-                  <article class="panel-card">
-                    <div class="panel-number">PANEL {panel.panel}</div>
-                    {#if panel.scene}<div class="panel-scene">{panel.scene}</div>{/if}
-                    {#if panel.dialogue.length > 0}
-                      <div class="panel-dialogue">{panel.dialogue.join('\n')}</div>
-                    {/if}
-                  </article>
+                {#each page.panels as panel, panelIndex}
+                  {#if editable}
+                    <StoryPanelEditor
+                      {panel}
+                      onChange={(patch) => updatePanel(pageIndex, panelIndex, patch)}
+                    />
+                  {:else}
+                    <article class="panel-card">
+                      <div class="panel-number">PANEL {panel.panel}</div>
+                      {#if panel.scene}<div class="panel-scene">{panel.scene}</div>{/if}
+                      {#if panel.dialogue.length > 0}
+                        <div class="panel-dialogue">{panel.dialogue.join('\n')}</div>
+                      {/if}
+                      {#if panel.prompt}<div class="panel-prompt">{panel.prompt}</div>{/if}
+                    </article>
+                  {/if}
                 {/each}
               </div>
             </details>
@@ -162,6 +200,11 @@
     </details>
 
     <div class="viewer-actions">
+      {#if editable && onSave}
+        <button class="save-action" onclick={saveChanges} disabled={!hasChanges}>
+          {hasChanges ? '変更を保存' : '保存済み'}
+        </button>
+      {/if}
       <button class="download-action" onclick={downloadStoryYaml}>YAMLダウンロード</button>
       <button onclick={copyStoryYaml}>YAMLコピー</button>
       {#if onManga}<button onclick={() => onManga(story.rawYaml)}>漫画生成</button>{/if}
@@ -171,10 +214,11 @@
       {#if onCharacterSheet}<button onclick={() => onCharacterSheet(story.rawYaml)}>キャラ資料化</button>{/if}
       {#if onWorldSetting}<button onclick={() => onWorldSetting(story.rawYaml)}>設定資料化</button>{/if}
     </div>
+    {#if saveStatus}<div class="save-status">{saveStatus}</div>{/if}
 
     <details class="raw-yaml">
       <summary>YAMLを表示</summary>
-      <pre>{story.rawYaml}</pre>
+      <pre>{draftYaml}</pre>
     </details>
   </div>
 {/if}
@@ -378,6 +422,17 @@
     white-space: pre-wrap;
   }
 
+  .panel-prompt {
+    margin-top: 6px;
+    padding: 6px 7px;
+    border-radius: 4px;
+    background: rgba(34, 211, 238, 0.05);
+    color: #a5f3fc;
+    font-size: 10px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+  }
+
   .viewer-actions {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -407,6 +462,24 @@
     border-color: rgba(52, 211, 153, 0.3);
     background: rgba(52, 211, 153, 0.07);
     color: #6ee7b7;
+  }
+
+  .viewer-actions .save-action {
+    grid-column: 1 / -1;
+    border-color: rgba(251, 191, 36, 0.42);
+    background: rgba(251, 191, 36, 0.1);
+    color: #fde68a;
+  }
+
+  .viewer-actions button:disabled {
+    cursor: default;
+    opacity: 0.45;
+  }
+
+  .save-status {
+    color: #6ee7b7;
+    font-size: 10px;
+    text-align: right;
   }
 
   .continuity-card summary {

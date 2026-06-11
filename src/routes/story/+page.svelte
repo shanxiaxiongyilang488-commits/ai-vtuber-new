@@ -6,6 +6,7 @@
     deleteStory,
     loadStoryLibrary,
     saveStoryYaml,
+    updateStoryYaml,
     type SavedStory,
   } from '$lib/storyLibrary';
 
@@ -33,6 +34,14 @@
   function removeStory(id: string): void {
     stories = deleteStory(id);
     selectedId = stories[0]?.id ?? '';
+  }
+
+  function saveEditedStory(rawYaml: string): void {
+    if (!selectedStory) return;
+    const updated = updateStoryYaml(selectedStory.id, rawYaml);
+    if (!updated) return;
+    stories = loadStoryLibrary();
+    selectedId = updated.id;
   }
 
   function formatDate(value: string): string {
@@ -170,7 +179,12 @@
 
       <section class="story-detail">
         {#if selectedStory}
-          <StoryViewer rawYaml={selectedStory.rawYaml} onManga={openMangaProject} />
+          <StoryViewer
+            rawYaml={selectedStory.rawYaml}
+            editable
+            onSave={saveEditedStory}
+            onManga={openMangaProject}
+          />
         {/if}
       </section>
     </main>
