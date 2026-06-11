@@ -6,12 +6,12 @@
   "playfulness": 100,
   "stability": 100,
   "lastDelta": {
-    "openness": 1,
-    "warmth": 0,
-    "curiosity": 1,
-    "initiative": 0,
-    "playfulness": 0,
-    "stability": 0
+    "openness": 0,
+    "warmth": 1,
+    "curiosity": 0,
+    "initiative": 1,
+    "playfulness": 1,
+    "stability": 1
   },
-  "updatedAt": "2026-06-11T03:12:27.284Z"
+  "updatedAt": "2026-06-11T13:28:08.991Z"
 }
