@@ -8,7 +8,7 @@ import {
   getYamlScenePanel,
   parseYamlSceneDocument,
 } from '$lib/server/yamlSceneParser';
-import { getCharacterReferenceDataUrl } from '$lib/server/characterRegistry';
+import { getCharacter, getCharacterReferenceDataUrl } from '$lib/server/characterRegistry';
 import type { GeneratedImage, ImageSize } from '$lib/server/imageProviders/types';
 
 const DEFAULT_FAL_IMAGE_MODEL = 'fal-ai/nano-banana-pro';
@@ -205,7 +205,7 @@ function registryReferenceImagesFromText(text: string): ResolvedCharacterRef[] {
         return ref ? {
           source: 'character_registry',
           id,
-          fileName: `data/characters/${id}/reference.png`,
+          fileName: `data/project/characters/${id}.yaml`,
           image: ref,
         } : null;
       } catch (caughtError) {
@@ -214,6 +214,15 @@ function registryReferenceImagesFromText(text: string): ResolvedCharacterRef[] {
       }
     })
     .filter((ref): ref is ResolvedCharacterRef => Boolean(ref));
+}
+
+function storyCharacterRefIds(yaml: string): string[] {
+  const block = yaml.match(/(?:^|\n)refs:\s*\n([\s\S]*?)(?=\n[A-Za-z0-9_]+:|$)/i)?.[1] ?? '';
+  return Array.from(new Set(block
+    .split(/\r?\n/)
+    .map((line) => line.match(/^\s*-\s*["']?([a-z0-9_-]+)["']?\s*$/i)?.[1] ?? '')
+    .map((id) => id.toLowerCase())
+    .filter(Boolean)));
 }
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -240,15 +249,47 @@ export const POST: RequestHandler = async ({ request }) => {
   const selectedStoryRef = storyRefs.at(-1) ?? null;
   const yaml = selectedStoryRef?.content ?? body.yaml?.trim();
   if (!yaml) throw error(400, 'yaml or storyRefs is required');
-  const characterBible = body.characterBible?.unitId?.trim()
+  const projectCharacterIds = storyCharacterRefIds(yaml);
+  const projectCharacters = projectCharacterIds.flatMap((id) => {
+    const character = getCharacter(id);
+    const image = getCharacterReferenceDataUrl(id);
+    return character?.characterBible ? [{
+      character,
+      image,
+    }] : [];
+  });
+  const projectCharacterBible: CharacterBible | null = projectCharacters.length > 0
+    ? {
+      unitId: projectCharacterIds.map((id) => id.toUpperCase()).join('+'),
+      characters: projectCharacters.flatMap(({ character }) => character.characterBible?.characters ?? []),
+    }
+    : null;
+  const requestCharacterBible = body.characterBible?.unitId?.trim()
     && Array.isArray(body.characterBible.characters)
     && body.characterBible.characters.length > 0
     ? body.characterBible
     : null;
-  const requestCharacterRefImages = (body.characterRefImages ?? body.refImages ?? [])
+  const characterBible = projectCharacterBible ?? requestCharacterBible;
+  const projectCharacterRefImages = projectCharacters
+    .map(({ image }) => image)
+    .filter((image): image is string => Boolean(image));
+  const suppliedCharacterRefImages = (body.characterRefImages ?? body.refImages ?? [])
     .filter((image): image is string => typeof image === 'string' && image.startsWith('data:image/'));
+  const requestCharacterRefImages = projectCharacterRefImages.length > 0
+    ? projectCharacterRefImages
+    : suppliedCharacterRefImages;
   const activeCharacterRefs = requestCharacterRefImages.map((image, index) => {
-    const meta = body.characterRefs?.find((ref) => ref.image === image) ?? body.characterRefs?.[index];
+    const projectCharacter = projectCharacters[index]?.character;
+    const meta = projectCharacter
+      ? {
+        source: 'project_character_library',
+        id: projectCharacter.id,
+        name: projectCharacter.name,
+        role: projectCharacter.role,
+        description: projectCharacter.description,
+        fileName: `data/project/characters/${projectCharacter.id}.yaml`,
+      }
+      : (body.characterRefs?.find((ref) => ref.image === image) ?? body.characterRefs?.[index]);
     return {
       source: meta?.source?.trim() || 'request_character_ref',
       id: meta?.id?.trim() || `REF-${index + 1}`,
@@ -265,6 +306,8 @@ export const POST: RequestHandler = async ({ request }) => {
     selectedStoryRef: selectedStoryRef?.name ?? null,
     hasCharacterBible: Boolean(characterBible),
     hasStoryYaml: Boolean(yaml),
+    projectCharacterIds,
+    characterSource: projectCharacters.length > 0 ? 'project_character_library' : 'request',
   });
   if (characterBible && requestCharacterRefImages.length === 0) {
     console.warn('[MANGA_LAB_ABORT]', 'CharacterBible exists but REF image count is 0');

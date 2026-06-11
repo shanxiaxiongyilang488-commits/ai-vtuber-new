@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { join, resolve } from 'node:path';
 
 export interface CharacterProfile {
@@ -73,7 +81,10 @@ export interface CharacterStoryContext {
   memory: CharacterMemory;
 }
 
-const CHARACTER_ROOT = resolve(process.cwd(), 'data', 'characters');
+const PROJECT_ROOT = resolve(process.cwd(), 'data', 'project');
+const CHARACTER_YAML_ROOT = join(PROJECT_ROOT, 'characters');
+const CHARACTER_ASSET_ROOT = join(PROJECT_ROOT, 'character-assets');
+const LEGACY_CHARACTER_ROOT = resolve(process.cwd(), 'data', 'characters');
 const PROFILE_FILE = 'profile.json';
 const REFERENCE_FILE = 'reference.png';
 const SHEET_FILE = 'sheet.png';
@@ -82,7 +93,10 @@ const CHAT_FILE = 'chat.json';
 const MEMORY_FILE = 'memory.json';
 
 function ensureRoot(): void {
-  mkdirSync(CHARACTER_ROOT, { recursive: true });
+  mkdirSync(CHARACTER_YAML_ROOT, { recursive: true });
+  mkdirSync(CHARACTER_ASSET_ROOT, { recursive: true });
+  migrateLegacyCharacters();
+  splitMultiCharacterYamlFiles();
 }
 
 function normalizeId(id: string): string {
@@ -98,8 +112,8 @@ function assertValidId(id: string): void {
 function characterDir(id: string): string {
   const normalized = normalizeId(id);
   assertValidId(normalized);
-  const dir = resolve(CHARACTER_ROOT, normalized);
-  if (!dir.startsWith(`${CHARACTER_ROOT}`)) {
+  const dir = resolve(CHARACTER_ASSET_ROOT, normalized);
+  if (!dir.startsWith(`${CHARACTER_ASSET_ROOT}`)) {
     throw new Error('invalid character directory');
   }
   return dir;
@@ -110,7 +124,9 @@ function profilePath(id: string): string {
 }
 
 function characterYamlPath(id: string): string {
-  return join(characterDir(id), CHARACTER_YAML_FILE);
+  const normalized = normalizeId(id);
+  assertValidId(normalized);
+  return join(CHARACTER_YAML_ROOT, `${normalized}.yaml`);
 }
 
 function imagePath(id: string, fileName: typeof REFERENCE_FILE | typeof SHEET_FILE): string {
@@ -118,7 +134,72 @@ function imagePath(id: string, fileName: typeof REFERENCE_FILE | typeof SHEET_FI
 }
 
 function referenceAssetPath(id: string): string {
-  return `data/characters/${normalizeId(id)}/${REFERENCE_FILE}`;
+  return `data/project/character-assets/${normalizeId(id)}/${REFERENCE_FILE}`;
+}
+
+function migrateLegacyCharacters(): void {
+  if (!existsSync(LEGACY_CHARACTER_ROOT)) return;
+  for (const entry of readdirSync(LEGACY_CHARACTER_ROOT, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const id = normalizeId(entry.name);
+    if (!/^[a-z0-9_-]+$/.test(id)) continue;
+    const legacyDir = join(LEGACY_CHARACTER_ROOT, entry.name);
+    const targetDir = join(CHARACTER_ASSET_ROOT, id);
+    mkdirSync(targetDir, { recursive: true });
+    for (const fileName of [PROFILE_FILE, REFERENCE_FILE, CHAT_FILE, MEMORY_FILE]) {
+      const source = join(legacyDir, fileName);
+      const target = join(targetDir, fileName);
+      if (existsSync(source) && !existsSync(target)) copyFileSync(source, target);
+    }
+    const legacyYaml = join(legacyDir, CHARACTER_YAML_FILE);
+    const targetYaml = join(CHARACTER_YAML_ROOT, `${id}.yaml`);
+    if (existsSync(legacyYaml) && !existsSync(targetYaml)) copyFileSync(legacyYaml, targetYaml);
+  }
+}
+
+function splitMultiCharacterYamlFiles(): void {
+  for (const entry of readdirSync(CHARACTER_YAML_ROOT, { withFileTypes: true })) {
+    if (!entry.isFile() || !/\.ya?ml$/i.test(entry.name)) continue;
+    const sourceId = entry.name.replace(/\.ya?ml$/i, '');
+    const sourceYaml = join(CHARACTER_YAML_ROOT, entry.name);
+    let bible: CharacterBible;
+    try {
+      bible = characterBibleFromYaml(readFileSync(sourceYaml, 'utf-8'));
+    } catch {
+      continue;
+    }
+    if (bible.characters.length <= 1) continue;
+    const sourceProfileFile = join(CHARACTER_ASSET_ROOT, sourceId, PROFILE_FILE);
+    const sourceProfile = existsSync(sourceProfileFile)
+      ? JSON.parse(readFileSync(sourceProfileFile, 'utf-8')) as Partial<CharacterProfile>
+      : {};
+    const sourceReference = join(CHARACTER_ASSET_ROOT, sourceId, REFERENCE_FILE);
+    for (const visual of bible.characters) {
+      const targetId = normalizeId(visual.id);
+      if (!/^[a-z0-9_-]+$/.test(targetId)) continue;
+      const targetDir = join(CHARACTER_ASSET_ROOT, targetId);
+      mkdirSync(targetDir, { recursive: true });
+      const targetReference = join(targetDir, REFERENCE_FILE);
+      if (existsSync(sourceReference) && !existsSync(targetReference)) {
+        copyFileSync(sourceReference, targetReference);
+      }
+      const targetProfile: CharacterProfile = {
+        id: targetId,
+        name: targetId === sourceId
+          ? String(sourceProfile.name ?? visual.id)
+          : visual.id,
+        role: targetId === sourceId ? String(sourceProfile.role ?? '') : '',
+        description: targetId === sourceId ? String(sourceProfile.description ?? '') : '',
+        image: existsSync(targetReference) ? referenceAssetPath(targetId) : '',
+      };
+      writeFileSync(join(targetDir, PROFILE_FILE), JSON.stringify(targetProfile, null, 2), 'utf-8');
+      writeFileSync(
+        join(CHARACTER_YAML_ROOT, `${targetId}.yaml`),
+        characterBibleToYaml({ unitId: bible.unitId, characters: [visual] }),
+        'utf-8',
+      );
+    }
+  }
 }
 
 function dataUrlToBuffer(dataUrl: string): Buffer {
@@ -198,6 +279,7 @@ export function characterBibleFromYaml(yaml: string): CharacterBible {
 }
 
 function readProfile(id: string): CharacterProfile | null {
+  ensureRoot();
   const file = profilePath(id);
   if (!existsSync(file)) return null;
   const parsed = JSON.parse(readFileSync(file, 'utf-8')) as Partial<CharacterProfile>;
@@ -221,10 +303,9 @@ function readProfile(id: string): CharacterProfile | null {
     name: String(parsed.name ?? normalizedId),
     role: String(parsed.role ?? ''),
     description: String(parsed.description ?? ''),
-    image: String(
-      parsed.image
-      ?? (existsSync(imagePath(normalizedId, REFERENCE_FILE)) ? referenceAssetPath(normalizedId) : ''),
-    ),
+    image: existsSync(imagePath(normalizedId, REFERENCE_FILE))
+      ? referenceAssetPath(normalizedId)
+      : String(parsed.image ?? ''),
     ...(characterBible ? { characterBible } : {}),
   };
 }
@@ -236,7 +317,7 @@ function toEntry(profile: CharacterProfile): CharacterRegistryEntry {
     hasReference: existsSync(imagePath(profile.id, REFERENCE_FILE)),
     hasSheet: existsSync(yamlFile),
     characterYaml: existsSync(yamlFile) ? readFileSync(yamlFile, 'utf-8') : '',
-    directory: `data/characters/${profile.id}`,
+    directory: `data/project/characters/${profile.id}.yaml`,
   };
 }
 
@@ -293,12 +374,36 @@ export function updateCharacter(id: string, input: UpdateCharacterInput): Charac
   };
   delete next.characterBible;
   if (input.characterBible) {
-    writeFileSync(
-      characterYamlPath(profile.id),
-      characterBibleToYaml(input.characterBible),
-      'utf-8',
-    );
-    next.characterBible = input.characterBible;
+    const sourceReference = imagePath(profile.id, REFERENCE_FILE);
+    for (const visual of input.characterBible.characters) {
+      const targetId = normalizeId(visual.id);
+      assertValidId(targetId);
+      const targetDir = characterDir(targetId);
+      mkdirSync(targetDir, { recursive: true });
+      const targetReference = imagePath(targetId, REFERENCE_FILE);
+      if (existsSync(sourceReference) && !existsSync(targetReference)) {
+        copyFileSync(sourceReference, targetReference);
+      }
+      const targetProfile: CharacterProfile = {
+        id: targetId,
+        name: targetId === profile.id ? next.name : visual.id,
+        role: targetId === profile.id ? next.role : '',
+        description: targetId === profile.id ? next.description : '',
+        image: existsSync(targetReference) ? referenceAssetPath(targetId) : '',
+      };
+      writeFileSync(profilePath(targetId), JSON.stringify(targetProfile, null, 2), 'utf-8');
+      writeFileSync(
+        characterYamlPath(targetId),
+        characterBibleToYaml({ unitId: input.characterBible.unitId, characters: [visual] }),
+        'utf-8',
+      );
+    }
+    next.characterBible = {
+      unitId: input.characterBible.unitId,
+      characters: input.characterBible.characters.filter(
+        (visual) => normalizeId(visual.id) === profile.id,
+      ),
+    };
   }
   const profileMetadata = { ...next };
   delete profileMetadata.characterBible;
@@ -314,7 +419,7 @@ export function getCharacterReferenceDataUrl(id: string): string | null {
 
 export function listCharacters(): CharacterRegistryEntry[] {
   ensureRoot();
-  return readdirSync(CHARACTER_ROOT, { withFileTypes: true })
+  return readdirSync(CHARACTER_ASSET_ROOT, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => readProfile(entry.name))
     .filter((profile): profile is CharacterProfile => Boolean(profile))
@@ -338,8 +443,10 @@ export function searchCharacters(query: string): CharacterRegistryEntry[] {
 
 export function deleteCharacter(id: string): boolean {
   const dir = characterDir(id);
-  if (!existsSync(dir)) return false;
+  const yamlFile = characterYamlPath(id);
+  if (!existsSync(dir) && !existsSync(yamlFile)) return false;
   rmSync(dir, { recursive: true, force: true });
+  rmSync(yamlFile, { force: true });
   return true;
 }
 

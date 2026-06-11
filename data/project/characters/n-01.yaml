@@ -1,0 +1,13 @@
+version: 1
+unit_id: "S-22"
+source: "character_ref_vision"
+characters:
+  - id: "N-01"
+    hair_color: "white"
+    eye_color: "blue"
+    ears: "cat ears, white with black inner parts"
+    tail: "white, cat tail"
+    android_parts: "visible circuitry and mechanical joints at shoulders, neck, and upper arm"
+    outfit: "white and black futuristic bodysuit with blue accents and a choker marked '01'"
+    accessories: "blue headset with circular earpieces, small blue hairclip"
+    appearance: "female humanoid with long white hair styled in twin tails, fair skin, and cat-like attributes"

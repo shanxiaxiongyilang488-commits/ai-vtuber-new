@@ -1934,12 +1934,26 @@
   }
 
   async function saveCharacterBible(bible: CharacterBible, refs: ReferenceImage[]): Promise<void> {
-    const ids = refs.map((ref) => ref.characterId).filter((id): id is string => Boolean(id));
-    await Promise.all(ids.map(async (id) => {
+    const targets = refs.flatMap((ref) => {
+      if (!ref.characterId) return [];
+      const keys = [ref.characterId, ref.registryName]
+        .filter((value): value is string => Boolean(value))
+        .map((value) => value.normalize('NFKC').toLowerCase());
+      const character = bible.characters.find((candidate) => (
+        keys.includes(candidate.id.normalize('NFKC').toLowerCase())
+      ));
+      return character ? [{ id: ref.characterId, character }] : [];
+    });
+    await Promise.all(targets.map(async ({ id, character }) => {
       const res = await fetch(`/api/characters/${encodeURIComponent(id)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ characterBible: bible }),
+        body: JSON.stringify({
+          characterBible: {
+            unitId: bible.unitId,
+            characters: [character],
+          },
+        }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -2622,10 +2636,7 @@ async function removeReferenceImage(i: number): Promise<void> {
         '    "reference_source": "selected REF image",',
         '    "visual_rules": ["REF画像のキャラクターデザインを維持", "髪色、耳、しっぽ、衣装、番号マーキングを変更しない"]',
         '  },',
-        '  "refs": {',
-        '    "a": "キャラクターAの英語外見タグ（カンマ区切り）",',
-        '    "b": "キャラクターBの英語外見タグ（存在しない場合は省略）"',
-        '  },',
+        '  "refs": ["N-01", "N-02"],',
         '  "continuity": {',
         '    "seriesTitle": "シリーズタイトル",',
         '    "currentEpisodeTitle": "現在のエピソードタイトル",',
@@ -2640,7 +2651,8 @@ async function removeReferenceImage(i: number): Promise<void> {
         'title、theme、characters、story_beats、pages、各pageのpanelsは必須。空配列や空文字にしないこと。',
         ...formatRules,
         'layoutは "single" / "2panel" / "3vertical" / "4panel" / "free_page" からパネル数に合うものを選ぶこと。',
-        'キャラクターが1人の場合はrefsのbキーを省略すること。',
+        'refsには使用するCharacter LibraryのIDだけを文字列配列で入れること。',
+        'Character YAMLの外見情報をStory YAMLへ複製しないこと。',
         'sceneは各コマ専用の短い説明を日本語で書くこと。全体のあらすじは各コマにコピーしないこと。',
         'dialogueは各コマのキャラクターのセリフを文字列配列で出力すること。形式: ["キャラ名: セリフ内容", ...]',
         '- 1〜3行の短いセリフにすること',
@@ -2711,7 +2723,7 @@ async function removeReferenceImage(i: number): Promise<void> {
         characters?: YamlCharacter[];
         story_beats?: YamlStoryBeat[];
         pages?: YamlPage[];
-        refs?: { a?: string; b?: string };
+        refs?: string[];
         continuity?: Partial<StoryContinuityMemory>;
       };
       let parsed: YamlParsed;
@@ -2777,11 +2789,10 @@ async function removeReferenceImage(i: number): Promise<void> {
       }
 
 	      if (referenceImages.length > 0) {
-	        parsed.refs = {
-	          ...(parsed.refs ?? {}),
-	          a: referenceImages[0]?.registryName ?? parsed.refs?.a ?? referenceImages[0]?.note ?? referenceImages[0]?.name,
-	          b: referenceImages[1]?.registryName ?? parsed.refs?.b ?? referenceImages[1]?.note ?? referenceImages[1]?.name,
-	        };
+	        parsed.refs = Array.from(new Set(referenceImages
+            .map((ref) => ref.registryName || ref.characterId)
+            .filter((id): id is string => Boolean(id))
+            .map((id) => id.toUpperCase())));
 	        console.log('[YAML_REFS]', parsed.refs);
 	      }
 	
@@ -2842,18 +2853,6 @@ async function removeReferenceImage(i: number): Promise<void> {
         nextPageIntent: parsed.continuity?.nextPageIntent || '',
       };
       lines.push(storyContinuityToYaml(generatedContinuity));
-      if (referenceImages.length > 0) {
-        const visualSummary = effectiveVisionContext
-          ? extractVisionYamlSummary(effectiveVisionContext)
-          : referenceImages.map((ref) => ref.note || ref.name).join(' / ');
-        lines.push('setting:');
-        lines.push('  reference_source: "selected REF image"');
-        lines.push(`  visual_summary: "${esc(visualSummary).slice(0, 900)}"`);
-        lines.push('  visual_rules:');
-        lines.push('    - "REF画像のキャラクターデザインを維持"');
-        lines.push('    - "髪色、耳、しっぽ、衣装、番号マーキングを変更しない"');
-        lines.push('    - "参照画像なしの一般的なキャラ設定で補完しない"');
-      }
       lines.push('pages:');
       for (const [pageIndex, page] of parsed.pages.entries()) {
         lines.push(`  - page: ${page.page ?? pageIndex + 1}`);
@@ -2874,10 +2873,9 @@ async function removeReferenceImage(i: number): Promise<void> {
           lines.push(`        prompt: "${esc(panel.prompt ?? '')}"`);
         }
       }
-      if (parsed.refs) {
+      if (parsed.refs && parsed.refs.length > 0) {
         lines.push('refs:');
-        if (parsed.refs.a) lines.push(`  a: "${parsed.refs.a.replace(/"/g, '\\"')}"`);
-        if (parsed.refs.b) lines.push(`  b: "${parsed.refs.b.replace(/"/g, '\\"')}"`);
+        for (const ref of parsed.refs) lines.push(`  - ${ref}`);
       }
       const yamlText = lines.join('\n').trim();
       saveYamlAsStoryReference(yamlText);
@@ -4097,9 +4095,62 @@ async function removeReferenceImage(i: number): Promise<void> {
     if (!refsBlock.trim()) return [];
     return refsBlock
       .split('\n')
-      .map((line) => line.match(/^\s*[a-z0-9_-]+:\s*(.+)$/i)?.[1] ?? '')
+      .map((line) => (
+        line.match(/^\s*-\s*(.+)$/)?.[1]
+        ?? line.match(/^\s*[a-z0-9_-]+:\s*(.+)$/i)?.[1]
+        ?? ''
+      ))
       .map((value) => yamlScalar(value))
       .filter(Boolean);
+  }
+
+  async function loadProjectCharacterRefs(yaml: string): Promise<{
+    refs: ReferenceImage[];
+    bible: CharacterBible | null;
+  }> {
+    const ids = Array.from(new Set(extractYamlRefs(yaml).map((id) => id.trim().toLowerCase()).filter(Boolean)));
+    if (ids.length === 0) return { refs: [], bible: null };
+    const loaded = await Promise.all(ids.map(async (id): Promise<{
+      ref: ReferenceImage;
+      bible: CharacterBible | null;
+    } | null> => {
+      try {
+        const [characterResponse, imageResponse] = await Promise.all([
+          fetch(`/api/characters/${encodeURIComponent(id)}`),
+          fetch(`/api/characters/${encodeURIComponent(id)}/reference`),
+        ]);
+        if (!characterResponse.ok) return null;
+        const characterData = await characterResponse.json();
+        const imageData = imageResponse.ok ? await imageResponse.json() : {};
+        const character = characterData?.character;
+        const image = typeof imageData?.referenceImageDataUrl === 'string'
+          ? imageData.referenceImageDataUrl
+          : '';
+        return {
+          ref: {
+            name: String(character?.name ?? id),
+            role: String(character?.role ?? ''),
+            description: String(character?.description ?? ''),
+            fileName: `${id}.yaml`,
+            dataUrl: image,
+            sourceUrl: image,
+            note: String(character?.description ?? character?.name ?? id),
+            characterId: id,
+            registryName: id.toUpperCase(),
+          },
+          bible: character?.characterBible ?? null,
+        };
+      } catch (error) {
+        console.warn('[PROJECT_CHARACTER_LIBRARY_LOOKUP]', { id, error });
+        return null;
+      }
+    }));
+    const found = loaded.flatMap((entry) => entry ? [entry] : []);
+    const characters = found.flatMap((entry) => entry.bible?.characters ?? []);
+    return {
+      refs: found.map((entry) => entry.ref),
+      bible: characters.length > 0 ? { unitId: ids.map((id) => id.toUpperCase()).join('+'), characters } : null,
+    };
   }
 
   async function lookupYamlCharacters(names: string[]): Promise<string[]> {
@@ -4194,17 +4245,23 @@ async function removeReferenceImage(i: number): Promise<void> {
       return;
     }
 
-    const characterRefImages = referenceImages
+    const projectCharacters = await loadProjectCharacterRefs(yaml);
+    const activeReferenceImages = projectCharacters.refs.length > 0
+      ? projectCharacters.refs
+      : referenceImages;
+    const characterRefImages = activeReferenceImages
       .map((ref) => ref.sourceUrl || ref.dataUrl)
       .filter((url) => url.startsWith('data:'));
-    const bible = characterRefImages.length > 0
-      ? await analyzeReferencesForCharacterBible([...referenceImages])
-      : await loadCharacterBible();
+    const bible = projectCharacters.bible
+      ?? (characterRefImages.length > 0
+        ? await analyzeReferencesForCharacterBible([...activeReferenceImages])
+        : await loadCharacterBible());
     console.log('[MANGA_LAB_INPUT]', {
-      characterRefs: referenceImages,
+      characterRefs: activeReferenceImages,
       storyRefs: storyReferences,
       characterBible: bible,
       storyYaml: yaml,
+      source: projectCharacters.refs.length > 0 ? 'project_character_library' : 'active_reference_images',
     });
     console.log('[MANGA_LAB_INPUT_STATUS]', {
       characterRefCount: characterRefImages.length,
@@ -4250,8 +4307,8 @@ async function removeReferenceImage(i: number): Promise<void> {
         yaml,
         characterBible: bible,
         characterRefImages,
-        characterRefs: referenceImages.map((ref, index) => ({
-          source: 'character_registry',
+        characterRefs: activeReferenceImages.map((ref, index) => ({
+          source: projectCharacters.refs.length > 0 ? 'project_character_library' : 'character_registry',
           id: ref.registryName || ref.characterId || `REF-${index + 1}`,
           name: ref.name,
           role: ref.role,
