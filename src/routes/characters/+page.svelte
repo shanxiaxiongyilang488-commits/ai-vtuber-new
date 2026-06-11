@@ -177,6 +177,7 @@
           onCancel={() => (editingId = '')}
           onSave={(input) => updateCharacter(character.id, input)}
           onImageChange={(file) => changeImage(character.id, file)}
+          onChat={() => (window.location.href = `/characters/${encodeURIComponent(character.id)}/chat`)}
         />
       {/each}
     </main>

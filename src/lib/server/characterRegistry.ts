@@ -45,10 +45,27 @@ export interface UpdateCharacterInput {
   characterBible?: CharacterBible;
 }
 
+export interface CharacterChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+  createdAt: string;
+}
+
+export interface CharacterMemory {
+  personality: string[];
+  speechStyle: string[];
+  likes: string[];
+  dislikes: string[];
+  updatedAt: string;
+}
+
 const CHARACTER_ROOT = resolve(process.cwd(), 'data', 'characters');
 const PROFILE_FILE = 'profile.json';
 const REFERENCE_FILE = 'reference.png';
 const SHEET_FILE = 'sheet.png';
+const CHAT_FILE = 'chat.json';
+const MEMORY_FILE = 'memory.json';
 
 function ensureRoot(): void {
   mkdirSync(CHARACTER_ROOT, { recursive: true });
@@ -218,4 +235,102 @@ export function deleteCharacter(id: string): boolean {
 
 export function characterAssetPath(id: string, asset: 'reference' | 'sheet'): string {
   return imagePath(id, asset === 'reference' ? REFERENCE_FILE : SHEET_FILE);
+}
+
+function chatPath(id: string): string {
+  return join(characterDir(id), CHAT_FILE);
+}
+
+function memoryPath(id: string): string {
+  return join(characterDir(id), MEMORY_FILE);
+}
+
+export function getCharacterChat(id: string): CharacterChatMessage[] {
+  if (!getCharacter(id)) throw new Error('character not found');
+  const file = chatPath(id);
+  if (!existsSync(file)) return [];
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf-8')) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((entry): CharacterChatMessage[] => {
+      if (!entry || typeof entry !== 'object') return [];
+      const value = entry as Partial<CharacterChatMessage>;
+      if (
+        typeof value.id !== 'string'
+        || (value.role !== 'user' && value.role !== 'assistant')
+        || typeof value.text !== 'string'
+        || typeof value.createdAt !== 'string'
+      ) return [];
+      return [{
+        id: value.id,
+        role: value.role,
+        text: value.text,
+        createdAt: value.createdAt,
+      }];
+    });
+  } catch {
+    return [];
+  }
+}
+
+export function appendCharacterChat(
+  id: string,
+  input: Pick<CharacterChatMessage, 'role' | 'text'>,
+): CharacterChatMessage[] {
+  const messages = getCharacterChat(id);
+  const message: CharacterChatMessage = {
+    id: `message-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    role: input.role,
+    text: input.text.trim(),
+    createdAt: new Date().toISOString(),
+  };
+  const next = [...messages, message].slice(-200);
+  writeFileSync(chatPath(id), JSON.stringify(next, null, 2), 'utf-8');
+  return next;
+}
+
+export function clearCharacterChat(id: string): void {
+  if (!getCharacter(id)) throw new Error('character not found');
+  writeFileSync(chatPath(id), '[]', 'utf-8');
+}
+
+function normalizeMemoryList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return Array.from(new Set(value.map(String).map((item) => item.trim()).filter(Boolean)));
+}
+
+export function getCharacterMemory(id: string): CharacterMemory {
+  if (!getCharacter(id)) throw new Error('character not found');
+  const file = memoryPath(id);
+  if (!existsSync(file)) {
+    return { personality: [], speechStyle: [], likes: [], dislikes: [], updatedAt: '' };
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf-8')) as Partial<CharacterMemory>;
+    return {
+      personality: normalizeMemoryList(parsed.personality),
+      speechStyle: normalizeMemoryList(parsed.speechStyle),
+      likes: normalizeMemoryList(parsed.likes),
+      dislikes: normalizeMemoryList(parsed.dislikes),
+      updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : '',
+    };
+  } catch {
+    return { personality: [], speechStyle: [], likes: [], dislikes: [], updatedAt: '' };
+  }
+}
+
+export function saveCharacterMemory(
+  id: string,
+  input: Omit<CharacterMemory, 'updatedAt'>,
+): CharacterMemory {
+  if (!getCharacter(id)) throw new Error('character not found');
+  const memory: CharacterMemory = {
+    personality: normalizeMemoryList(input.personality),
+    speechStyle: normalizeMemoryList(input.speechStyle),
+    likes: normalizeMemoryList(input.likes),
+    dislikes: normalizeMemoryList(input.dislikes),
+    updatedAt: new Date().toISOString(),
+  };
+  writeFileSync(memoryPath(id), JSON.stringify(memory, null, 2), 'utf-8');
+  return memory;
 }

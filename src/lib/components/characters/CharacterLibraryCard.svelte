@@ -18,6 +18,7 @@
     onCancel,
     onSave,
     onImageChange,
+    onChat,
   }: {
     character: CharacterLibraryItem;
     editing?: boolean;
@@ -26,6 +27,7 @@
     onCancel: () => void;
     onSave: (input: Pick<CharacterLibraryItem, 'name' | 'role' | 'description'>) => void | Promise<void>;
     onImageChange: (file: File) => void | Promise<void>;
+    onChat: () => void;
   } = $props();
 
   let name = $state(untrack(() => character.name));
@@ -88,7 +90,10 @@
       <div class="role">{character.role || '役割未設定'}</div>
       <p>{character.description || '説明はまだありません。'}</p>
       <div class="image-path">IMAGE: {character.image || '未登録'}</div>
-      <button class="edit-button" onclick={onEdit}>編集</button>
+      <div class="card-actions">
+        <button class="chat-button" onclick={onChat}>Character Chat</button>
+        <button class="edit-button" onclick={onEdit}>編集</button>
+      </div>
     {/if}
   </div>
 </article>
@@ -173,7 +178,9 @@
     cursor: pointer;
   }
   button:disabled { cursor: not-allowed; opacity: 0.45; }
-  .edit-button { width: 100%; margin-top: 12px; }
+  .card-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 12px; }
+  .chat-button { border-color: rgba(251, 191, 36, 0.38); color: #fde68a; }
+  .edit-button { width: 100%; }
   .actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 12px; }
   .secondary { border-color: rgba(148, 163, 184, 0.25); color: #94a3b8; }
 </style>
