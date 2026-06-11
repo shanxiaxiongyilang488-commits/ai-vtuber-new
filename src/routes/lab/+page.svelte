@@ -515,8 +515,12 @@
     characters: Array<{
       id: string;
       hairColor: string;
+      eyeColor: string;
       ears: string;
       tail: string;
+      androidParts: string;
+      outfit: string;
+      accessories: string;
       appearance: string;
     }>;
   };
@@ -1648,10 +1652,9 @@
     mangaConverting = msg.time;
     try {
       const storyYaml = storyYamlOverride.trim() || latestYamlForImageGeneration();
-      let bible = await loadCharacterBible();
-      if (!bible && referenceImages.length > 0) {
-        bible = await analyzeReferencesForCharacterBible([...referenceImages]);
-      }
+      const bible = referenceImages.length > 0
+        ? await analyzeReferencesForCharacterBible([...referenceImages])
+        : await loadCharacterBible();
       console.log('[MANGA_LAB_INPUT]', {
         referenceImages,
         characterBible: bible,
@@ -1973,13 +1976,24 @@
     if (!parsed.unitId?.trim() || !Array.isArray(parsed.characters) || parsed.characters.length === 0) {
       throw new Error('Character Bible JSON is invalid');
     }
-    const characters = parsed.characters.map((character) => ({
-      id: String(character?.id ?? '').trim(),
-      hairColor: String(character?.hairColor ?? '').trim(),
-      ears: String(character?.ears ?? '').trim(),
-      tail: String(character?.tail ?? '').trim(),
-      appearance: String(character?.appearance ?? '').trim(),
-    }));
+    const characters = parsed.characters.map((character) => {
+      const value = character as typeof character & {
+        hair_color?: string;
+        eye_color?: string;
+        android_parts?: string;
+      };
+      return {
+        id: String(value?.id ?? '').trim(),
+        hairColor: String(value?.hairColor ?? value?.hair_color ?? '').trim(),
+        eyeColor: String(value?.eyeColor ?? value?.eye_color ?? '').trim(),
+        ears: String(value?.ears ?? '').trim(),
+        tail: String(value?.tail ?? '').trim(),
+        androidParts: String(value?.androidParts ?? value?.android_parts ?? '').trim(),
+        outfit: String(value?.outfit ?? '').trim(),
+        accessories: String(value?.accessories ?? '').trim(),
+        appearance: String(value?.appearance ?? '').trim(),
+      };
+    });
     if (characters.some((character) => Object.values(character).some((value) => !value))) {
       throw new Error('Character Bible character fields are incomplete');
     }
@@ -2013,13 +2027,19 @@
             'Detect every distinct visible person across all supplied images.',
             'Return JSON only, without markdown or explanation.',
             'Use exactly this schema:',
-            '{"unitId":"S-22","characters":[{"id":"N-01","hairColor":"...","ears":"...","tail":"...","appearance":"..."}]}',
+            '{"unitId":"S-22","characters":[{"id":"N-01","hair_color":"...","eye_color":"...","ears":"...","tail":"...","android_parts":"...","outfit":"...","accessories":"...","appearance":"..."}]}',
             'characters must contain every visible person, not only the first person.',
-            'hairColor, ears, tail, and appearance may contain only directly visible person, clothing, color, pose, and background facts.',
+            'Extract hair_color, eye_color, ears, tail, android_parts, outfit, accessories, and appearance from the supplied Character Ref images.',
+            'Every visual field may contain only directly visible facts. Use "none visible" when a feature is visibly absent and "unknown" when it cannot be determined.',
             'appearance must not contain personality, story, emotion, dialogue, relationships, or inferred intent.',
-            'Use "unknown" for details that are not directly visible.',
+            'The images are authoritative. Never infer appearance from a character name, label, role, description, or prior knowledge.',
           ].join('\n'),
-          userMessage: `unitId: S-22\nREF labels: ${refLabels.join(', ')}\n画像内の視覚的事実だけを指定JSON形式で抽出してください。`,
+          userMessage: [
+            'Create the Character Sheet visual profile from the attached Character Ref images.',
+            'unitId: S-22',
+            `REF labels (identity labels only, not appearance evidence): ${refLabels.join(', ')}`,
+            'Analyze the pixels first and return the required JSON only.',
+          ].join('\n'),
           images,
         }),
       });
@@ -4177,10 +4197,9 @@ async function removeReferenceImage(i: number): Promise<void> {
     const characterRefImages = referenceImages
       .map((ref) => ref.sourceUrl || ref.dataUrl)
       .filter((url) => url.startsWith('data:'));
-    let bible = await loadCharacterBible();
-    if (!bible && characterRefImages.length > 0) {
-      bible = await analyzeReferencesForCharacterBible([...referenceImages]);
-    }
+    const bible = characterRefImages.length > 0
+      ? await analyzeReferencesForCharacterBible([...referenceImages])
+      : await loadCharacterBible();
     console.log('[MANGA_LAB_INPUT]', {
       characterRefs: referenceImages,
       storyRefs: storyReferences,

@@ -18,8 +18,12 @@ export interface CharacterBible {
 export interface CharacterBibleCharacter {
   id: string;
   hairColor: string;
+  eyeColor: string;
   ears: string;
   tail: string;
+  androidParts: string;
+  outfit: string;
+  accessories: string;
   appearance: string;
 }
 

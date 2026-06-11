@@ -32,8 +32,12 @@ type YamlImageRequest = {
     characters?: Array<{
       id?: string;
       hairColor?: string;
+      eyeColor?: string;
       ears?: string;
       tail?: string;
+      androidParts?: string;
+      outfit?: string;
+      accessories?: string;
       appearance?: string;
     }>;
   } | null;
@@ -98,8 +102,12 @@ function buildCharacterConsistencyPrompt(characterBible: CharacterBible | null):
       if (!id) return '';
       const traits = [
         character.hairColor ? `hair: ${character.hairColor}` : '',
+        character.eyeColor ? `eyes: ${character.eyeColor}` : '',
         character.ears ? `ears: ${character.ears}` : '',
         character.tail ? `tail: ${character.tail}` : '',
+        character.androidParts ? `android parts: ${character.androidParts}` : '',
+        character.outfit ? `outfit: ${character.outfit}` : '',
+        character.accessories ? `accessories: ${character.accessories}` : '',
         character.appearance ? `appearance: ${character.appearance}` : '',
       ].filter(Boolean).join(', ');
       return traits ? `${id} must keep ${traits}.` : `${id} must keep the reference-image design.`;

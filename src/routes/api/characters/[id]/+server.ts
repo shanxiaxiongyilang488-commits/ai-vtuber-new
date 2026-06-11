@@ -41,7 +41,17 @@ export const PUT: RequestHandler = async ({ params, request }) => {
       || characterBible.characters.some((character: unknown) => {
         if (!character || typeof character !== 'object') return true;
         const value = character as Record<string, unknown>;
-        return ['id', 'hairColor', 'ears', 'tail', 'appearance']
+        return [
+          'id',
+          'hairColor',
+          'eyeColor',
+          'ears',
+          'tail',
+          'androidParts',
+          'outfit',
+          'accessories',
+          'appearance',
+        ]
           .some((key) => typeof value[key] !== 'string' || !String(value[key]).trim());
       })
     )) {
