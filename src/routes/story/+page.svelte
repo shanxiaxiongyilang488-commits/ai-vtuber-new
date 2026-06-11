@@ -1,13 +1,24 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import StoryViewer from '$lib/components/StoryViewer.svelte';
-  import { deleteStory, loadStoryLibrary, type SavedStory } from '$lib/storyLibrary';
+  import { parseStoryYaml } from '$lib/storyYaml';
+  import {
+    deleteStory,
+    loadStoryLibrary,
+    saveStoryYaml,
+    type SavedStory,
+  } from '$lib/storyLibrary';
 
   let stories = $state<SavedStory[]>([]);
   let selectedId = $state('');
+  let importYaml = $state('');
+  let importFileName = $state('');
+  let importError = $state('');
+  let importSuccess = $state('');
   let selectedStory = $derived(
     stories.find((story) => story.id === selectedId) ?? stories[0] ?? null,
   );
+  let importPreview = $derived(parseStoryYaml(importYaml));
 
   onMount(() => {
     stories = loadStoryLibrary();
@@ -26,6 +37,55 @@
 
   function formatDate(value: string): string {
     return new Date(value).toLocaleString('ja-JP');
+  }
+
+  async function loadYamlFile(event: Event): Promise<void> {
+    const input = event.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+
+    if (!/\.ya?ml$/i.test(file.name)) {
+      importError = '.yaml または .yml ファイルを選択してください。';
+      return;
+    }
+
+    importYaml = await file.text();
+    importFileName = file.name;
+    importError = '';
+    importSuccess = '';
+  }
+
+  function importStory(): void {
+    importError = '';
+    importSuccess = '';
+    const parsed = parseStoryYaml(importYaml);
+    if (!parsed) {
+      importError = 'Story YAMLとして解析できません。title または story_type を確認してください。';
+      return;
+    }
+
+    const duplicate = stories.find(
+      (story) => story.title.trim().toLocaleLowerCase() === parsed.title.trim().toLocaleLowerCase(),
+    );
+    if (
+      duplicate
+      && !confirm(`同じタイトル「${parsed.title}」がStory Libraryにあります。保存を続行しますか？`)
+    ) {
+      return;
+    }
+
+    const saved = saveStoryYaml(parsed.rawYaml);
+    if (!saved) {
+      importError = 'Story Libraryへの保存に失敗しました。';
+      return;
+    }
+
+    stories = loadStoryLibrary();
+    selectedId = saved.id;
+    importYaml = '';
+    importFileName = '';
+    importSuccess = `「${saved.title}」をStory Libraryへ保存しました。`;
   }
 </script>
 
@@ -46,6 +106,46 @@
       <a href="/settings/api">SETTINGS</a>
     </nav>
   </header>
+
+  <section class="import-panel">
+    <div class="import-heading">
+      <div>
+        <p>YAML IMPORT</p>
+        <h2>Storyを登録</h2>
+      </div>
+      <label class="file-button">
+        .yaml / .yml を選択
+        <input type="file" accept=".yaml,.yml,application/yaml,text/yaml" onchange={loadYamlFile} />
+      </label>
+    </div>
+
+    {#if importFileName}
+      <div class="file-name">FILE: {importFileName}</div>
+    {/if}
+
+    <textarea
+      bind:value={importYaml}
+      oninput={() => {
+        importError = '';
+        importSuccess = '';
+      }}
+      placeholder="title: My Story&#10;story_type: comic_story&#10;characters: ..."
+      aria-label="Story YAMLテキスト"
+    ></textarea>
+
+    <div class="import-footer">
+      <div class="import-meta">
+        <span>TITLE <strong>{importPreview?.title || '未取得'}</strong></span>
+        <span>STORY TYPE <strong>{importPreview?.storyType || '未取得'}</strong></span>
+      </div>
+      <button class="import-button" onclick={importStory} disabled={!importYaml.trim() || !importPreview}>
+        STORY LIBRARYへ保存
+      </button>
+    </div>
+
+    {#if importError}<div class="import-message error">{importError}</div>{/if}
+    {#if importSuccess}<div class="import-message success">{importSuccess}</div>{/if}
+  </section>
 
   {#if stories.length === 0}
     <main class="empty-state">
@@ -119,6 +219,71 @@
     font-weight: 800;
   }
 
+  .import-panel {
+    max-width: 1280px;
+    margin: 0 auto 18px;
+    padding: 16px;
+    border: 1px solid rgba(34, 211, 238, 0.2);
+    border-radius: 12px;
+    background: rgba(8, 15, 32, 0.82);
+  }
+
+  .import-heading, .import-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+
+  .import-heading p, .import-heading h2 { margin: 0; }
+  .import-heading p { color: #22d3ee; font-size: 9px; letter-spacing: 0.18em; }
+  .import-heading h2 { margin-top: 3px; font-size: 18px; }
+
+  .file-button, .import-button {
+    padding: 9px 13px;
+    border: 1px solid rgba(34, 211, 238, 0.34);
+    border-radius: 6px;
+    background: rgba(34, 211, 238, 0.07);
+    color: #a5f3fc;
+    font: inherit;
+    font-size: 11px;
+    font-weight: 800;
+    cursor: pointer;
+  }
+
+  .file-button input { display: none; }
+  .file-name { margin-top: 10px; color: #fbbf24; font-size: 10px; }
+
+  .import-panel textarea {
+    width: 100%;
+    min-height: 180px;
+    margin: 12px 0;
+    padding: 12px;
+    resize: vertical;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 8px;
+    outline: none;
+    background: #020617;
+    color: #cbd5e1;
+    font: 12px/1.55 Consolas, monospace;
+    box-sizing: border-box;
+  }
+
+  .import-panel textarea:focus { border-color: rgba(34, 211, 238, 0.55); }
+  .import-meta { display: flex; flex-wrap: wrap; gap: 8px; }
+  .import-meta span {
+    padding: 5px 8px;
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-radius: 999px;
+    color: #64748b;
+    font-size: 9px;
+  }
+  .import-meta strong { margin-left: 5px; color: #e2e8f0; }
+  .import-button:disabled { cursor: not-allowed; opacity: 0.35; }
+  .import-message { margin-top: 10px; font-size: 11px; }
+  .import-message.error { color: #fb7185; }
+  .import-message.success { color: #6ee7b7; }
+
   .story-layout {
     max-width: 1280px;
     margin: 0 auto;
@@ -166,6 +331,7 @@
   @media (max-width: 760px) {
     .story-page { padding: 18px; }
     header { align-items: start; flex-direction: column; }
+    .import-heading, .import-footer { align-items: stretch; flex-direction: column; }
     .story-layout { grid-template-columns: 1fr; }
   }
 </style>
