@@ -60,6 +60,14 @@ export interface CharacterMemory {
   updatedAt: string;
 }
 
+export interface CharacterStoryContext {
+  id: string;
+  name: string;
+  role: string;
+  description: string;
+  memory: CharacterMemory;
+}
+
 const CHARACTER_ROOT = resolve(process.cwd(), 'data', 'characters');
 const PROFILE_FILE = 'profile.json';
 const REFERENCE_FILE = 'reference.png';
@@ -333,4 +341,28 @@ export function saveCharacterMemory(
   };
   writeFileSync(memoryPath(id), JSON.stringify(memory, null, 2), 'utf-8');
   return memory;
+}
+
+export function getCharacterStoryContexts(
+  characterIds: string[] = [],
+  query = '',
+): CharacterStoryContext[] {
+  const requestedIds = new Set(characterIds.map(normalizeId).filter(Boolean));
+  const normalizedQuery = query.normalize('NFKC').toLowerCase();
+  return listCharacters()
+    .filter((character) => (
+      requestedIds.has(character.id)
+      || normalizedQuery.includes(character.id.normalize('NFKC').toLowerCase())
+      || (
+        character.name.trim()
+        && normalizedQuery.includes(character.name.normalize('NFKC').toLowerCase())
+      )
+    ))
+    .map((character) => ({
+      id: character.id,
+      name: character.name,
+      role: character.role,
+      description: character.description,
+      memory: getCharacterMemory(character.id),
+    }));
 }

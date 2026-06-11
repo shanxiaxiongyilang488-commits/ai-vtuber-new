@@ -521,6 +521,20 @@
     }>;
   };
 
+  type StoryCharacterMemory = {
+    id: string;
+    name: string;
+    role: string;
+    description: string;
+    memory: {
+      personality: string[];
+      speechStyle: string[];
+      likes: string[];
+      dislikes: string[];
+      updatedAt: string;
+    };
+  };
+
   let referenceImages = $state<ReferenceImage[]>([]);
   let characterRegistrationName = $state('');
   let characterRegistrationRole = $state('');
@@ -2448,6 +2462,55 @@ async function removeReferenceImage(i: number): Promise<void> {
     return 'comic_story';
   }
 
+  async function loadStoryCharacterMemories(
+    storyInput: string,
+  ): Promise<StoryCharacterMemory[]> {
+    const characterIds = referenceImages
+      .map((reference) => reference.characterId)
+      .filter((id): id is string => Boolean(id));
+    try {
+      const response = await fetch('/api/characters/story-context', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ characterIds, query: storyInput }),
+      });
+      if (!response.ok) throw new Error(`Character Memory HTTP ${response.status}`);
+      const data = await response.json();
+      return Array.isArray(data?.characters) ? data.characters : [];
+    } catch (error) {
+      console.warn('[STORY_CHARACTER_MEMORY_LOAD_ERROR]', error);
+      return [];
+    }
+  }
+
+  function formatStoryCharacterMemoryContext(memories: StoryCharacterMemory[]): string {
+    if (memories.length === 0) return '';
+    return [
+      '',
+      '[Character Memory - Storyで必ず反映]',
+      ...memories.map((character) => [
+        `${character.id}: ${character.name}`,
+        character.role ? `役割=${character.role}` : '',
+        character.description ? `基本設定=${character.description}` : '',
+        character.memory.personality.length
+          ? `育成された性格=${character.memory.personality.join('、')}`
+          : '',
+        character.memory.speechStyle.length
+          ? `育成された口調=${character.memory.speechStyle.join('、')}`
+          : '',
+        character.memory.likes.length
+          ? `好き=${character.memory.likes.join('、')}`
+          : '',
+        character.memory.dislikes.length
+          ? `嫌い=${character.memory.dislikes.join('、')}`
+          : '',
+      ].filter(Boolean).join(' / ')),
+      '上記MemoryはCharacter Chatで育成された現在の人格です。',
+      'characters.personality、characters.speechStyle、行動、台詞、好みの選択へ一貫して反映してください。',
+      'Storyの都合で人格・口調・好き嫌いを初期化または反転しないでください。',
+    ].join('\n');
+  }
+
   async function convertToYaml(
     msg: ChatMessage,
     mode: 'studio' | 'chat' = 'studio',
@@ -2464,6 +2527,10 @@ async function removeReferenceImage(i: number): Promise<void> {
         .filter(m => m.role !== 'error')
         .map(m => `${m.role === 'user' ? 'ユーザー' : 'AI'}: ${m.text}`)
         .join('\n');
+      const storyCharacterMemories = await loadStoryCharacterMemories(
+        [contextText, msg.text, sourceYaml].filter(Boolean).join('\n'),
+      );
+      const characterMemoryContext = formatStoryCharacterMemoryContext(storyCharacterMemories);
 
 	      const refContext    = referenceImages.length > 0
 	        ? `\n[永続登録キャラクター]\n${referenceImages.map((r, i) => [
@@ -2579,6 +2646,7 @@ async function removeReferenceImage(i: number): Promise<void> {
         '',
         'promptはJSONの文字列値として1行で出力すること。改行（\\n）は使用しないこと。',
         refYamlRequirement,
+        characterMemoryContext,
         continuityRequirement,
       ].join('\n');
 
@@ -2600,6 +2668,7 @@ async function removeReferenceImage(i: number): Promise<void> {
             contextText,
             refContext,
             visionSection,
+            characterMemoryContext,
             sourceYaml ? `\n[Source YAML]\n${sourceYaml}` : '',
             continuityRequirement,
           ].join(''),
@@ -2668,6 +2737,23 @@ async function removeReferenceImage(i: number): Promise<void> {
           ...page,
           page: continuity.pageIndex + index + 1,
         }));
+      }
+
+      for (const character of parsed.characters) {
+        const normalizedName = character.name?.normalize('NFKC').toLowerCase() ?? '';
+        const learned = storyCharacterMemories.find((candidate) => (
+          normalizedName === candidate.name.normalize('NFKC').toLowerCase()
+          || normalizedName === candidate.id.normalize('NFKC').toLowerCase()
+        ));
+        if (!learned) continue;
+        const personality = learned.memory.personality.join('、');
+        const speechStyle = learned.memory.speechStyle.join('、');
+        character.role = character.role || learned.role;
+        character.personality = [
+          learned.description,
+          personality,
+        ].filter(Boolean).join(' / ');
+        character.speechStyle = speechStyle || character.speechStyle;
       }
 
 	      if (referenceImages.length > 0) {
