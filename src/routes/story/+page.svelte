@@ -3,11 +3,15 @@
   import StoryViewer from '$lib/components/StoryViewer.svelte';
   import { parseStoryYaml } from '$lib/storyYaml';
   import {
+    clearActiveStory,
     deleteStory,
     loadStoryLibrary,
     saveStoryYaml,
+    setActiveStory,
+    updateStoryReferenceImages,
     updateStoryYaml,
     type SavedStory,
+    type StoryReferenceImage,
   } from '$lib/storyLibrary';
 
   let stories = $state<SavedStory[]>([]);
@@ -16,6 +20,8 @@
   let importFileName = $state('');
   let importError = $state('');
   let importSuccess = $state('');
+  let referenceBusy = $state(false);
+  let referenceError = $state('');
   let selectedStory = $derived(
     stories.find((story) => story.id === selectedId) ?? stories[0] ?? null,
   );
@@ -24,16 +30,138 @@
   onMount(() => {
     stories = loadStoryLibrary();
     selectedId = stories[0]?.id ?? '';
+    if (stories[0]) {
+      setActiveStory(stories[0]);
+      void loadReferenceImages(stories[0].id);
+    }
   });
 
+  function selectStory(story: SavedStory): void {
+    selectedId = story.id;
+    setActiveStory(story);
+    void loadReferenceImages(story.id);
+  }
+
+  async function loadReferenceImages(storyId: string): Promise<void> {
+    try {
+      const response = await fetch(`/api/stories/${encodeURIComponent(storyId)}/reference-images`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.message ?? '参照画像の読み込みに失敗しました。');
+      applyReferenceImages(storyId, data?.referenceImages ?? []);
+    } catch (error) {
+      referenceError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  function applyReferenceImages(storyId: string, images: StoryReferenceImage[]): void {
+    updateStoryReferenceImages(storyId, images);
+    stories = loadStoryLibrary().map((story) => (
+      story.id === storyId ? { ...story, referenceImages: images } : story
+    ));
+    const active = stories.find((story) => story.id === storyId);
+    if (active) {
+      setActiveStory({
+        ...active,
+        referenceImages: active.referenceImages.map(({ dataUrl: _dataUrl, ...image }) => image),
+      });
+    }
+    console.log('[STORY_REF_IMAGE]', {
+      storyId,
+      imageCount: images.length,
+      activeImage: images.find((image) => image.active)?.name ?? null,
+    });
+  }
+
+  async function uploadReferenceImage(event: Event): Promise<void> {
+    const input = event.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file || !selectedStory) return;
+    if (!/\.(png|jpe?g|webp)$/i.test(file.name)) {
+      referenceError = 'png / jpg / jpeg / webp を選択してください。';
+      return;
+    }
+    referenceBusy = true;
+    referenceError = '';
+    try {
+      const form = new FormData();
+      form.set('image', file);
+      const response = await fetch(
+        `/api/stories/${encodeURIComponent(selectedStory.id)}/reference-images`,
+        { method: 'POST', body: form },
+      );
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.message ?? '参照画像の追加に失敗しました。');
+      applyReferenceImages(selectedStory.id, data.referenceImages ?? []);
+    } catch (error) {
+      referenceError = error instanceof Error ? error.message : String(error);
+    } finally {
+      referenceBusy = false;
+    }
+  }
+
+  async function setActiveReferenceImage(imageId: string): Promise<void> {
+    if (!selectedStory) return;
+    referenceBusy = true;
+    try {
+      const response = await fetch(
+        `/api/stories/${encodeURIComponent(selectedStory.id)}/reference-images`,
+        {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ imageId }),
+        },
+      );
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.message ?? 'ACTIVE画像の変更に失敗しました。');
+      applyReferenceImages(selectedStory.id, data.referenceImages ?? []);
+    } catch (error) {
+      referenceError = error instanceof Error ? error.message : String(error);
+    } finally {
+      referenceBusy = false;
+    }
+  }
+
+  async function removeReferenceImage(imageId: string): Promise<void> {
+    if (!selectedStory) return;
+    referenceBusy = true;
+    try {
+      const response = await fetch(
+        `/api/stories/${encodeURIComponent(selectedStory.id)}/reference-images?imageId=${encodeURIComponent(imageId)}`,
+        { method: 'DELETE' },
+      );
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.message ?? '参照画像の削除に失敗しました。');
+      applyReferenceImages(selectedStory.id, data.referenceImages ?? []);
+    } catch (error) {
+      referenceError = error instanceof Error ? error.message : String(error);
+    } finally {
+      referenceBusy = false;
+    }
+  }
+
   function openMangaProject(rawYaml: string): void {
+    if (selectedStory) setActiveStory(selectedStory);
     localStorage.setItem('studio-yaml', rawYaml);
     window.location.href = '/project';
   }
 
-  function removeStory(id: string): void {
+  async function removeStory(id: string): Promise<void> {
+    const story = stories.find((entry) => entry.id === id);
+    if (story) {
+      await Promise.all(story.referenceImages.map((image) => fetch(
+        `/api/stories/${encodeURIComponent(id)}/reference-images?imageId=${encodeURIComponent(image.id)}`,
+        { method: 'DELETE' },
+      ).catch(() => null)));
+    }
     stories = deleteStory(id);
     selectedId = stories[0]?.id ?? '';
+    if (stories[0]) {
+      setActiveStory(stories[0]);
+      void loadReferenceImages(stories[0].id);
+    } else {
+      clearActiveStory();
+    }
   }
 
   function saveEditedStory(rawYaml: string): void {
@@ -42,6 +170,7 @@
     if (!updated) return;
     stories = loadStoryLibrary();
     selectedId = updated.id;
+    setActiveStory(updated);
   }
 
   function formatDate(value: string): string {
@@ -92,6 +221,7 @@
 
     stories = loadStoryLibrary();
     selectedId = saved.id;
+    setActiveStory(saved);
     importYaml = '';
     importFileName = '';
     importSuccess = `「${saved.title}」をStory Libraryへ保存しました。`;
@@ -167,7 +297,7 @@
       <aside class="story-list" aria-label="保存済みStory">
         {#each stories as story (story.id)}
           <article class:active={selectedStory?.id === story.id}>
-            <button class="story-select" onclick={() => (selectedId = story.id)}>
+            <button class="story-select" onclick={() => selectStory(story)}>
               <span class="story-type">{story.storyType}</span>
               <strong>{story.title}</strong>
               <small>{formatDate(story.updatedAt)}</small>
@@ -179,6 +309,52 @@
 
       <section class="story-detail">
         {#if selectedStory}
+          <section class="reference-images-panel">
+            <div class="reference-images-heading">
+              <div>
+                <span>STORY CONTINUITY IMAGE</span>
+                <h2>参照漫画ページ画像</h2>
+              </div>
+              <label class="reference-upload">
+                {referenceBusy ? '処理中...' : '画像を追加'}
+                <input
+                  type="file"
+                  accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
+                  onchange={uploadReferenceImage}
+                  disabled={referenceBusy}
+                />
+              </label>
+            </div>
+            {#if selectedStory.referenceImages.length > 0}
+              <div class="reference-image-grid">
+                {#each selectedStory.referenceImages as image (image.id)}
+                  <article class:active={image.active}>
+                    {#if image.dataUrl}
+                      <img src={image.dataUrl} alt={image.name} />
+                    {/if}
+                    <div class="reference-image-meta">
+                      <strong>{image.name}</strong>
+                      <span>{image.active ? 'ACTIVE' : 'MANGA PAGE'}</span>
+                    </div>
+                    <div class="reference-image-actions">
+                      <button
+                        onclick={() => setActiveReferenceImage(image.id)}
+                        disabled={referenceBusy || image.active}
+                      >ACTIVE指定</button>
+                      <button
+                        class="remove-reference"
+                        onclick={() => removeReferenceImage(image.id)}
+                        disabled={referenceBusy}
+                      >削除</button>
+                    </div>
+                  </article>
+                {/each}
+              </div>
+            {:else}
+              <p class="reference-empty">前ページの完成済み漫画画像を登録できます。</p>
+            {/if}
+            {#if referenceError}<div class="import-message error">{referenceError}</div>{/if}
+          </section>
           <StoryViewer
             rawYaml={selectedStory.rawYaml}
             editable
@@ -339,6 +515,79 @@
   .story-select small { color: #64748b; }
   .delete-button { color: #fb7185; font-size: 10px; }
   .story-detail { min-width: 0; padding: 16px; }
+  .reference-images-panel {
+    margin-bottom: 14px;
+    padding: 13px;
+    border: 1px solid rgba(251, 191, 36, 0.24);
+    border-radius: 9px;
+    background: rgba(251, 191, 36, 0.035);
+  }
+  .reference-images-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .reference-images-heading span {
+    color: #fbbf24;
+    font-size: 8px;
+    letter-spacing: 0.15em;
+  }
+  .reference-images-heading h2 { margin: 3px 0 0; font-size: 15px; }
+  .reference-upload {
+    padding: 8px 11px;
+    border: 1px solid rgba(251, 191, 36, 0.34);
+    border-radius: 6px;
+    color: #fde68a;
+    font-size: 10px;
+    font-weight: 800;
+    cursor: pointer;
+  }
+  .reference-upload input { display: none; }
+  .reference-image-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 9px;
+    margin-top: 12px;
+  }
+  .reference-image-grid article {
+    overflow: hidden;
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    border-radius: 7px;
+    background: #020617;
+  }
+  .reference-image-grid article.active {
+    border-color: rgba(251, 191, 36, 0.7);
+    box-shadow: 0 0 0 1px rgba(251, 191, 36, 0.18);
+  }
+  .reference-image-grid img {
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    display: block;
+    object-fit: cover;
+  }
+  .reference-image-meta { display: grid; gap: 3px; padding: 8px; }
+  .reference-image-meta strong {
+    overflow: hidden;
+    color: #e2e8f0;
+    font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .reference-image-meta span { color: #fbbf24; font-size: 8px; }
+  .reference-image-actions { display: grid; grid-template-columns: 1fr auto; gap: 5px; padding: 0 8px 8px; }
+  .reference-image-actions button {
+    padding: 6px;
+    border: 1px solid rgba(34, 211, 238, 0.24);
+    border-radius: 5px;
+    background: rgba(34, 211, 238, 0.05);
+    color: #a5f3fc;
+    font-size: 9px;
+    cursor: pointer;
+  }
+  .reference-image-actions .remove-reference { color: #fb7185; }
+  .reference-image-actions button:disabled { cursor: default; opacity: 0.4; }
+  .reference-empty { margin: 12px 0 0; color: #64748b; font-size: 10px; }
   .empty-state { max-width: 760px; margin: 80px auto; padding: 48px; text-align: center; }
   .empty-state p { margin-bottom: 28px; color: #94a3b8; }
 

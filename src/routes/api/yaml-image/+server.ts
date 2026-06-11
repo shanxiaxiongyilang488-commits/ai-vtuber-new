@@ -27,6 +27,23 @@ type YamlImageRequest = {
     source?: string;
   } | null;
   yaml?: string;
+  activeStory?: {
+    id?: string;
+    title?: string;
+    yaml?: string;
+    summary?: string;
+    characters?: unknown[];
+    pages?: unknown[];
+    referenceImages?: Array<{
+      id?: string;
+      name?: string;
+      path?: string;
+      type?: 'manga_page';
+      createdAt?: string;
+      active?: boolean;
+    }>;
+  } | null;
+  storyReferenceImages?: string[];
   characterBible?: {
     unitId?: string;
     characters?: Array<{
@@ -275,6 +292,8 @@ export const POST: RequestHandler = async ({ request }) => {
     .filter((image): image is string => Boolean(image));
   const suppliedCharacterRefImages = (body.characterRefImages ?? body.refImages ?? [])
     .filter((image): image is string => typeof image === 'string' && image.startsWith('data:image/'));
+  const storyReferenceImages = (body.storyReferenceImages ?? [])
+    .filter((image): image is string => typeof image === 'string' && image.startsWith('data:image/'));
   const requestCharacterRefImages = projectCharacterRefImages.length > 0
     ? projectCharacterRefImages
     : suppliedCharacterRefImages;
@@ -309,6 +328,16 @@ export const POST: RequestHandler = async ({ request }) => {
     projectCharacterIds,
     characterSource: projectCharacters.length > 0 ? 'project_character_library' : 'request',
   });
+  console.log('[STORY_REF_IMAGE]', {
+    storyId: body.activeStory?.id ?? null,
+    imageCount: storyReferenceImages.length,
+    activeImage: body.activeStory?.referenceImages?.find((image) => image.active)?.name ?? null,
+  });
+  console.log('[MANGA_GENERATION_CONTEXT]', {
+    storyTitle: body.activeStory?.title ?? selectedStoryRef?.name ?? '',
+    yamlLoaded: Boolean(yaml),
+    referenceImages: storyReferenceImages.length,
+  });
   if (characterBible && requestCharacterRefImages.length === 0) {
     console.warn('[MANGA_LAB_ABORT]', 'CharacterBible exists but REF image count is 0');
     throw error(400, 'CharacterBible exists but REF images are required');
@@ -322,7 +351,7 @@ export const POST: RequestHandler = async ({ request }) => {
   const document = parseYamlSceneDocument(yaml);
   const comicPageLayout = document.panels.length > 1
     || ['4panel', 'manga4', 'comic', 'manga', 'manga8', '8panel'].includes(document.layout.trim().toLowerCase());
-  if (comicPageLayout && requestCharacterRefImages.length === 0) {
+  if (comicPageLayout && requestCharacterRefImages.length === 0 && storyReferenceImages.length === 0) {
     console.warn('[MANGA_LAB_ABORT]', 'Comic page generation requires REF images');
     throw error(400, 'REF images are required for comic page generation');
   }
@@ -338,6 +367,16 @@ export const POST: RequestHandler = async ({ request }) => {
   const characterConsistencyPrompt = buildCharacterConsistencyPrompt(characterBible);
   const registeredCharacterPrompt = buildRegisteredCharacterPrompt(body.characterRefs);
   const continuityPrompt = extractContinuityPrompt(yaml);
+  const storyPageReferencePrompt = storyReferenceImages.length > 0
+    ? [
+      'The supplied manga page image is the previous page of this story.',
+      'Maintain its characters, art style, color palette, panel layout language, and speech-bubble atmosphere.',
+      'However, the new page content must follow the Story YAML.',
+      'この画像は前ページの漫画です。',
+      'キャラクター、絵柄、配色、コマ割り、吹き出しの雰囲気を維持してください。',
+      'ただし新しいページ内容はStory YAMLに従ってください。',
+    ].join('\n')
+    : '';
   const prompt = [
     basePrompt,
     body.renderMode === 'illustration'
@@ -346,6 +385,7 @@ export const POST: RequestHandler = async ({ request }) => {
     characterConsistencyPrompt,
     registeredCharacterPrompt,
     continuityPrompt,
+    storyPageReferencePrompt,
     requestCharacterRefImages.length > 0 && !characterConsistencyPrompt
       ? 'Use the supplied reference images as the primary and authoritative character appearance source.'
       : '',
@@ -397,7 +437,10 @@ export const POST: RequestHandler = async ({ request }) => {
   const finalCharacterRefs = [...activeCharacterRefs, ...registryRefs].filter((ref, index, refs) =>
     refs.findIndex((candidate) => candidate.image === ref.image) === index,
   );
-  const refImages = finalCharacterRefs.map((ref) => ref.image);
+  const refImages = [
+    ...finalCharacterRefs.map((ref) => ref.image),
+    ...storyReferenceImages,
+  ].filter((image, index, images) => images.indexOf(image) === index);
   console.log('[YAML_IMAGE_REF_COUNT]', refImages.length);
   console.log('[YAML_IMAGE_REF_PRIORITY]', {
     primaryCharacterRefs: requestCharacterRefImages.length,
@@ -437,6 +480,11 @@ export const POST: RequestHandler = async ({ request }) => {
       active: ref === selectedStoryRef,
       passedToPrompt: ref === selectedStoryRef,
     })),
+    activeStory: body.activeStory ?? null,
+    storyReferenceImages: {
+      count: storyReferenceImages.length,
+      passedToImageModel: storyReferenceImages.length,
+    },
   };
   console.log('[IMAGE_GENERATION_INPUT]', imageGenerationInput);
   console.log('[IMAGE_GENERATION_INPUT_CHARACTER_REFS]', imageGenerationInput.characterRefs);

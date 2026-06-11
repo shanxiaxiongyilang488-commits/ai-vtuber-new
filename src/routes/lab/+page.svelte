@@ -35,7 +35,7 @@
     storyContinuityToYaml,
     type StoryContinuityMemory,
   } from '$lib/storyYaml';
-  import { saveStoryYaml } from '$lib/storyLibrary';
+  import { loadActiveStory, saveStoryYaml, type SavedStory } from '$lib/storyLibrary';
 
   // ============================================================
   // Types
@@ -3662,13 +3662,30 @@ async function removeReferenceImage(i: number): Promise<void> {
     return /(?:漫画|マンガ)化(?:して|する|してください)?|(?:1|１)ページ(?:の)?(?:漫画|マンガ)(?:化(?:して)?|にして)/i.test(normalized);
   }
 
+  function isActiveStoryMangaRequest(text: string): boolean {
+    const normalized = text.replace(/\s+/g, '').toLowerCase();
+    return /^(?:このstoryを漫画化|この続き漫画化|続きの1ページを作って|このyamlを漫画化|選択中のstoryを漫画化)[。！!？?]*$/i.test(normalized);
+  }
+
   function isStoryContinuationRequest(text: string): boolean {
     const normalized = text.replace(/\s+/g, '').toLowerCase();
     return /^(?:続きを作って|続きをつくって|次(?:の)?ページ(?:を)?(?:作って|つくって|作成して|生成して)?|この続き|続編(?:を)?(?:作って|つくって|作成して)?)[。！!？?]*$/i.test(normalized)
       || /(?:この|物語の|ストーリーの|漫画の)?続き(?:の)?(?:yaml)?(?:を)?(?:作って|つくって|作成して|生成して)/i.test(normalized);
   }
 
-  function currentStoryReference(): { title: string; yaml: string } | null {
+  function currentStoryReference(): {
+    title: string;
+    yaml: string;
+    savedStory?: SavedStory;
+  } | null {
+    const activeStory = loadActiveStory();
+    if (activeStory?.rawYaml.trim()) {
+      return {
+        title: activeStory.title,
+        yaml: activeStory.rawYaml.trim(),
+        savedStory: activeStory,
+      };
+    }
     const selected = storyReferences.at(-1);
     if (selected?.content.trim()) {
       return {
@@ -4236,8 +4253,10 @@ async function removeReferenceImage(i: number): Promise<void> {
       reason?: string;
       source?: string;
     },
+    yamlOverride = '',
+    activeStory?: SavedStory,
   ): Promise<void> {
-    const yaml = latestYamlForImageGeneration();
+    const yaml = yamlOverride.trim() || latestYamlForImageGeneration();
     if (!yaml) {
       messages = [...messages, { role: 'error', text: '画像化できるYAMLが見つかりません。先にYAMLを生成してください。', time: getTime() }];
       isThinking = false;
@@ -4245,6 +4264,34 @@ async function removeReferenceImage(i: number): Promise<void> {
       return;
     }
 
+    const story = activeStory ?? loadActiveStory() ?? undefined;
+    const parsedStory = parseStoryYaml(yaml);
+    let resolvedStoryReferenceImages = story?.referenceImages ?? [];
+    if (story?.id && resolvedStoryReferenceImages.length > 0) {
+      try {
+        const response = await fetch(`/api/stories/${encodeURIComponent(story.id)}/reference-images`);
+        if (response.ok) {
+          const data = await response.json();
+          if (Array.isArray(data?.referenceImages)) resolvedStoryReferenceImages = data.referenceImages;
+        }
+      } catch (error) {
+        console.warn('[STORY_REF_IMAGE_LOAD_ERROR]', error);
+      }
+    }
+    const storyReferenceImages = resolvedStoryReferenceImages
+      .filter((image) => Boolean(image.dataUrl))
+      .sort((a, b) => Number(b.active) - Number(a.active));
+    const activeStoryImage = storyReferenceImages.find((image) => image.active) ?? storyReferenceImages[0];
+    console.log('[STORY_REF_IMAGE]', {
+      storyId: story?.id ?? null,
+      imageCount: storyReferenceImages.length,
+      activeImage: activeStoryImage?.name ?? null,
+    });
+    console.log('[MANGA_GENERATION_CONTEXT]', {
+      storyTitle: story?.title ?? parsedStory?.title ?? '',
+      yamlLoaded: Boolean(yaml),
+      referenceImages: storyReferenceImages.map((image) => image.name),
+    });
     const projectCharacters = await loadProjectCharacterRefs(yaml);
     const activeReferenceImages = projectCharacters.refs.length > 0
       ? projectCharacters.refs
@@ -4305,6 +4352,16 @@ async function removeReferenceImage(i: number): Promise<void> {
         renderMode: 'manga',
         speechBubble: true,
         yaml,
+        activeStory: story ? {
+          id: story.id,
+          title: story.title,
+          yaml,
+          summary: parsedStory?.overview ?? '',
+          characters: parsedStory?.characters ?? [],
+          pages: parsedStory?.pages ?? [],
+          referenceImages: resolvedStoryReferenceImages.map(({ dataUrl: _dataUrl, ...image }) => image),
+        } : null,
+        storyReferenceImages: storyReferenceImages.map((image) => image.dataUrl).filter(Boolean),
         characterBible: bible,
         characterRefImages,
         characterRefs: activeReferenceImages.map((ref, index) => ({
@@ -4728,6 +4785,31 @@ async function removeReferenceImage(i: number): Promise<void> {
     console.log('[MANGA_TRIGGER]', mangaTriggerMatched);
     console.log('[STORY_REF]', currentStoryRef?.title);
     console.log('[CHAR_REF]', currentCharacterRef?.id);
+    if (isActiveStoryMangaRequest(text) && currentStoryRef) {
+      const routerResult: IntentResult = {
+        intent: 'manga',
+        action: 'generate_manga_page',
+        subtype: 'manga_page',
+        confidence: 1,
+        reason: '選択中のStory YAMLと参照漫画ページ画像を使って漫画ページを生成',
+        source: 'rules',
+        matched_rule: 'active_story_manga_request',
+        matched_keywords: [text],
+        negative_keywords: [],
+        generate_image: true,
+        generate_yaml: false,
+        generate_manga: true,
+      };
+      routerStateStore.set(routerResult);
+      labGenerationMode = generationModeFromIntent(routerResult);
+      await generateImageFromLatestYaml(
+        text,
+        routerResult,
+        currentStoryRef.yaml,
+        currentStoryRef.savedStory,
+      );
+      return;
+    }
     if (isStoryContinuationRequest(text) && currentStoryRef) {
       const routerResult: IntentResult = {
         intent: 'manga',
