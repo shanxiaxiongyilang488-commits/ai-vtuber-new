@@ -8,6 +8,15 @@ import type { GeneratedImage, ImageSize } from '$lib/server/imageProviders/types
 const VALID_SIZES = ['1024x1024', '1024x1536', '1536x1024', '1792x1024', '1024x1792'] as const;
 
 interface GenerateRequest {
+  userInput?: string;
+  routerResult?: {
+    intent?: string;
+    action?: string;
+    subtype?: string;
+    confidence?: number;
+    reason?: string;
+    source?: string;
+  } | null;
   prompt: string;
   negative?: string;
   size?: ImageSize;
@@ -16,6 +25,8 @@ interface GenerateRequest {
   selectedModel?: string;
   editMode?: boolean;
   generationMode?: string;
+  renderMode?: 'manga' | 'illustration';
+  speechBubble?: boolean;
   refImage?: string;
   refImages?: string[];
 }
@@ -63,16 +74,47 @@ export const POST: RequestHandler = async ({ request }) => {
     throw error(400, 'Invalid JSON');
   }
 
-  const prompt = body.prompt?.trim();
+  const rawPrompt = body.prompt?.trim();
   const size = body.size ?? '1024x1024';
-  if (!prompt) throw error(400, 'prompt is required');
+  if (!rawPrompt) throw error(400, 'prompt is required');
   if (!VALID_SIZES.includes(size)) throw error(400, `size must be one of: ${VALID_SIZES.join(', ')}`);
+  const renderMode = body.renderMode === 'illustration' ? 'illustration' : 'manga';
+  const prompt = renderMode === 'illustration'
+    ? `${rawPrompt}\nILLUSTRATION MODE: speech_bubble=false. Do not draw speech bubbles or dialogue text.`
+    : `${rawPrompt}\nMANGA MODE: speech_bubble=true. If dialogue exists in the prompt, draw every dialogue line in a clear readable manga speech bubble. Never omit a speech bubble for existing dialogue.`;
 
   const settings = await readSettings();
   const requestModel = (body.model || body.selectedModel || '').replace(/\s+edit$/i, '').trim();
+  const normalizedFallbackModel = normalizeSelectedModel(body);
+  const resolveCandidate = requestModel || settings.mediaConfig.model || normalizedFallbackModel;
   logAvailableMediaModels();
-  const mediaModel = resolveMediaModel(requestModel || settings.mediaConfig.model || normalizeSelectedModel(body));
+  console.log('[api/generate] media model resolve candidates', {
+    bodyProvider: body.provider ?? null,
+    bodyModel: body.model ?? null,
+    bodySelectedModel: body.selectedModel ?? null,
+    requestModel,
+    settingsMediaProvider: settings.mediaConfig.provider,
+    settingsMediaModel: settings.mediaConfig.model,
+    normalizedFallbackModel,
+    resolveCandidate,
+    selectedSource: requestModel
+      ? 'requestModel'
+      : settings.mediaConfig.model
+        ? 'settings.mediaConfig.model'
+        : 'normalizeSelectedModel',
+  });
+  const mediaModel = resolveMediaModel(resolveCandidate);
   const mediaProvider = mediaModel.provider;
+  console.log('[PROVIDER RESOLUTION]');
+  console.log('requestProvider:', body.provider ?? null);
+  console.log('resolvedProvider:', mediaProvider);
+  console.log('[api/generate] mediaProvider/mediaModel assignment', {
+    assignedFrom: 'resolveMediaModel(resolveCandidate)',
+    resolveCandidate,
+    mediaProvider,
+    mediaModelId: mediaModel.id,
+    mediaModelApiModel: mediaModel.apiModel,
+  });
 
   console.log('[api/generate] received provider/model', {
     provider: body.provider ?? null,
@@ -102,6 +144,27 @@ export const POST: RequestHandler = async ({ request }) => {
     registryRefs: Math.max(0, refImages.length - requestRefImages.length),
     promptLength: prompt.length,
   });
+  console.log({
+    requestProvider: body.provider ?? null,
+    requestModel: body.model ?? body.selectedModel ?? null,
+    resolvedProvider: mediaProvider,
+    resolvedModel: mediaModel.apiModel,
+  });
+  console.log('[IMAGE_GENERATION_ROUTE_AUDIT]', {
+    USER_INPUT: body.userInput ?? '',
+    ROUTER_RESULT: body.routerResult ?? null,
+    FINAL_PROMPT: prompt,
+  });
+  console.log('[USER_INPUT]', body.userInput ?? '');
+  console.log('[ROUTER_RESULT]', body.routerResult ?? null);
+  console.log('[FINAL_PROMPT]', prompt);
+  if (body.routerResult?.action === 'create_character_materials') {
+    console.log(
+      '[PROMPT_TEMPLATE][create_character_materials]',
+      '{{user_input_with_self_reference_resolved}}\n{{character:<current_character_id> when self-reference is detected}}',
+    );
+    console.log('[ACTUAL_IMAGE_PROMPT][create_character_materials]', prompt);
+  }
 
   const result = await generateMediaImage({
     prompt,
@@ -113,5 +176,10 @@ export const POST: RequestHandler = async ({ request }) => {
   });
   const images: GeneratedImage[] = result.images;
 
-  return json({ images });
+  return json({
+    images,
+    requestProvider: body.provider ?? null,
+    resolvedProvider: mediaProvider,
+    resolvedModel: mediaModel.apiModel,
+  });
 };

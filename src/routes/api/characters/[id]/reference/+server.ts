@@ -1,5 +1,5 @@
 import { json, type RequestHandler } from '@sveltejs/kit';
-import { saveCharacterReferenceImage } from '$lib/server/characterRegistry';
+import { getCharacterReferenceDataUrl, saveCharacterReferenceImage } from '$lib/server/characterRegistry';
 
 async function requestToDataUrl(request: Request): Promise<string> {
   const contentType = request.headers.get('content-type') ?? '';
@@ -32,3 +32,16 @@ export const PUT: RequestHandler = async ({ params, request }) => {
 };
 
 export const POST = PUT;
+
+export const GET: RequestHandler = async ({ params }) => {
+  try {
+    const id = params.id;
+    if (!id) return json({ message: 'character id is required' }, { status: 400 });
+    const referenceImageDataUrl = getCharacterReferenceDataUrl(id);
+    if (!referenceImageDataUrl) return json({ message: 'reference image not found' }, { status: 404 });
+    return json({ referenceImageDataUrl });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return json({ message }, { status: 400 });
+  }
+};

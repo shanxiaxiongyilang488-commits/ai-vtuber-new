@@ -45,7 +45,7 @@ export async function chatGemini(input: ProviderChatInput & { apiKey?: string })
     body: JSON.stringify({
       system_instruction: { parts: [{ text: input.systemPrompt }] },
       contents: [{ role: 'user', parts: userParts }],
-      generationConfig: images.length > 0 ? { maxOutputTokens: 2400 } : undefined,
+      generationConfig: { maxOutputTokens: input.maxTokens ?? 2048 },
     }),
   });
 
@@ -55,7 +55,17 @@ export async function chatGemini(input: ProviderChatInput & { apiKey?: string })
   }
 
   const data = await res.json();
-  const text: string = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+  const candidate = data?.candidates?.[0];
+  const text: string = (candidate?.content?.parts ?? [])
+    .filter((part: { thought?: boolean; text?: unknown }) => part?.thought !== true && typeof part?.text === 'string')
+    .map((part: { text: string }) => part.text)
+    .join('');
+  console.log('[MODEL_FINISH]', {
+    provider: 'gemini',
+    finishReason: candidate?.finishReason ?? null,
+    rawParts: candidate?.content?.parts?.length ?? 0,
+    visibleLength: text.length,
+  });
   if (!text) {
     console.warn('[lab-chat][gemini] empty text - candidates:', JSON.stringify(data?.candidates?.map((c: any) => ({
       finishReason: c.finishReason,

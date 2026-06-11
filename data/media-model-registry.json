@@ -1,0 +1,113 @@
+[
+  {
+    "id": "fal-ai/nano-banana-2",
+    "label": "Nano Banana 2",
+    "provider": "fal",
+    "apiModel": "fal-ai/nano-banana-2",
+    "kind": "image",
+    "edit": false,
+    "estimatedCost": 0.08,
+    "aliases": ["nano-banana-2", "nanobanana2", "Nano Banana 2"]
+  },
+  {
+    "id": "fal-ai/nano-banana-pro",
+    "label": "Nano Banana Pro",
+    "provider": "fal",
+    "apiModel": "fal-ai/nano-banana-pro",
+    "kind": "image",
+    "edit": false,
+    "estimatedCost": 0.15,
+    "aliases": ["nano-banana-pro", "Nano Banana Pro"]
+  },
+  {
+    "id": "openai/gpt-image-2",
+    "label": "GPT Image 2",
+    "provider": "fal",
+    "apiModel": "openai/gpt-image-2",
+    "kind": "image",
+    "edit": false,
+    "estimatedCost": null,
+    "aliases": ["gpt-image-2", "OpenAI GPT Image 2", "openai/GPT Image 2"]
+  },
+  {
+    "id": "openai/gpt-image-2/edit",
+    "label": "GPT Image 2 Edit",
+    "provider": "fal",
+    "apiModel": "openai/gpt-image-2/edit",
+    "kind": "image",
+    "edit": true,
+    "estimatedCost": null,
+    "aliases": ["gpt-image-2-edit", "OpenAI GPT Image 2 Edit", "openai/GPT Image 2 Edit"]
+  },
+  {
+    "id": "fal-ai/ideogram/v3",
+    "label": "Ideogram V3",
+    "provider": "fal",
+    "apiModel": "fal-ai/ideogram/v3",
+    "kind": "image",
+    "edit": false,
+    "estimatedCost": null,
+    "aliases": ["ideogram-v3", "Ideogram V3", "Ideogram Text to Image", "ideogram"]
+  },
+  {
+    "id": "fal-ai/ideogram/character",
+    "label": "Ideogram Character",
+    "provider": "fal",
+    "apiModel": "fal-ai/ideogram/character",
+    "kind": "image",
+    "edit": false,
+    "estimatedCost": null,
+    "aliases": ["Ideogram Character", "ideogram-character"]
+  },
+  {
+    "id": "fal-ai/ideogram/character/edit",
+    "label": "Ideogram Character Edit",
+    "provider": "fal",
+    "apiModel": "fal-ai/ideogram/character/edit",
+    "kind": "image",
+    "edit": true,
+    "estimatedCost": null,
+    "aliases": ["Ideogram Character Edit", "ideogram-character-edit"]
+  },
+  {
+    "id": "fal-ai/flux-pro/v1.1",
+    "label": "Flux Pro",
+    "provider": "fal",
+    "apiModel": "fal-ai/flux-pro/v1.1",
+    "kind": "image",
+    "edit": false,
+    "estimatedCost": 0.04,
+    "aliases": ["flux-pro", "Flux Pro"]
+  },
+  {
+    "id": "fal-ai/recraft/v3/text-to-image",
+    "label": "Recraft",
+    "provider": "fal",
+    "apiModel": "fal-ai/recraft/v3/text-to-image",
+    "kind": "image",
+    "edit": false,
+    "estimatedCost": null,
+    "aliases": ["recraft", "Recraft", "fal-ai/recraft-v3"]
+  },
+  {
+    "id": "fal-ai/imagen4/preview",
+    "label": "Imagen",
+    "provider": "fal",
+    "apiModel": "fal-ai/imagen4/preview",
+    "kind": "image",
+    "edit": false,
+    "estimatedCost": null,
+    "aliases": ["imagen", "Imagen"]
+  },
+  {
+    "id": "fal-ai/nano-banana",
+    "label": "Nano Banana",
+    "provider": "fal",
+    "apiModel": "fal-ai/nano-banana",
+    "kind": "image",
+    "edit": false,
+    "estimatedCost": 0.039,
+    "aliases": ["nano-banana", "Nano Banana"],
+    "hidden": true
+  }
+]

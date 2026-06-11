@@ -89,31 +89,9 @@ export function buildToneHints({ emotion, bond, characterKey, memoryEntries, now
     toneHints.push('ユーザーが「徹夜する」「もう逃げる」「また先延ばし」「何もしない」と言った場合は、慰めず優しく止め、現実的な代替行動を提案してください。例：「それはダメ。今日は寝て。」');
   }
 
-  // 時間帯（5区分）
-  const hour = now.getHours();
-  if (hour >= 5 && hour < 11) {
-    toneHints.push('今は朝。前向きで軽やかなトーンで、一日のスタートを後押ししてください。');
-  } else if (hour >= 11 && hour < 16) {
-    toneHints.push('今は昼。落ち着いたリラックスした口調で。無理に盛り上げず自然体で話してください。');
-  } else if (hour >= 16 && hour < 20) {
-    toneHints.push('今は夕方。一日の疲れを自然に気遣いながら、ゆったり接してください。');
-  } else if (hour >= 20 && hour < 22) {
-    toneHints.push('今は夜。一日を振り返るような、穏やかで落ち着いた口調で話してください。');
-  } else {
-    toneHints.push('今は深夜。静かで本音に近い口調で。距離を縮めた、少し踏み込んだ言葉でいいです。例：「こんな時間に来てくれるんだ。」「眠れないの？」');
-  }
-
-  // 季節
+  // Calendar hints are reserved for actual date-sensitive topics. Injecting them
+  // into every turn caused unrelated seasonal codas such as "夏の夜...".
   const month = now.getMonth() + 1;
-  if (month >= 3 && month <= 5) {
-    toneHints.push('今は春。柔らかく穏やかな雰囲気を漂わせてください。');
-  } else if (month >= 6 && month <= 8) {
-    toneHints.push('今は夏。少し元気でエネルギッシュな表現を混ぜてください。');
-  } else if (month >= 9 && month <= 11) {
-    toneHints.push('今は秋。少し感傷的で落ち着いた雰囲気で話してください。');
-  } else {
-    toneHints.push('今は冬。温もりを感じさせる言葉を自然に使ってください。');
-  }
 
   // 特別日
   const date = now.getDate();
@@ -271,25 +249,6 @@ export function buildToneHints({ emotion, bond, characterKey, memoryEntries, now
     result.push('');
     result.push('【定型文警告】');
     result.push('抽象的な慰めより、状況に触れた具体返答を優先してください。');
-  }
-
-  // Memory Callback（過去会話の自然な参照 — bond 依存）
-  if (bond >= 40) {
-    const pastUser = memoryEntries
-      .filter(e => e.role === 'user')
-      .slice(0, -1)
-      .filter(e => e.text.length > 12);
-    if (pastUser.length >= 2) {
-      const pick    = pastUser[pastUser.length - 1];
-      const excerpt = pick.text.length > 25 ? pick.text.slice(0, 25) + '…' : pick.text;
-      result.push('');
-      result.push('【記憶コールバック】');
-      if (bond >= 65) {
-        result.push(`以前「${excerpt}」と言っていたことを自然な一言で思い出してください。例：「そういえばあの時の話、気になってたんだ。」「前に${pick.text.slice(0, 10)}って言ってたよね。」`);
-      } else {
-        result.push(`文脈に合えば、以前「${excerpt}」について話していたことをさりげなく触れてください。無理に出す必要はありません。`);
-      }
-    }
   }
 
   // 次ターンのために現在トーンを記録

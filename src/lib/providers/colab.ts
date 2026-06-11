@@ -46,6 +46,7 @@ export async function chatColabOllama(input: ProviderChatInput & { baseUrl?: str
     body: JSON.stringify({
       model: input.model,
       messages: localMessages(input.systemPrompt, input.userMessage),
+      max_tokens: input.maxTokens ?? 2048,
     }),
   });
 
@@ -56,6 +57,11 @@ export async function chatColabOllama(input: ProviderChatInput & { baseUrl?: str
 
   const data = await res.json();
   const replyText = extractReplyText(data);
+  console.log('[MODEL_FINISH]', {
+    provider: 'colab-ollama',
+    finishReason: data?.choices?.[0]?.finish_reason ?? null,
+    visibleLength: replyText.length,
+  });
   if (!replyText.trim()) logEmptyReply('COLAB_OLLAMA', data);
   return replyText;
 }

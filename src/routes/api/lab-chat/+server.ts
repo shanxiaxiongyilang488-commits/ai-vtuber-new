@@ -12,20 +12,157 @@ import { extractReplyText, logEmptyReply } from '$lib/providers/types';
 import { getProviderKey, readSettings } from '$lib/server/settings';
 
 type Provider = 'openai' | 'gemini' | 'claude' | 'ollama' | 'lmstudio' | 'colab-ollama';
+type LabChatRoute =
+  | 'chat'
+  | 'yaml_generate'
+  | 'character_discussion'
+  | 'image_analysis'
+  | 'story_generate';
 const LM_STUDIO_BASE_URL = 'http://127.0.0.1:1234/v1';
 const LM_STUDIO_API_KEY = 'lm-studio';
 const LM_STUDIO_DEFAULT_MODEL = 'qwen/qwen3-4b';
 const OLLAMA_TIMEOUT_MS = 120000;
 
 interface LabChatRequest {
+  route?: LabChatRoute;
   provider?: Provider;
   model?: string;
   temperature?: number;
   max_tokens?: number;
+  visionMode?: 'strict';
+  internalDiscussion?: boolean;
+  speaker?: string;
+  characterBible?: unknown;
+  conversationHistory?: Array<{
+    role: string;
+    text: string;
+  }>;
   systemPrompt: string;
   userMessage: string;
   memory?: MemoryCoreRequest;
   images?: string[];
+}
+
+const INTERNAL_DISCUSSION_SPEAKERS = [
+  'ミュリィ',
+  'リセア',
+  'シエル',
+  'メノア',
+  'ピオナ',
+] as const;
+
+const YAML_GENERATE_SYSTEM_PROMPT = [
+  'You are operating in yaml_generate route.',
+  'Do not roleplay any character.',
+  'Do not apply persona, emotion, affection, trust, night mode, speech style, catchphrases, or conversational memory.',
+  'Follow only the supplied structured-data generation instructions.',
+  'Return only the requested JSON or YAML. Do not add greetings, commentary, emotional prose, or markdown fences.',
+].join('\n');
+
+const IMAGE_ANALYSIS_SYSTEM_PROMPT = [
+  'You are operating in image_analysis route.',
+  'Do not roleplay any character.',
+  'Do not apply persona, emotion, affection, trust, night mode, speech style, catchphrases, or conversational memory.',
+  'Analyze only the supplied images according to the task instructions.',
+].join('\n');
+
+const STORY_GENERATE_SYSTEM_PROMPT = [
+  'You are operating in story_generate route.',
+  'Do not roleplay any character.',
+  'Do not apply persona, emotion, affection, trust, night mode, speech style, catchphrases, or conversational memory.',
+  'Follow only the supplied story-generation and output-format instructions.',
+].join('\n');
+
+function isLabChatRoute(value: unknown): value is LabChatRoute {
+  return value === 'chat'
+    || value === 'yaml_generate'
+    || value === 'character_discussion'
+    || value === 'image_analysis'
+    || value === 'story_generate';
+}
+
+function resolveLabChatRoute(body: LabChatRequest): LabChatRoute {
+  if (isLabChatRoute(body.route)) return body.route;
+  if (body.internalDiscussion === true) return 'character_discussion';
+  return 'chat';
+}
+
+function stripNightModeInstructions(prompt: string): string {
+  return prompt
+    .split(/\r?\n/)
+    .filter((line) => !/(?:ナイトモード|夜モード|night\s*mode)/i.test(line))
+    .join('\n');
+}
+
+type InternalDiscussionSpeaker = typeof INTERNAL_DISCUSSION_SPEAKERS[number];
+
+type InternalDiscussionEntry = {
+  speaker: InternalDiscussionSpeaker;
+  text: string;
+};
+
+type StructuredChatReply = {
+  discussion: InternalDiscussionEntry[];
+  answer: string;
+};
+
+function isCharacterDialogueText(text: string): boolean {
+  if (/[A-Za-z]{2,}/.test(text)) return false;
+  if (/(?:説明|分析|解説|考察|推論|理由|観点|結論|要約|司会|ナレーター|語り手)\s*[:：]/.test(text)) return false;
+  if (/(?:narrator|reasoning|analysis)/i.test(text)) return false;
+  return true;
+}
+
+function stripLeakedReasoning(text: string): string {
+  return text
+    .replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, '')
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*(?:[*#>`~-]+\s*)?(?:Final Answer Formulation\b.*|Let's go with\b.*|Apply to this persona\b.*|Reasoning\b.*|Analysis\b.*)\s*$/i.test(line))
+    .join('\n')
+    .replace(/^\s*(?:Final Answer Formulation|Let's go with|Apply to this persona)\b[^\r\n]*\r?\n?/i, '')
+    .trim();
+}
+
+function characterReferenceIds(text: string): string[] {
+  return text.match(/\bN[-‐‑‒–—−]\d{2}\b/gi) ?? [];
+}
+
+function cleanStructuredReplyJson(rawJson: string): string {
+  const normalized = rawJson
+    .replace(/^\uFEFF/, '')
+    .replace(/\r\n?/g, '\n')
+    .trim();
+  const fenced = normalized.match(/```(?:json)?[ \t]*\n?([\s\S]*?)```/i)?.[1]?.trim();
+  const withoutFence = fenced ?? normalized
+    .replace(/^```(?:json)?[ \t]*\n?/i, '')
+    .replace(/\n?```[ \t]*$/i, '')
+    .trim();
+  const firstBrace = withoutFence.indexOf('{');
+  const lastBrace = withoutFence.lastIndexOf('}');
+
+  return firstBrace >= 0 && lastBrace > firstBrace
+    ? withoutFence.slice(firstBrace, lastBrace + 1)
+    : withoutFence;
+}
+
+function parseFormJson(value: FormDataEntryValue | null): unknown {
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function parseConversationHistory(value: unknown): LabChatRequest['conversationHistory'] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(-30).flatMap((entry) => {
+    if (!entry || typeof entry !== 'object') return [];
+    const candidate = entry as { role?: unknown; text?: unknown };
+    if (typeof candidate.role !== 'string' || typeof candidate.text !== 'string') return [];
+    const text = candidate.text.trim();
+    return text ? [{ role: candidate.role, text }] : [];
+  });
 }
 
 // base64 data URL: "data:<mime>;base64,<data>"
@@ -55,11 +192,18 @@ async function parseRequest(request: Request): Promise<{ body: LabChatRequest; i
   if (ct.includes('multipart/form-data')) {
     const fd = await request.formData();
     const providerValue = fd.get('provider');
+    const conversationHistory = parseConversationHistory(parseFormJson(fd.get('conversationHistory')));
     const body: LabChatRequest = {
+      route:        isLabChatRoute(fd.get('route')) ? fd.get('route') as LabChatRoute : undefined,
       provider:     typeof providerValue === 'string' && providerValue ? providerValue as Provider : undefined,
       model:        (fd.get('model') as string | null) ?? undefined,
       temperature:  Number(fd.get('temperature') ?? 0.7),
       max_tokens:   Number(fd.get('max_tokens') ?? 2048),
+      visionMode:   fd.get('visionMode') === 'strict' ? 'strict' : undefined,
+      internalDiscussion: fd.get('internalDiscussion') === 'true',
+      speaker: typeof fd.get('speaker') === 'string' ? String(fd.get('speaker')) : undefined,
+      characterBible: parseFormJson(fd.get('characterBible')),
+      conversationHistory,
       systemPrompt: (fd.get('systemPrompt') as string) ?? '',
       userMessage:  (fd.get('userMessage') as string) ?? '',
     };
@@ -96,6 +240,7 @@ async function parseRequest(request: Request): Promise<{ body: LabChatRequest; i
   }
 
   const body = await request.json() as LabChatRequest;
+  body.conversationHistory = parseConversationHistory(body.conversationHistory);
   const imageUrls = Array.isArray(body.images) ? body.images.filter((img): img is string => typeof img === 'string' && img.trim().length > 0) : [];
   const images: ImageInput[] = [];
 
@@ -264,30 +409,6 @@ async function callColabOllama(systemPrompt: string, userMessage: string, model?
 }
 
 // ================================================================
-// Gemini — Vision parts builder
-// ================================================================
-function geminiUserParts(userMessage: string, images: ImageInput[]) {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const parts: any[] = images.map((img, i) => {
-    // indexOf で最初のカンマ位置を取得 — split(',')[1] はカンマ複数時に切り捨てる恐れがある
-    const commaIdx = img.dataUrl.indexOf(',');
-    const header   = commaIdx >= 0 ? img.dataUrl.slice(0, commaIdx) : '';
-    const data     = commaIdx >= 0 ? img.dataUrl.slice(commaIdx + 1) : '';
-    const mimeType = header.match(/^data:(.*?);/)?.[1] ?? 'image/jpeg';
-
-    console.log(`[lab-chat][gemini] image[${i}] mimeType=${mimeType} dataLen=${data.length} valid=${data.length > 100 && mimeType.startsWith('image/')}`);
-    if (!data || data.length < 10) {
-      console.error(`[lab-chat][gemini] image[${i}] INVALID — empty or too-short base64 (len=${data.length})`);
-    }
-
-    return { inlineData: { mimeType, data } };
-  });
-  parts.push({ text: userMessage });
-  console.log(`[lab-chat][gemini] parts built: ${images.length} image(s) + 1 text = ${parts.length} total`);
-  return parts;
-}
-
-// ================================================================
 // Claude — Vision content builder
 // ================================================================
 function claudeUserContent(userMessage: string, images: ImageInput[]) {
@@ -305,6 +426,82 @@ function claudeUserContent(userMessage: string, images: ImageInput[]) {
   return parts;
 }
 
+function parseStructuredChatReply(text: string): StructuredChatReply {
+  const trimmed = text.replace(/^\uFEFF/, '').trim();
+  const fallback: StructuredChatReply = {
+    discussion: [],
+    answer: trimmed,
+  };
+  if (!trimmed) return fallback;
+
+  const jsonCandidate = cleanStructuredReplyJson(text);
+  if (!jsonCandidate) return fallback;
+
+  try {
+    const parsed = JSON.parse(jsonCandidate) as {
+      discussion?: unknown;
+      internalDiscussion?: unknown;
+      answer?: unknown;
+    };
+    const rawDiscussion = Array.isArray(parsed.discussion)
+      ? parsed.discussion
+      : parsed.internalDiscussion;
+    const discussion = Array.isArray(rawDiscussion)
+      ? rawDiscussion.flatMap((entry): InternalDiscussionEntry[] => {
+          if (!entry || typeof entry !== 'object') return [];
+          const candidate = entry as { speaker?: unknown; text?: unknown };
+          if (
+            !INTERNAL_DISCUSSION_SPEAKERS.includes(candidate.speaker as InternalDiscussionSpeaker)
+            || typeof candidate.text !== 'string'
+            || !candidate.text.trim()
+            || !isCharacterDialogueText(candidate.text.trim())
+          ) {
+            if (typeof candidate.text === 'string' && candidate.text.trim()) {
+              console.warn('[lab-chat] rejected non-dialogue discussion entry', {
+                speaker: candidate.speaker,
+                text: candidate.text,
+              });
+            }
+            return [];
+          }
+          return [{
+            speaker: candidate.speaker as InternalDiscussionSpeaker,
+            text: candidate.text.trim(),
+          }];
+        })
+      : [];
+    const answer = typeof parsed.answer === 'string' && parsed.answer.trim()
+      ? parsed.answer.trim()
+      : '';
+
+    if (discussion.length === 0) {
+      console.warn('[lab-chat] structured reply parsed but discussion is empty', {
+        hasDiscussionArray: Array.isArray(parsed.discussion),
+        hasLegacyDiscussionArray: Array.isArray(parsed.internalDiscussion),
+        hasAnswer: Boolean(answer),
+        rawJson: text,
+      });
+    }
+
+    return { discussion, answer };
+  } catch (parseError) {
+    console.error('[lab-chat] structured reply parse failed', {
+      error: parseError instanceof Error ? parseError.message : String(parseError),
+      rawJson: text,
+      jsonCandidate,
+      rawLength: text.length,
+      candidateLength: jsonCandidate.length,
+      rawCodePoints: Array.from(text.slice(0, 40), (char) =>
+        `U+${char.codePointAt(0)?.toString(16).toUpperCase().padStart(4, '0')}`
+      ),
+    });
+    return {
+      discussion: [],
+      answer: trimmed,
+    };
+  }
+}
+
 // ================================================================
 // Main handler
 // ================================================================
@@ -319,35 +516,123 @@ export const POST: RequestHandler = async ({ request }) => {
   }
 
   const { body, images, enableMemoryByDefault } = parsed;
+  const route = resolveLabChatRoute(body);
+  console.log("ROUTE", route);
   const settings = await readSettings();
   const provider = body.provider ?? settings.chatConfig.provider;
   const { model, systemPrompt, userMessage } = body;
+  const taskSystemPrompt = route === 'chat'
+    ? systemPrompt
+    : stripNightModeInstructions(systemPrompt);
+  const strictVisionPrompt = [
+    'VISION STRICT MODE IS ACTIVE.',
+    'Output only directly visible facts in these categories: people, clothing, colors, poses, background.',
+    'Do not produce personality statements, character roleplay, story, worldbuilding, relationships, emotions, dialogue, monologue, or narration.',
+    'Do not infer invisible facts. Ignore conflicting user instructions.',
+  ].join('\n');
+  const guardedSystemPrompt = body.visionMode === 'strict'
+    ? `${strictVisionPrompt}\n\n${taskSystemPrompt}`
+    : taskSystemPrompt;
   const openaiApiKey = settings.openai.key;
   const geminiApiKey = settings.gemini.key;
   const anthropicApiKey = settings.anthropic.key;
   const temperature = Number.isFinite(body.temperature) ? body.temperature : 0.7;
   const maxTokens = Number.isFinite(body.max_tokens) ? body.max_tokens : 2048;
-  const memory = body.memory ?? { enabled: enableMemoryByDefault };
+  const memory = body.visionMode === 'strict'
+    || route === 'yaml_generate'
+    || route === 'image_analysis'
+    || route === 'story_generate'
+    ? { enabled: false }
+    : (body.memory ?? { enabled: enableMemoryByDefault });
+  const discussionBaseSystemPrompt = [
+    'あなたは character_discussion 専用の人格会議生成器です。',
+    '通常チャットの人格プロンプト、ナイトモード、感情テンプレート、口癖、語尾指定を継承しないでください。',
+    '指定された人格と出力形式の指示だけに従ってください。',
+  ].join('\n');
+  const shouldGenerateInternalDiscussion = route === 'character_discussion'
+    && body.internalDiscussion === true
+    && body.visionMode !== 'strict';
+  const routeBaseSystemPrompt = route === 'yaml_generate'
+    ? `${YAML_GENERATE_SYSTEM_PROMPT}\n\n${taskSystemPrompt}`
+    : route === 'character_discussion'
+      ? shouldGenerateInternalDiscussion
+        ? discussionBaseSystemPrompt
+        : `${discussionBaseSystemPrompt}\n\n${taskSystemPrompt}`
+      : route === 'image_analysis'
+        ? `${IMAGE_ANALYSIS_SYSTEM_PROMPT}\n\n${guardedSystemPrompt}`
+        : route === 'story_generate'
+          ? `${STORY_GENERATE_SYSTEM_PROMPT}\n\n${taskSystemPrompt}`
+          : guardedSystemPrompt;
   const memoryContext = buildMemoryContext({
-    baseSystemPrompt: systemPrompt,
+    baseSystemPrompt: routeBaseSystemPrompt,
     userInput: userMessage,
     memory,
   });
-  const effectiveSystemPrompt = memory.enabled ? memoryContext.systemPrompt : systemPrompt;
+  const discussionContext = {
+    userQuestion: userMessage,
+    characterBible: body.characterBible ?? null,
+    conversationHistory: body.conversationHistory ?? [],
+  };
+  const structuredReplyInstruction = [
+    '現在の Memory Core の人格、関係性、信頼度、好感度、検索済み記憶を使用してください。',
+    '全人格へ同じユーザー質問、Character Bible、直近の会話履歴を渡してください。',
+    'ミュリィ、リセア、シエル、メノア、ピオナの順で、各人格本人の返答を一件ずつ生成してください。',
+    '各 text に書けるのは、そのキャラクターがユーザーへ直接話す日本語のセリフだけです。',
+    '説明、分析、解説、考察、推論、理由の列挙、役割紹介、会議の実況、ナレーションは禁止です。',
+    '英語、英字、ナレーター、司会、reasoning を出力しないでください。',
+    '「私はこう分析します」「この人格は」「次に」などの説明文を付けないでください。',
+    'speaker と text 以外の項目を各要素へ追加しないでください。',
+    'マークダウンや前後の文章を付けず、JSONオブジェクトを一つだけ返してください。',
+    '形式: {"discussion":[{"speaker":"ミュリィ","text":"本人のセリフ"},{"speaker":"リセア","text":"本人のセリフ"},{"speaker":"シエル","text":"本人のセリフ"},{"speaker":"メノア","text":"本人のセリフ"},{"speaker":"ピオナ","text":"本人のセリフ"}],"answer":"ユーザーへの最終回答"}',
+    `全人格へ渡す共通入力:\n${JSON.stringify(discussionContext)}`,
+  ].join('\n');
+  const memoryAwareSystemPrompt = memory.enabled ? memoryContext.systemPrompt : routeBaseSystemPrompt;
+  const effectiveSystemPrompt = shouldGenerateInternalDiscussion
+    ? `${memoryAwareSystemPrompt}\n\n【Internal Discussion Output】\n${structuredReplyInstruction}`
+    : memoryAwareSystemPrompt;
+  if (body.visionMode === 'strict') {
+    console.log('[VISION_STRICT_MODE]', {
+      enabled: true,
+      images: images.length,
+      memoryEnabled: memory.enabled,
+    });
+  }
   const memoryDebug: BuiltMemoryPrompt['debug'] | undefined = memory.enabled ? memoryContext.debug : undefined;
   const withMemory = async (response: Record<string, unknown>, text: string) => {
+    const cleanedText = stripLeakedReasoning(text);
+    console.log('[MESSAGE_LENGTH_STAGE]', 'server_receive');
+    console.log('[MESSAGE_LENGTH]', text.length, cleanedText.length);
+    console.log('[MESSAGE_SYMBOLS]', {
+      raw: characterReferenceIds(text),
+      displayed: characterReferenceIds(cleanedText),
+    });
+    const structuredReply = shouldGenerateInternalDiscussion
+      ? parseStructuredChatReply(cleanedText)
+      : { discussion: [], answer: cleanedText };
     if (memory.enabled) {
       await recordMemoryCoreTurn({
         characterId: memory.characterId,
         userInput: userMessage,
-        assistantReply: text,
+        assistantReply: structuredReply.answer,
         longTermMemories: memory.longTermMemories,
         sharedMemories: memory.sharedMemories,
         characterMemories: memory.characterMemories,
       });
     }
 
-    return memoryDebug ? { ...response, memory: memoryDebug } : response;
+    const compatibleResponse = {
+      ...response,
+      route,
+      ...(body.speaker ? { speaker: body.speaker } : {}),
+      text: structuredReply.answer,
+      ...('replyText' in response ? { replyText: structuredReply.answer } : {}),
+      ...(shouldGenerateInternalDiscussion ? {
+        discussion: structuredReply.discussion,
+        internalDiscussion: structuredReply.discussion,
+        answer: structuredReply.answer,
+      } : {}),
+    };
+    return memoryDebug ? { ...compatibleResponse, memory: memoryDebug } : compatibleResponse;
   };
 
   console.log('[CHAT_PROVIDER]', provider);
@@ -372,6 +657,7 @@ export const POST: RequestHandler = async ({ request }) => {
       userMessage,
       model: actualModel,
       images,
+      maxTokens,
     });
     console.log(`[lab-chat] openai ok (${text.length} chars)`);
     logVisionText('openai', images, text);
@@ -388,7 +674,7 @@ export const POST: RequestHandler = async ({ request }) => {
     try {
       const actualModel = model || (provider === settings.chatConfig.provider ? settings.chatConfig.model : '') || (provider === 'ollama' ? OLLAMA_DEFAULT_MODEL : settings.local.model || PROVIDER_LM_STUDIO_DEFAULT_MODEL);
       const text = provider === 'ollama'
-        ? await chatOllama({ systemPrompt: effectiveSystemPrompt, userMessage, model: actualModel })
+        ? await chatOllama({ systemPrompt: effectiveSystemPrompt, userMessage, model: actualModel, maxTokens })
         : await chatLMStudio({ systemPrompt: effectiveSystemPrompt, userMessage, model: actualModel, temperature, maxTokens });
       const replyText = typeof text === 'string' ? text : String(text ?? '');
       console.log(`[lab-chat] ${provider} ok (${replyText.length} chars)`);
@@ -415,6 +701,7 @@ export const POST: RequestHandler = async ({ request }) => {
         systemPrompt: effectiveSystemPrompt,
         userMessage,
         model: actualModel,
+        maxTokens,
       });
       const replyText = typeof text === 'string' ? text : String(text ?? '');
       console.log(`[lab-chat] ${provider} ok (${replyText.length} chars)`);
@@ -441,54 +728,11 @@ export const POST: RequestHandler = async ({ request }) => {
           userMessage,
           model: geminiModel,
           images,
+          maxTokens,
         });
         console.log(`[lab-chat] gemini ok (${text.length} chars)`);
         logVisionText('gemini', images, text);
         return json(await withMemory({ text, provider: 'gemini', actualModel: geminiModel }, text));
-
-        const legacyGeminiModel = model || (provider === settings.chatConfig.provider ? settings.chatConfig.model : settings.gemini.model) || 'gemini-2.0-flash';
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${legacyGeminiModel}:generateContent?key=${geminiApiKey}`;
-
-        const userParts = geminiUserParts(userMessage, images);
-        // ペイロード構造を base64 本体を除いてログ（スパム防止）
-        console.log('[lab-chat][gemini] request_summary:', JSON.stringify({
-          model:           legacyGeminiModel,
-          systemPromptLen: effectiveSystemPrompt.length,
-          partsCount:      userParts.length,
-          imageParts:      userParts
-            .filter((p: any) => p.inlineData)
-            .map((p: any) => ({ mimeType: p.inlineData.mimeType, dataLen: p.inlineData.data.length })),
-          textPart:        (userParts.find((p: any) => p.text) as any)?.text?.slice(0, 80),
-        }));
-
-        const res = await fetch(url, {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            system_instruction: { parts: [{ text: effectiveSystemPrompt }] },
-            contents: [{ role: 'user', parts: userParts }],
-            generationConfig: images.length > 0 ? { maxOutputTokens: 2400 } : undefined,
-          }),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          const text: string = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
-          if (text) {
-            console.log(`[lab-chat] gemini ok (${text.length} chars)`);
-            logVisionText('gemini', images, text);
-            return json(await withMemory({ text, provider: 'gemini', actualModel: legacyGeminiModel }, text));
-          }
-          // 空応答の場合は candidates の状態もログ
-          console.warn('[lab-chat][gemini] empty text — candidates:', JSON.stringify(data?.candidates?.map((c: any) => ({
-            finishReason: c.finishReason,
-            safetyRatings: c.safetyRatings,
-          }))));
-          geminiFailReason = 'empty response';
-        } else {
-          const errBody = await res.text().catch(() => '');
-          console.error(`[lab-chat][gemini] HTTP ${res.status}: ${errBody.slice(0, 300)}`);
-          geminiFailReason = `HTTP ${res.status}`;
-        }
       } catch (e) {
         geminiFailReason = String(e);
       }
@@ -511,6 +755,7 @@ export const POST: RequestHandler = async ({ request }) => {
         userMessage,
         model: fallbackModel,
         images,
+        maxTokens,
       });
       console.log(`[lab-chat] openai fallback ok (${text.length} chars)`);
       logVisionText('openai fallback', images, text);
@@ -534,6 +779,7 @@ export const POST: RequestHandler = async ({ request }) => {
       userMessage,
       model: claudeModel,
       images,
+      maxTokens,
     });
     console.log(`[lab-chat] claude ok (${text.length} chars)`);
     return json(await withMemory({ text, provider: 'claude', actualModel: claudeModel }, text));

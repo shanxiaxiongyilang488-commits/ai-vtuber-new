@@ -47,6 +47,7 @@ export async function chatOllama(input: ProviderChatInput): Promise<string> {
       body: JSON.stringify({
         model: actualModel,
         messages: localMessages(input.systemPrompt, input.userMessage),
+        options: { num_predict: input.maxTokens ?? 2048 },
         stream: false,
       }),
     });
@@ -59,6 +60,11 @@ export async function chatOllama(input: ProviderChatInput): Promise<string> {
     const data = await res.json();
     console.log('[OLLAMA RESPONSE OK]');
     const replyText = extractReplyText(data);
+    console.log('[MODEL_FINISH]', {
+      provider: 'ollama',
+      finishReason: data?.done_reason ?? null,
+      visibleLength: replyText.length,
+    });
     if (!replyText.trim()) logEmptyReply('OLLAMA', data);
     return replyText;
   } catch (err) {

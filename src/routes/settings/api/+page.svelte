@@ -1,13 +1,21 @@
 ﻿<script lang="ts">
   import { onMount } from 'svelte';
   import { PROVIDER_MODELS, DEFAULT_MODELS } from '$lib/config/models';
+  import {
+    AVAILABLE_IMAGE_MODELS,
+    AVAILABLE_MEDIA_PROVIDER_OPTIONS,
+    mediaModelsByProvider,
+    mediaProviderForModel as resolveMediaProviderForModel,
+    normalizeMediaModelId,
+    type MediaProviderName,
+  } from '$lib/config/mediaModels';
 
   // 笏笏 Types 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
   type ConnectionStatus = 'not_tested' | 'connected' | 'failed' | 'quota' | 'invalid_key' | 'testing';
   type ServerStatus = 'OK' | 'Missing API Key' | 'Unauthorized' | 'Quota' | 'Error';
   type ChatProvider = 'openai' | 'gemini' | 'lmstudio';
   type ImageProvider = 'openai' | 'gemini' | 'ideogram';
-  type MediaProvider = 'openai' | 'fal' | 'ideogram';
+  type MediaProvider = MediaProviderName;
 
   function mapStatus(s: ServerStatus): Exclude<ConnectionStatus, 'not_tested' | 'testing'> {
     if (s === 'OK') return 'connected';
@@ -66,20 +74,25 @@
   let chatProvider = $state<ChatProvider>('gemini');
   let imageProvider = $state<ImageProvider>('openai');
   let mediaProvider = $state<MediaProvider>('fal');
-  let mediaModel = $state('fal-ai/nano-banana');
-
-  const MEDIA_MODELS = [
-    { id: 'gpt-image-2', label: 'OpenAI GPT Image 2', provider: 'openai' },
-    { id: 'fal-ai/nano-banana-pro', label: 'Nano Banana Pro', provider: 'fal' },
-    { id: 'fal-ai/nano-banana', label: 'Nano Banana', provider: 'fal' },
-    { id: 'fal-ai/nano-banana-2', label: 'Nano Banana 2', provider: 'fal' },
-    { id: 'ideogram-v3', label: 'Ideogram', provider: 'ideogram' },
-    { id: 'fal-ai/flux-pro/kontext', label: 'Flux Kontext', provider: 'fal' },
-    { id: 'fal-ai/flux-pro/v1.1', label: 'Flux Pro', provider: 'fal' },
-  ] as const;
+  let mediaModel = $state(AVAILABLE_IMAGE_MODELS[0]?.id ?? 'fal-ai/nano-banana-2');
+  let mediaProviderModels = $derived(mediaModelsByProvider[mediaProvider] ?? []);
 
   function mediaProviderForModel(model: string): MediaProvider {
-    return MEDIA_MODELS.find((item) => item.id === model)?.provider ?? mediaProvider;
+    return resolveMediaProviderForModel(model);
+  }
+
+  function normalizeMediaSelection(rawModel: string | null | undefined): string {
+    const normalized = normalizeMediaModelId(rawModel ?? undefined);
+    return AVAILABLE_IMAGE_MODELS.some((model) => model.id === normalized)
+      ? normalized
+      : (AVAILABLE_IMAGE_MODELS[0]?.id ?? 'fal-ai/nano-banana-2');
+  }
+
+  function ensureMediaModelForProvider(provider: MediaProvider) {
+    const available = mediaModelsByProvider[provider] ?? [];
+    if (!available.some((model) => model.id === mediaModel) && available[0]) {
+      mediaModel = available[0].id;
+    }
   }
 
   function chatModelForProvider(provider: ChatProvider): string {
@@ -146,7 +159,7 @@
       ? loadedImageProvider
       : 'openai';
     mediaProvider = loadedMediaProvider === 'openai' || loadedMediaProvider === 'fal' || loadedMediaProvider === 'ideogram' ? loadedMediaProvider : 'fal';
-    mediaModel = data.mediaConfig?.model || data.mediaModel || 'fal-ai/nano-banana';
+    mediaModel = normalizeMediaSelection(data.mediaConfig?.model || data.mediaModel);
     mediaProvider = mediaProviderForModel(mediaModel);
 
     openai.key = data.openai?.key ?? '';
@@ -339,16 +352,20 @@
         </label>
         <label class="field">
           <span class="field-label">Media Provider</span>
-          <select class="input select-input" bind:value={mediaProvider}>
-            <option value="openai">OpenAI</option>
-            <option value="fal">FAL</option>
-            <option value="ideogram">Ideogram</option>
+          <select
+            class="input select-input"
+            bind:value={mediaProvider}
+            onchange={() => ensureMediaModelForProvider(mediaProvider)}
+          >
+            {#each AVAILABLE_MEDIA_PROVIDER_OPTIONS as provider}
+              <option value={provider.id}>{provider.label}</option>
+            {/each}
           </select>
         </label>
         <label class="field">
           <span class="field-label">Media Model</span>
           <select class="input select-input" bind:value={mediaModel}>
-            {#each MEDIA_MODELS as model}
+            {#each mediaProviderModels as model}
               <option value={model.id}>{model.label}</option>
             {/each}
           </select>

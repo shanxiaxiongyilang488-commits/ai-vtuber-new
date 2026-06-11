@@ -23,6 +23,7 @@ export const POST: RequestHandler = async ({ request }) => {
       const character = registerCharacter({
         id: String(fd.get('id') ?? ''),
         name: String(fd.get('name') ?? ''),
+        role: String(fd.get('role') ?? ''),
         description: String(fd.get('description') ?? ''),
         referenceImageDataUrl: await formDataImage(fd.get('reference')),
         sheetImageDataUrl: await formDataImage(fd.get('sheet')),
@@ -34,6 +35,7 @@ export const POST: RequestHandler = async ({ request }) => {
     const character = registerCharacter({
       id: String(body?.id ?? ''),
       name: String(body?.name ?? ''),
+      role: String(body?.role ?? ''),
       description: String(body?.description ?? ''),
       referenceImageDataUrl: typeof body?.referenceImageDataUrl === 'string' ? body.referenceImageDataUrl : undefined,
       sheetImageDataUrl: typeof body?.sheetImageDataUrl === 'string' ? body.sheetImageDataUrl : undefined,

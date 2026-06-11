@@ -1,5 +1,11 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import {
+    AVAILABLE_IMAGE_MODELS,
+    AVAILABLE_MEDIA_PROVIDER_OPTIONS,
+    normalizeMediaModelId,
+    type MediaProviderName,
+  } from '$lib/config/mediaModels';
 
   // ============================================================
   // State
@@ -308,26 +314,21 @@ ${lines.map(line => `  - ${line}`).join('\n')}
   let refPanelOpen = $state(true);
 
   // ── Model / media-type configuration ────────────────────
-  type StudioProvider = 'openai' | 'fal' | 'ideogram';
+  type StudioProvider = MediaProviderName;
   type StudioProviderChoice = StudioProvider;
   type StudioModelId = string;
   type StudioModelOption = { id: StudioModelId; label: string; provider: StudioProvider; edit: boolean; apiModel: string };
-  const DEFAULT_STUDIO_MODELS: StudioModelOption[] = [
-    { id: 'gpt-image-2', label: 'OpenAI GPT Image 2', provider: 'openai', edit: false, apiModel: 'gpt-image-2' },
-    { id: 'fal-ai/nano-banana', label: 'Nano Banana', provider: 'fal', edit: false, apiModel: 'fal-ai/nano-banana' },
-    { id: 'fal-ai/nano-banana-pro', label: 'Nano Banana Pro', provider: 'fal', edit: false, apiModel: 'fal-ai/nano-banana-pro' },
-    { id: 'fal-ai/nano-banana-2', label: 'Nano Banana 2', provider: 'fal', edit: false, apiModel: 'fal-ai/nano-banana-2' },
-    { id: 'ideogram-v3', label: 'Ideogram', provider: 'ideogram', edit: false, apiModel: 'ideogram-v3' },
-    { id: 'fal-ai/flux-pro/kontext', label: 'Flux Kontext', provider: 'fal', edit: false, apiModel: 'fal-ai/flux-pro/kontext' },
-    { id: 'fal-ai/flux-pro/v1.1', label: 'Flux Pro', provider: 'fal', edit: false, apiModel: 'fal-ai/flux-pro/v1.1' },
-  ];
+  const DEFAULT_STUDIO_MODELS: StudioModelOption[] = AVAILABLE_IMAGE_MODELS.map((model) => ({
+    id: model.id,
+    label: model.label,
+    provider: model.provider,
+    edit: model.edit,
+    apiModel: model.apiModel,
+  }));
   let studioModels = $state<StudioModelOption[]>(DEFAULT_STUDIO_MODELS);
 
-  const STUDIO_PROVIDER_CHOICES: { id: StudioProviderChoice; label: string }[] = [
-    { id: 'openai', label: 'OpenAI' },
-    { id: 'fal', label: 'FAL' },
-    { id: 'ideogram', label: 'Ideogram' },
-  ];
+  const STUDIO_PROVIDER_CHOICES: { id: StudioProviderChoice; label: string }[] =
+    AVAILABLE_MEDIA_PROVIDER_OPTIONS;
 
   const VIDEO_MODELS = [
     { id: 'seedance', label: 'Seedance', desc: 'ByteDance Seedance — text / image-to-video' },
@@ -338,11 +339,10 @@ ${lines.map(line => `  - ${line}`).join('\n')}
 
   const _ls = (k: string) => (typeof localStorage !== 'undefined' ? localStorage.getItem(k) : null);
   function normalizeStudioModelId(raw: string | null): StudioModelId {
-    if (studioModels.some(m => m.id === raw)) return raw as StudioModelId;
-    if (raw === 'gpt-image-2' || raw === 'openai/GPT Image 2' || raw === 'openai/GPT Image 2 Edit') return 'gpt-image-2';
-    if (raw === 'nanobanana2' || raw?.includes('nano-banana') || raw?.includes('flash-image')) return 'fal-ai/nano-banana';
-    if (raw?.toLowerCase().includes('ideogram')) return 'ideogram-v3';
-    return 'fal-ai/nano-banana';
+    const normalized = normalizeMediaModelId(raw ?? undefined);
+    return studioModels.some(m => m.id === normalized)
+      ? normalized
+      : (studioModels[0]?.id ?? 'fal-ai/nano-banana-2');
   }
 
   function normalizeProviderChoice(raw: string | null): StudioProviderChoice | null {
@@ -487,11 +487,20 @@ ${lines.map(line => `  - ${line}`).join('\n')}
     { id: 'klee',  label: '源暎アンチック', css: '"Klee One", cursive' },
   ] as const;
   type MangaFont = typeof MANGA_FONTS[number]['id'];
+  type ImageCompositionMode = 'manga' | 'illustration';
   let overlayFont      = $state<MangaFont>('noto');
   let overlaySize      = $state(16);
   let overlayBold      = $state(true);
-  let speechBubbleMode = $state(_ls('studio-speech-bubble') === '1');
-  $effect(() => { try { localStorage.setItem('studio-speech-bubble', speechBubbleMode ? '1' : '0'); } catch {} });
+  let imageCompositionMode = $state<ImageCompositionMode>(
+    _ls('studio-image-composition-mode') === 'illustration' ? 'illustration' : 'manga',
+  );
+  let speechBubbleMode = $derived(imageCompositionMode === 'manga');
+  $effect(() => {
+    try {
+      localStorage.setItem('studio-image-composition-mode', imageCompositionMode);
+      localStorage.setItem('studio-speech-bubble', speechBubbleMode ? '1' : '0');
+    } catch {}
+  });
 
   // ── Bubble text editor state ──────────────────────────────
   // Which panel is currently in drag-to-define-region edit mode (null = none)
@@ -712,7 +721,18 @@ async function buildPrompt(basePrompt: string, refDescription: string) {
       : 'locale=ja\n参照画像のキャラクターを正確に使用し、同じ顔、同じ髪型、同じ衣装を維持する。';
     const enhanced = await buildPrompt(injectRefs(p), refDesc);
     console.log('[studio] callGenerateImage final prompt preview:', enhanced.slice(0, 200));
-    const payload = { prompt: enhanced, size: s, model: apiModel, provider, editMode, selectedModel: modelOverride ?? selectedStudioModel, refImages, locale: UI_LOCALE };
+    const payload = {
+      prompt: enhanced,
+      size: s,
+      model: apiModel,
+      provider,
+      editMode,
+      selectedModel: modelOverride ?? selectedStudioModel,
+      refImages,
+      locale: UI_LOCALE,
+      renderMode: imageCompositionMode,
+      speechBubble: speechBubbleMode,
+    };
     console.log('[studio] image generate button payload', payload);
     console.log('[studio] fetch /api/generate provider/model', { provider: payload.provider, model: payload.model });
     const res = await fetch('/api/generate', {
@@ -798,9 +818,7 @@ async function buildPrompt(basePrompt: string, refDescription: string) {
     try {
       const dlg = p.dialogue.trim();
       const neg = p.negativePrompt?.trim();
-      const enrichedPrompt = (speechBubbleMode && dlg)
-        ? `${p.prompt.trim()}, speech bubble with Japanese text "${dlg}", manga speech balloon, clear legible text inside bubble`
-        : p.prompt.trim();
+      const enrichedPrompt = buildImageCompositionPrompt(p.prompt.trim(), dlg);
       const finalPrompt = neg ? `${enrichedPrompt}, avoid: ${neg}` : enrichedPrompt;
       const result = studioMediaType === 'image'
         ? { imageUrl: await callGenerateImage(finalPrompt, size, p.model) }
@@ -817,11 +835,17 @@ async function buildPrompt(basePrompt: string, refDescription: string) {
   }
 
   function buildPanelPrompt(src: PanelSlot): string {
-    const dlg = speechBubbleMode && src.dialogue?.trim()
-      ? `, speech bubble with Japanese text "${src.dialogue.trim()}", manga speech balloon, clear legible text inside bubble`
-      : '';
     const neg = src.negativePrompt?.trim();
-    return `${src.prompt.trim()}${dlg}${neg ? `, avoid: ${neg}` : ''}`;
+    return `${buildImageCompositionPrompt(src.prompt.trim(), src.dialogue?.trim() ?? '')}${neg ? `, avoid: ${neg}` : ''}`;
+  }
+
+  function buildImageCompositionPrompt(prompt: string, dialogue: string): string {
+    if (imageCompositionMode === 'illustration') {
+      return `${prompt}, single illustration, no speech bubbles, no dialogue text`;
+    }
+    if (!dialogue) return `${prompt}, Japanese manga artwork`;
+    const escapedDialogue = dialogue.replace(/"/g, '\\"');
+    return `${prompt}, Japanese manga panel, MUST draw a clear manga speech bubble containing the exact Japanese dialogue "${escapedDialogue}", legible text, do not omit the speech bubble`;
   }
 
   async function renderAndStorePageResult(pageIdx: number): Promise<string | null> {
@@ -972,11 +996,9 @@ async function buildPrompt(basePrompt: string, refDescription: string) {
       generating: true, imageUrl: null, videoUrl: null,
     };
     try {
-      const dlg = speechBubbleMode && src.dialogue?.trim()
-        ? `, speech bubble with Japanese text "${src.dialogue.trim()}", manga speech balloon, clear legible text inside bubble`
-        : '';
       const neg = src.negativePrompt?.trim();
-      const url = await callGenerateImage(src.prompt.trim() + dlg + (neg ? `, avoid: ${neg}` : ''), size, src.model);
+      const composedPrompt = buildImageCompositionPrompt(src.prompt.trim(), src.dialogue?.trim() ?? '');
+      const url = await callGenerateImage(composedPrompt + (neg ? `, avoid: ${neg}` : ''), size, src.model);
       pages[pageIdx].panels[panelIdx] = ensureDialogueRegions({ ...pages[pageIdx].panels[panelIdx], generating: false, imageUrl: url });
     } catch (e) {
       pages[pageIdx].panels[panelIdx] = { ...pages[pageIdx].panels[panelIdx], generating: false };
@@ -1166,7 +1188,8 @@ ${layoutRule}
 他ページを同じ画像に含めない。空コマやプレースホルダーを残さない。
 固定グリッドにしない。small、medium、large、splash のサイズ指定に応じて自然に配置する。
 このページ単体で読みやすい漫画ページにする。
-各コマのセリフは日本語の漫画吹き出しで読みやすく入れる。
+セリフが存在するコマには、対応する日本語の漫画吹き出しを必ず描画する。セリフを省略しない。
+「セリフなし」のコマには吹き出しを描画しない。
 キャラクターデザイン、衣装、背景、色彩、画風を全コマで一貫させる。
 表情とポーズは各コマの内容に合わせる。
 画面内のメタデータ、キャプション、注釈、UIラベルは日本語のみ。
@@ -3173,7 +3196,17 @@ REFの役割を推定してください（例: 背景資料、キャラクター
       imageSizes:     refImages.map(r => `${Math.round(r.length / 1024)}KB`),
     });
     try {
-      const payload = { prompt: injectRefs(`${p}, ${buildNegativeHint()}`), size, model: studioImageModel, provider: selectedProvider, editMode: selectedEditMode, selectedModel: selectedStudioModel, refImages };
+      const payload = {
+        prompt: injectRefs(`${p}, ${buildNegativeHint()}`),
+        size,
+        model: studioImageModel,
+        provider: selectedProvider,
+        editMode: selectedEditMode,
+        selectedModel: selectedStudioModel,
+        refImages,
+        renderMode: imageCompositionMode,
+        speechBubble: speechBubbleMode,
+      };
       console.log('[studio] image generate button payload', payload);
       console.log('[studio] fetch /api/generate provider/model', { provider: payload.provider, model: payload.model });
       const res = await fetch('/api/generate', {
@@ -4718,10 +4751,12 @@ REFの役割を推定してください（例: 背景資料、キャラクター
             <span class="gen-ctrl-label">MEDIA_PROVIDER</span>
             <select
               class="gen-select"
-              bind:value={imageProvider}
-              onchange={() => setStudioProviderChoice(imageProvider)}
+              value={selectedStudioProviderChoice}
+              onchange={(e) => setStudioProviderChoice((e.currentTarget as HTMLSelectElement).value as StudioProviderChoice)}
             >
-              <option value="fal">FAL</option>
+              {#each STUDIO_PROVIDER_CHOICES as provider}
+                <option value={provider.id}>{provider.label}</option>
+              {/each}
             </select>
           </label>
           <label class="gen-ctrl">
@@ -4737,7 +4772,7 @@ REFの役割を推定してください（例: 背景資料、キャラクター
                 void saveImageSettings();
               }}
             >
-              {#each studioModelsForProvider(imageProvider) as m}
+              {#each studioModelsForProvider(selectedStudioProviderChoice) as m}
                 <option value={m.id}>{m.label}</option>
               {/each}
             </select>
@@ -4818,13 +4853,15 @@ REFの役割を推定してください（例: 背景資料、キャラクター
 
         <!-- Text Overlay Toolbar -->
         <div class="font-toolbar">
-          <span class="font-toolbar-lbl">吹き出し</span>
+          <span class="font-toolbar-lbl">画像モード</span>
           <button
             class="sb-toggle"
             class:active={speechBubbleMode}
-            onclick={() => speechBubbleMode = !speechBubbleMode}
-            title="吹き出しモード ON: セリフをAIプロンプトに注入して文字込みで生成 → 確定ボタンで吹き出しに上書き描画"
-          >{speechBubbleMode ? '◉ SB ON' : '◎ SB'}</button>
+            onclick={() => imageCompositionMode = imageCompositionMode === 'manga' ? 'illustration' : 'manga'}
+            title={speechBubbleMode
+              ? 'Manga Mode: セリフがある場合は吹き出しを必ず描画'
+              : 'Illustration Mode: 吹き出しを描画しない'}
+          >{speechBubbleMode ? 'MANGA · SB ON' : 'ILLUSTRATION · SB OFF'}</button>
           <select class="font-select" bind:value={overlayFont}>
             {#each MANGA_FONTS as f}
               <option value={f.id}>{f.label}</option>

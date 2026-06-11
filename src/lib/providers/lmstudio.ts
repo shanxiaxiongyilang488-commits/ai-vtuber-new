@@ -47,6 +47,11 @@ export async function chatLMStudio(input: ProviderChatInput): Promise<string> {
 
   const data = await res.json();
   const replyText = extractReplyText(data);
+  console.log('[MODEL_FINISH]', {
+    provider: 'lmstudio',
+    finishReason: data?.choices?.[0]?.finish_reason ?? null,
+    visibleLength: replyText.length,
+  });
   if (!replyText.trim()) logEmptyReply('LM_STUDIO', data);
   return replyText;
 }

@@ -4,7 +4,22 @@ import { join, resolve } from 'node:path';
 export interface CharacterProfile {
   id: string;
   name: string;
+  role: string;
   description: string;
+  characterBible?: CharacterBible;
+}
+
+export interface CharacterBible {
+  unitId: string;
+  characters: CharacterBibleCharacter[];
+}
+
+export interface CharacterBibleCharacter {
+  id: string;
+  hairColor: string;
+  ears: string;
+  tail: string;
+  appearance: string;
 }
 
 export interface CharacterRegistryEntry extends CharacterProfile {
@@ -16,9 +31,17 @@ export interface CharacterRegistryEntry extends CharacterProfile {
 export interface RegisterCharacterInput {
   id: string;
   name: string;
+  role?: string;
   description?: string;
   referenceImageDataUrl?: string;
   sheetImageDataUrl?: string;
+}
+
+export interface UpdateCharacterInput {
+  name?: string;
+  role?: string;
+  description?: string;
+  characterBible?: CharacterBible;
 }
 
 const CHARACTER_ROOT = resolve(process.cwd(), 'data', 'characters');
@@ -76,7 +99,9 @@ function readProfile(id: string): CharacterProfile | null {
   return {
     id: normalizedId,
     name: String(parsed.name ?? normalizedId),
+    role: String(parsed.role ?? ''),
     description: String(parsed.description ?? ''),
+    ...(parsed.characterBible ? { characterBible: parsed.characterBible } : {}),
   };
 }
 
@@ -99,6 +124,7 @@ export function registerCharacter(input: RegisterCharacterInput): CharacterRegis
   const profile: CharacterProfile = {
     id,
     name: input.name.trim() || id,
+    role: input.role?.trim() ?? '',
     description: input.description?.trim() ?? '',
   };
 
@@ -118,6 +144,20 @@ export function saveCharacterReferenceImage(id: string, imageDataUrl: string): C
   if (!character) throw new Error('character not found');
   writeFileSync(imagePath(character.id, REFERENCE_FILE), dataUrlToBuffer(imageDataUrl));
   return toEntry(character);
+}
+
+export function updateCharacter(id: string, input: UpdateCharacterInput): CharacterRegistryEntry {
+  const profile = readProfile(id);
+  if (!profile) throw new Error('character not found');
+  const next: CharacterProfile = {
+    ...profile,
+    ...(typeof input.name === 'string' ? { name: input.name.trim() || profile.name } : {}),
+    ...(typeof input.role === 'string' ? { role: input.role.trim() } : {}),
+    ...(typeof input.description === 'string' ? { description: input.description.trim() } : {}),
+    ...(input.characterBible ? { characterBible: input.characterBible } : {}),
+  };
+  writeFileSync(profilePath(profile.id), JSON.stringify(next, null, 2), 'utf-8');
+  return toEntry(next);
 }
 
 export function getCharacterReferenceDataUrl(id: string): string | null {

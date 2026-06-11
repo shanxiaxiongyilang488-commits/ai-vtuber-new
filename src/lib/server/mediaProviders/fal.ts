@@ -134,6 +134,9 @@ export async function generateFalImage(input: ImageGenerationInput): Promise<Gen
   }
 
   const endpoint = `https://fal.run/${endpointModel}`;
+  console.log('[FAL REQUEST]');
+  console.log('url:', endpoint);
+  console.log('model:', falModel);
   console.log('[MEDIA_PROVIDER]', 'fal');
   console.log('[MEDIA_MODEL]', falModel);
   console.log('[FAL_MEDIA_IMAGE]', { falModel, endpointModel, refImages: input.refImages.length });
@@ -147,6 +150,7 @@ export async function generateFalImage(input: ImageGenerationInput): Promise<Gen
   if (!falRes.ok) {
     const msg = await falRes.text().catch(() => `HTTP ${falRes.status}`);
     console.error('[FAL_MEDIA_ERROR]', msg);
+    console.log('[FAL_FALLBACK]', { attempted: false, target: null });
     throw error(falRes.status >= 500 ? 500 : 400, `FAL API error: ${msg.slice(0, 300)}`);
   }
 

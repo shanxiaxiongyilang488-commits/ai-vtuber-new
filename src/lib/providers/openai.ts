@@ -30,8 +30,15 @@ export async function chatOpenAI(input: ProviderChatInput & { apiKey?: string })
       { role: 'system', content: input.systemPrompt },
       { role: 'user', content: openAIUserContent(input.userMessage, images) as any },
     ],
-    ...(images.length > 0 ? { max_tokens: 2400 } : {}),
+    max_tokens: input.maxTokens ?? 2048,
   });
 
-  return completion.choices[0].message.content ?? '';
+  const choice = completion.choices[0];
+  const text = choice.message.content ?? '';
+  console.log('[MODEL_FINISH]', {
+    provider: 'openai',
+    finishReason: choice.finish_reason ?? null,
+    visibleLength: text.length,
+  });
+  return text;
 }

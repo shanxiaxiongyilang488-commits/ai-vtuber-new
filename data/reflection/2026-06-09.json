@@ -1,0 +1,10 @@
+{
+  "summary": "User: 失敗！猫耳メンテのYAMLを修正してください。\n\nPanel6〜7を強化してください。\n\n猫耳センサー暴走によって\n研究所内の機器やAIが一時的に誤作動する描写を追加してください。\n\nN-01とN-02が協力して復旧する流れにしてください。\n\n他のコマは変更しないでください。 / AI: ```yaml\ntitle: 失敗！猫耳メンテ\n\npanels:\n  - number: 1\n    bg: 近未来研究室\n    characters:\n      - name: N-01\n        position: 左\n        action: 椅子に座る\n        expression: わくわく\n        cat_ears: 通常\n        speech: 「ねえ、耳センサ...",
+  "learned": [
+    "私は\n\n「感情が全部耳に出る」\n\n案が好きです。\n\nミュリィとシエルは\nそれぞれ別の改善案を出してください。\n\nお互いの案には反論しても構いません。"
+  ],
+  "emotion": "joy",
+  "trust_delta": 27,
+  "affection_delta": 8,
+  "note": "5件の記憶を参照 / joy / Trust 変化なし / Affection 変化なし"
+}

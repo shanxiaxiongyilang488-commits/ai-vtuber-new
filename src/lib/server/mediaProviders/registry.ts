@@ -3,6 +3,10 @@ import { generateOpenAIImage } from '$lib/server/imageProviders/openai';
 import { generateIdeogramImage } from '$lib/server/imageProviders/ideogram';
 import { generateFalImage } from './fal';
 import { recordImageGenerationUsage } from '$lib/server/mediaUsage';
+import {
+  AVAILABLE_IMAGE_MODELS as CONFIG_AVAILABLE_IMAGE_MODELS,
+  AVAILABLE_MEDIA_MODELS as CONFIG_AVAILABLE_MEDIA_MODELS,
+} from '$lib/config/mediaModels';
 import type { GeneratedImage, ImageGenerationInput } from '$lib/server/imageProviders/types';
 
 export type MediaProviderName = 'openai' | 'fal' | 'ideogram';
@@ -24,7 +28,12 @@ export const AVAILABLE_MEDIA_MODELS: MediaModelInfo[] = [
     apiModel: 'gpt-image-2',
     kind: 'image',
     estimatedCost: null,
-    aliases: ['openai/GPT Image 2', 'openai/GPT Image 2 Edit'],
+    aliases: [
+      'openai/GPT Image 2',
+      'openai/GPT Image 2 Edit',
+      'openai/gpt-image-2',
+      'openai/gpt-image-2/edit',
+    ],
   },
   {
     id: 'nano-banana-pro',
@@ -86,6 +95,12 @@ function normalize(value?: string): string {
   return (value || '').trim().toLowerCase();
 }
 
+function mediaModelMatches(item: { id: string; apiModel: string; aliases?: string[] }, raw: string): boolean {
+  return normalize(item.id) === raw ||
+    normalize(item.apiModel) === raw ||
+    (item.aliases ?? []).some((alias) => normalize(alias) === raw);
+}
+
 export function logAvailableMediaModels(): void {
   console.log('[AVAILABLE_MEDIA_MODELS]', AVAILABLE_MEDIA_MODELS.map((model) => ({
     id: model.id,
@@ -99,18 +114,98 @@ export function logAvailableMediaModels(): void {
 
 export function resolveMediaModel(model?: string): MediaModelInfo {
   const raw = normalize(model);
-  if (!raw) return AVAILABLE_MEDIA_MODELS[0];
-  return AVAILABLE_MEDIA_MODELS.find((item) =>
-    normalize(item.id) === raw ||
-    normalize(item.apiModel) === raw ||
-    (item.aliases ?? []).some((alias) => normalize(alias) === raw),
-  ) ?? AVAILABLE_MEDIA_MODELS[0];
+  const fallback = AVAILABLE_MEDIA_MODELS[0];
+  const serverMatch = raw ? AVAILABLE_MEDIA_MODELS.find((item) => mediaModelMatches(item, raw)) : undefined;
+  const configImageMatch = raw ? CONFIG_AVAILABLE_IMAGE_MODELS.find((item) => mediaModelMatches(item, raw)) : undefined;
+  const configMediaMatch = raw ? CONFIG_AVAILABLE_MEDIA_MODELS.find((item) => mediaModelMatches(item, raw)) : undefined;
+
+  console.log('[mediaProviders/registry] resolveMediaModel input', {
+    input: model ?? null,
+    raw,
+    serverMatch: serverMatch ? {
+      id: serverMatch.id,
+      provider: serverMatch.provider,
+      apiModel: serverMatch.apiModel,
+    } : null,
+    existsInConfigAvailableImageModels: Boolean(configImageMatch),
+    configImageMatch: configImageMatch ? {
+      id: configImageMatch.id,
+      provider: configImageMatch.provider,
+      apiModel: configImageMatch.apiModel,
+    } : null,
+    existsInConfigAvailableMediaModels: Boolean(configMediaMatch),
+    configMediaMatch: configMediaMatch ? {
+      id: configMediaMatch.id,
+      provider: configMediaMatch.provider,
+      apiModel: configMediaMatch.apiModel,
+    } : null,
+  });
+
+  if (!raw) {
+    console.log('[mediaProviders/registry] resolveMediaModel fallback', {
+      reason: 'empty_model',
+      input: model ?? null,
+      fallback: {
+        id: fallback.id,
+        provider: fallback.provider,
+        apiModel: fallback.apiModel,
+      },
+      serverAvailableModelIds: AVAILABLE_MEDIA_MODELS.map((item) => item.id),
+      configAvailableImageModelIds: CONFIG_AVAILABLE_IMAGE_MODELS.map((item) => item.id),
+    });
+    return fallback;
+  }
+
+  if (serverMatch) {
+    console.log('[mediaProviders/registry] resolveMediaModel resolved', {
+      reason: 'server_registry_match',
+      input: model ?? null,
+      raw,
+      resolved: {
+        id: serverMatch.id,
+        provider: serverMatch.provider,
+        apiModel: serverMatch.apiModel,
+      },
+    });
+    return serverMatch;
+  }
+
+  console.log('[mediaProviders/registry] resolveMediaModel fallback', {
+    reason: 'server_registry_model_not_found',
+    input: model ?? null,
+    raw,
+    existsInServerAvailableMediaModels: false,
+    existsInConfigAvailableImageModels: Boolean(configImageMatch),
+    existsInConfigAvailableMediaModels: Boolean(configMediaMatch),
+    fallback: {
+      id: fallback.id,
+      provider: fallback.provider,
+      apiModel: fallback.apiModel,
+    },
+    serverAvailableModelIds: AVAILABLE_MEDIA_MODELS.map((item) => item.id),
+    configAvailableImageModelIds: CONFIG_AVAILABLE_IMAGE_MODELS.map((item) => item.id),
+    configAvailableMediaModelIds: CONFIG_AVAILABLE_MEDIA_MODELS.map((item) => item.id),
+  });
+  return fallback;
 }
 
 export async function generateMediaImage(input: ImageGenerationInput & {
   requestedModel?: string;
 }): Promise<{ images: GeneratedImage[]; model: MediaModelInfo }> {
-  const model = resolveMediaModel(input.requestedModel ?? input.model);
+  const resolveInput = input.requestedModel ?? input.model;
+  console.log('[mediaProviders/registry] generateMediaImage resolve source', {
+    inputModel: input.model ?? null,
+    requestedModel: input.requestedModel ?? null,
+    resolveInput,
+  });
+  const model = resolveMediaModel(resolveInput);
+  console.log('[mediaProviders/registry] generateMediaImage resolved final', {
+    requestProvider: null,
+    requestModel: resolveInput ?? null,
+    resolvedProvider: model.provider,
+    resolvedModel: model.apiModel,
+    resolvedModelId: model.id,
+  });
   console.log('[MEDIA_PROVIDER]', model.provider);
   console.log('[MEDIA_MODEL]', model.id);
 

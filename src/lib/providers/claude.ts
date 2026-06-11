@@ -31,7 +31,7 @@ export async function chatClaude(input: ProviderChatInput & { apiKey?: string })
     },
     body: JSON.stringify({
       model,
-      max_tokens: images.length > 0 ? 800 : 300,
+      max_tokens: input.maxTokens ?? 2048,
       system: input.systemPrompt,
       messages: [{ role: 'user', content: claudeUserContent(input.userMessage, images) }],
     }),
@@ -43,5 +43,14 @@ export async function chatClaude(input: ProviderChatInput & { apiKey?: string })
   }
 
   const data = await res.json();
-  return data?.content?.[0]?.text ?? '';
+  const text = (data?.content ?? [])
+    .filter((part: { type?: string; text?: unknown }) => part?.type === 'text' && typeof part?.text === 'string')
+    .map((part: { text: string }) => part.text)
+    .join('');
+  console.log('[MODEL_FINISH]', {
+    provider: 'claude',
+    finishReason: data?.stop_reason ?? null,
+    visibleLength: text.length,
+  });
+  return text;
 }

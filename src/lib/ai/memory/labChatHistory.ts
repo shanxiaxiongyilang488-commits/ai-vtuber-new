@@ -8,6 +8,11 @@ export type LabChatHistoryMessage = {
   text: string;
   time: string;
   avatar?: string;
+  speakerName?: string;
+  internalDiscussion?: Array<{
+    speaker: 'ミュリィ' | 'リセア' | 'シエル' | 'メノア' | 'ピオナ' | '司会';
+    text: string;
+  }>;
   imageUrl?: string;
   imagePrompt?: string;
   isGreeting?: true;
@@ -58,6 +63,24 @@ function normalizeMessages(value: unknown): LabChatHistoryMessage[] {
       text: candidate.text,
       time: candidate.time,
       ...(typeof candidate.avatar === 'string' ? { avatar: candidate.avatar } : {}),
+      ...(typeof candidate.speakerName === 'string' ? { speakerName: candidate.speakerName } : {}),
+      ...(Array.isArray(candidate.internalDiscussion) ? {
+        internalDiscussion: candidate.internalDiscussion.flatMap((entry) =>
+          entry
+          && (
+            entry.speaker === 'ミュリィ'
+            || entry.speaker === 'リセア'
+            || entry.speaker === 'シエル'
+            || entry.speaker === 'メノア'
+            || entry.speaker === 'ピオナ'
+            || entry.speaker === '司会'
+          )
+          && typeof entry.text === 'string'
+          && entry.text.trim()
+            ? [{ speaker: entry.speaker, text: entry.text.trim() }]
+            : []
+        ),
+      } : {}),
       ...(typeof candidate.imageUrl === 'string' ? { imageUrl: candidate.imageUrl } : {}),
       ...(typeof candidate.imagePrompt === 'string' ? { imagePrompt: candidate.imagePrompt } : {}),
       ...(candidate.isGreeting === true ? { isGreeting: true } : {}),
@@ -73,7 +96,13 @@ export async function loadLabChatHistory(): Promise<LabChatHistoryMessage[]> {
     const request = transaction.objectStore(HISTORY_STORE).get(HISTORY_ID);
 
     request.onsuccess = () => {
-      resolve(normalizeMessages(request.result));
+      const messages = normalizeMessages(request.result);
+      const latest = messages.at(-1);
+      if (latest) {
+        console.log('[MESSAGE_LENGTH_STAGE]', 'load_saved');
+        console.log('[MESSAGE_LENGTH]', latest.text.length, latest.text.length);
+      }
+      resolve(messages);
     };
     request.onerror = () => reject(request.error);
   });
@@ -82,6 +111,10 @@ export async function loadLabChatHistory(): Promise<LabChatHistoryMessage[]> {
 export async function saveLabChatHistory(messages: LabChatHistoryMessage[]): Promise<void> {
   const db = await openDb();
   const history = normalizeMessages(messages);
+  const rawLatest = messages.at(-1)?.text ?? '';
+  const savedLatest = history.at(-1)?.text ?? '';
+  console.log('[MESSAGE_LENGTH_STAGE]', 'save');
+  console.log('[MESSAGE_LENGTH]', rawLatest.length, savedLatest.length);
 
   await new Promise<void>((resolve, reject) => {
     const transaction = db.transaction(HISTORY_STORE, 'readwrite');
