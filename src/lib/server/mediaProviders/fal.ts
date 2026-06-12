@@ -4,7 +4,7 @@ import { recordImageGenerationUsage } from '$lib/server/mediaUsage';
 import { normalizeImages, type GeneratedImage, type ImageGenerationInput, type ImageSize } from '$lib/server/imageProviders/types';
 
 const DEFAULT_FAL_IMAGE_MODEL = 'fal-ai/nano-banana';
-const DEFAULT_FAL_VIDEO_MODEL = 'seedance';
+const DEFAULT_FAL_VIDEO_MODEL = 'fal-ai/kling-video/v3/pro/image-to-video';
 
 export const FAL_MEDIA_MODELS = [
   { id: 'fal-ai/nano-banana', label: 'Nano Banana', kind: 'image' },
@@ -12,7 +12,7 @@ export const FAL_MEDIA_MODELS = [
   { id: 'fal-ai/nano-banana-2', label: 'Nano Banana 2', kind: 'image' },
   { id: 'fal-ai/flux-pro/kontext', label: 'Flux Kontext', kind: 'image' },
   { id: 'fal-ai/flux-pro/v1.1', label: 'Flux Pro', kind: 'image' },
-  { id: 'seedance', label: 'Seedance', kind: 'video' },
+  { id: 'fal-ai/kling-video/v3/pro/image-to-video', label: 'Kling 3.0 Pro', kind: 'video' },
 ] as const;
 
 const FAL_MODEL_MAP: Record<string, string> = {
@@ -34,7 +34,9 @@ const FAL_MODEL_MAP: Record<string, string> = {
   'flux-pro': 'fal-ai/flux-pro/v1.1',
   'Flux Pro': 'fal-ai/flux-pro/v1.1',
   'fal-ai/flux-pro/v1.1': 'fal-ai/flux-pro/v1.1',
-  seedance: DEFAULT_FAL_VIDEO_MODEL,
+  kling: DEFAULT_FAL_VIDEO_MODEL,
+  'kling-3-pro': DEFAULT_FAL_VIDEO_MODEL,
+  'fal-ai/kling-video/v3/pro/image-to-video': DEFAULT_FAL_VIDEO_MODEL,
 };
 
 const IMAGE_COST_ESTIMATES_USD: Record<string, number> = {
@@ -50,14 +52,14 @@ const IMAGE_COST_ESTIMATES_USD: Record<string, number> = {
 };
 
 const VIDEO_MODEL_CONFIG = {
-  seedance: {
-    endpoint: 'https://fal.run/fal-ai/bytedance/seedance-1-0-lite-t2v',
+  'fal-ai/kling-video/v3/pro/image-to-video': {
+    endpoint: 'fal-ai/kling-video/v3/pro/image-to-video',
     resultPath: ['video', 'url'] as string[],
-    buildBody: (prompt: string, duration: number, aspectRatio: string, resolution: string) => ({
+    buildBody: (prompt: string, duration: number, audio: boolean, referenceImage: string) => ({
       prompt,
-      duration,
-      aspect_ratio: aspectRatio,
-      resolution,
+      duration: String(duration),
+      generate_audio: audio,
+      start_image_url: referenceImage,
     }),
   },
 } as const;
@@ -169,8 +171,8 @@ export async function generateFalVideo(input: {
   prompt: string;
   model?: string;
   duration: number;
-  aspectRatio: string;
-  resolution: string;
+  audio: boolean;
+  referenceImage: string;
 }): Promise<{ url: string; model: string }> {
   const falKey = await getProviderKey('fal');
   if (!falKey) throw error(500, 'FAL API key is not configured');
@@ -181,12 +183,29 @@ export async function generateFalVideo(input: {
 
   console.log('[MEDIA_PROVIDER]', 'fal');
   console.log('[MEDIA_MODEL]', model);
-  console.log('[FAL_MEDIA_VIDEO]', { model, duration: input.duration, aspectRatio: input.aspectRatio });
+  console.log('[FAL_MEDIA_VIDEO]', {
+    model,
+    mode: 'image-to-video',
+    duration: input.duration,
+    audio: input.audio,
+    referenceImage: Boolean(input.referenceImage),
+  });
 
-  const falRes = await fetch(cfg.endpoint, {
+  const falBody = cfg.buildBody(
+    input.prompt.trim(),
+    input.duration,
+    input.audio,
+    input.referenceImage,
+  );
+  console.log('[FAL_VIDEO_PAYLOAD]', {
+    ...falBody,
+    start_image_url: `${input.referenceImage.slice(0, 32)}...`,
+  });
+
+  const falRes = await fetch(`https://queue.fal.run/${cfg.endpoint}`, {
     method: 'POST',
     headers: { Authorization: `Key ${falKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(cfg.buildBody(input.prompt.trim(), input.duration, input.aspectRatio, input.resolution)),
+    body: JSON.stringify(falBody),
   });
 
   if (!falRes.ok) {
@@ -195,7 +214,50 @@ export async function generateFalVideo(input: {
     throw error(falRes.status >= 500 ? 500 : 400, `${model} API error: ${msg.slice(0, 300)}`);
   }
 
-  const falData = await falRes.json();
+  const queued = await falRes.json() as {
+    request_id?: string;
+    status_url?: string;
+    response_url?: string;
+  };
+  if (!queued.request_id || !queued.status_url || !queued.response_url) {
+    throw error(500, `Invalid queue response from ${model}`);
+  }
+
+  const deadline = Date.now() + 10 * 60 * 1000;
+  let completed = false;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    const statusRes = await fetch(queued.status_url, {
+      headers: { Authorization: `Key ${falKey}` },
+    });
+    if (!statusRes.ok) {
+      const msg = await statusRes.text().catch(() => `HTTP ${statusRes.status}`);
+      throw error(500, `${model} status error: ${msg.slice(0, 300)}`);
+    }
+    const statusData = await statusRes.json() as { status?: string; error?: unknown };
+    console.log('[FAL_VIDEO_STATUS]', {
+      model,
+      requestId: queued.request_id,
+      status: statusData.status ?? 'unknown',
+    });
+    if (statusData.status === 'COMPLETED') {
+      completed = true;
+      break;
+    }
+    if (statusData.status === 'FAILED') {
+      throw error(500, `${model} generation failed: ${JSON.stringify(statusData.error ?? statusData)}`);
+    }
+  }
+  if (!completed) throw error(504, `${model} generation timed out`);
+
+  const resultRes = await fetch(queued.response_url, {
+    headers: { Authorization: `Key ${falKey}` },
+  });
+  if (!resultRes.ok) {
+    const msg = await resultRes.text().catch(() => `HTTP ${resultRes.status}`);
+    throw error(500, `${model} result error: ${msg.slice(0, 300)}`);
+  }
+  const falData = await resultRes.json();
   const videoUrl = getNestedValue(falData, cfg.resultPath);
   if (!videoUrl) throw error(500, `No video URL in response from ${model}`);
   return { url: videoUrl, model };

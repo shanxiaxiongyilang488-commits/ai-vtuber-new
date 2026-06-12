@@ -331,7 +331,11 @@ ${lines.map(line => `  - ${line}`).join('\n')}
     AVAILABLE_MEDIA_PROVIDER_OPTIONS;
 
   const VIDEO_MODELS = [
-    { id: 'seedance', label: 'Seedance', desc: 'ByteDance Seedance — text / image-to-video' },
+    {
+      id: 'fal-ai/kling-video/v3/pro/image-to-video',
+      label: 'Kling 3.0 Pro',
+      desc: 'FAL image-to-video',
+    },
   ] as const;
   type VideoModelId = typeof VIDEO_MODELS[number]['id'];
 
@@ -376,14 +380,19 @@ ${lines.map(line => `  - ${line}`).join('\n')}
     normalizeProviderChoice(_ls('studio-provider-choice')) ?? providerChoiceForModel(normalizeStudioModelId(_ls('studio-model')))
   );
   let studioVideoModel = $state<VideoModelId>(
-    VIDEO_MODELS.some(m => m.id === _ls('studio-video-model')) ? (_ls('studio-video-model') as VideoModelId) : 'seedance'
+    VIDEO_MODELS.some(m => m.id === _ls('studio-video-model'))
+      ? (_ls('studio-video-model') as VideoModelId)
+      : 'fal-ai/kling-video/v3/pro/image-to-video'
   );
   let selectedStudioModelConfig = $derived(studioModels.find(m => m.id === selectedStudioModel) ?? studioModels[0]);
   let selectedProvider          = $derived<StudioProvider>(selectedStudioModelConfig.provider);
   let selectedEditMode          = $derived(selectedStudioModelConfig.edit);
   let studioImageModel          = $derived(selectedStudioModelConfig.apiModel);
-  let videoDuration = $state<4 | 5 | 8>(5);
-  let videoAspect   = $state<'16:9' | '9:16' | '1:1'>('16:9');
+  let videoPrompt = $state('');
+  let videoDuration = $state<3 | 5 | 10 | 15>(5);
+  let videoAudio = $state(false);
+  let videoReferenceImage = $state('');
+  let videoReferenceName = $state('');
 
   function normalizeOpenAIImageSize(value: unknown): OpenAIImageSize {
     return OPENAI_IMAGE_SIZES.includes(value as OpenAIImageSize) ? value as OpenAIImageSize : '1024x1024';
@@ -452,6 +461,23 @@ ${lines.map(line => `  - ${line}`).join('\n')}
   });
 
   // ── Batch Generate ───────────────────────────────────────
+  async function selectVideoReferenceImage(event: Event): Promise<void> {
+    const file = (event.currentTarget as HTMLInputElement).files?.[0];
+    if (!file) return;
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+      errorMsg = 'Reference ImageはPNG、JPG、JPEG、WEBPに対応しています。';
+      return;
+    }
+    videoReferenceImage = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result ?? ''));
+      reader.onerror = () => reject(reader.error ?? new Error('Reference Imageの読み込みに失敗しました。'));
+      reader.readAsDataURL(file);
+    });
+    videoReferenceName = file.name;
+    errorMsg = '';
+  }
+
   let batchMode       = $state(true);
   let batchGenerating = $state(false);
   let batchProgress   = $state({ done: 0, total: 0 });
@@ -748,21 +774,50 @@ async function buildPrompt(basePrompt: string, refDescription: string) {
   }
 
   async function callGenerateVideo(p: string): Promise<string> {
+    if (!videoReferenceImage) throw new Error('Reference Imageを選択してください。');
     console.log('[studio] callGenerateVideo', {
       selectedModel: studioVideoModel,
-      generationMode: 'video',
+      provider: 'fal',
+      generationMode: 'image-to-video',
       duration:      videoDuration,
-      aspect:        videoAspect,
+      audio:         videoAudio,
+      referenceImage: videoReferenceName || '(selected)',
     });
     const res = await fetch('/api/studio/generate-video', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ prompt: injectRefs(p), model: studioVideoModel, duration: videoDuration, aspectRatio: videoAspect, locale: UI_LOCALE }),
+      body: JSON.stringify({
+        prompt: p,
+        model: studioVideoModel,
+        duration: videoDuration,
+        audio: videoAudio,
+        referenceImage: videoReferenceImage,
+        locale: UI_LOCALE,
+      }),
     });
     if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.message ?? `HTTP ${res.status}`); }
     const data = await res.json();
     if (!data.url) throw new Error('動画データが返されませんでした。');
     return data.url as string;
+  }
+
+  async function generateKlingVideo(): Promise<void> {
+    const prompt = videoPrompt.trim();
+    if (!prompt || generating) return;
+    if (!videoReferenceImage) {
+      errorMsg = 'Reference Imageを選択してください。';
+      return;
+    }
+    errorMsg = '';
+    generating = true;
+    previewVideoUrl = null;
+    try {
+      previewVideoUrl = await callGenerateVideo(prompt);
+    } catch (caughtError) {
+      errorMsg = caughtError instanceof Error ? caughtError.message : '動画生成に失敗しました。';
+    } finally {
+      generating = false;
+    }
   }
 
   // Unified entry for panel generation (routes by media type)
@@ -4746,51 +4801,142 @@ REFの役割を推定してください（例: 背景資料、キャラクター
       <div class="panel image-panel">
         <div class="panel-hd">
           <span class="panel-label">MEDIA</span>
+          <div class="media-tabs">
+            <button
+              class="media-tab"
+              class:active={studioMediaType === 'image'}
+              onclick={() => (studioMediaType = 'image')}
+            >IMAGE</button>
+            <button
+              class="media-tab"
+              class:active={studioMediaType === 'video'}
+              onclick={() => (studioMediaType = 'video')}
+            >VIDEO</button>
+          </div>
         </div>
-        <div class="image-settings-grid">
-          <label class="gen-ctrl">
-            <span class="gen-ctrl-label">MEDIA_PROVIDER</span>
-            <select
-              class="gen-select"
-              value={selectedStudioProviderChoice}
-              onchange={(e) => setStudioProviderChoice((e.currentTarget as HTMLSelectElement).value as StudioProviderChoice)}
+        {#if studioMediaType === 'image'}
+          <div class="image-settings-grid">
+            <label class="gen-ctrl">
+              <span class="gen-ctrl-label">MEDIA_PROVIDER</span>
+              <select
+                class="gen-select"
+                value={selectedStudioProviderChoice}
+                onchange={(e) => setStudioProviderChoice((e.currentTarget as HTMLSelectElement).value as StudioProviderChoice)}
+              >
+                {#each STUDIO_PROVIDER_CHOICES as provider}
+                  <option value={provider.id}>{provider.label}</option>
+                {/each}
+              </select>
+            </label>
+            <label class="gen-ctrl">
+              <span class="gen-ctrl-label">MEDIA_MODEL</span>
+              <select
+                class="gen-select"
+                bind:value={selectedStudioModel}
+                onchange={() => {
+                  const model = studioModels.find(m => m.id === selectedStudioModel) ?? selectedStudioModelConfig;
+                  selectedStudioProviderChoice = model.provider;
+                  imageProvider = model.provider;
+                  imageModel = model.apiModel;
+                  void saveImageSettings();
+                }}
+              >
+                {#each studioModelsForProvider(selectedStudioProviderChoice) as m}
+                  <option value={m.id}>{m.label}</option>
+                {/each}
+              </select>
+            </label>
+            <label class="gen-ctrl">
+              <span class="gen-ctrl-label">Image Size</span>
+              <select
+                class="gen-select"
+                bind:value={imageSize}
+                onchange={() => { size = imageSize; void saveImageSettings(); }}
+              >
+                {#each OPENAI_IMAGE_SIZES as imageSettingSize}
+                  <option value={imageSettingSize}>{imageSettingSize}</option>
+                {/each}
+              </select>
+            </label>
+          </div>
+        {:else}
+          <div class="video-settings">
+            <div class="image-settings-grid">
+              <label class="gen-ctrl">
+                <span class="gen-ctrl-label">Provider</span>
+                <select class="gen-select" disabled>
+                  <option>FAL</option>
+                </select>
+              </label>
+              <label class="gen-ctrl">
+                <span class="gen-ctrl-label">Model</span>
+                <select class="gen-select" bind:value={studioVideoModel} disabled>
+                  {#each VIDEO_MODELS as model}
+                    <option value={model.id}>{model.label}</option>
+                  {/each}
+                </select>
+              </label>
+              <label class="gen-ctrl">
+                <span class="gen-ctrl-label">Duration</span>
+                <select class="gen-select" bind:value={videoDuration}>
+                  <option value={3}>3 seconds</option>
+                  <option value={5}>5 seconds</option>
+                  <option value={10}>10 seconds</option>
+                  <option value={15}>15 seconds</option>
+                </select>
+              </label>
+              <label class="gen-ctrl video-audio-control">
+                <span class="gen-ctrl-label">Audio</span>
+                <button
+                  type="button"
+                  class="audio-toggle"
+                  class:active={videoAudio}
+                  onclick={() => (videoAudio = !videoAudio)}
+                >{videoAudio ? 'ON' : 'OFF'}</button>
+              </label>
+            </div>
+            <label class="video-field">
+              <span class="gen-ctrl-label">Prompt</span>
+              <textarea
+                class="video-prompt"
+                bind:value={videoPrompt}
+                rows="4"
+                placeholder="Describe the motion, camera movement, and atmosphere..."
+              ></textarea>
+            </label>
+            <div class="video-reference-row">
+              <label class="video-reference-upload">
+                <input
+                  type="file"
+                  accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
+                  onchange={selectVideoReferenceImage}
+                />
+                {videoReferenceImage ? 'CHANGE REFERENCE IMAGE' : 'ADD REFERENCE IMAGE'}
+              </label>
+              {#if videoReferenceImage}
+                <div class="video-reference-preview">
+                  <img src={videoReferenceImage} alt="Video reference" />
+                  <span>{videoReferenceName}</span>
+                  <button
+                    type="button"
+                    onclick={() => {
+                      videoReferenceImage = '';
+                      videoReferenceName = '';
+                    }}
+                  >REMOVE</button>
+                </div>
+              {/if}
+            </div>
+            <button
+              class="video-generate-btn"
+              class:generating
+              onclick={generateKlingVideo}
+              disabled={generating || !videoPrompt.trim() || !videoReferenceImage}
             >
-              {#each STUDIO_PROVIDER_CHOICES as provider}
-                <option value={provider.id}>{provider.label}</option>
-              {/each}
-            </select>
-          </label>
-          <label class="gen-ctrl">
-            <span class="gen-ctrl-label">MEDIA_MODEL</span>
-            <select
-              class="gen-select"
-              bind:value={selectedStudioModel}
-              onchange={() => {
-                const model = studioModels.find(m => m.id === selectedStudioModel) ?? selectedStudioModelConfig;
-                selectedStudioProviderChoice = model.provider;
-                imageProvider = model.provider;
-                imageModel = model.apiModel;
-                void saveImageSettings();
-              }}
-            >
-              {#each studioModelsForProvider(selectedStudioProviderChoice) as m}
-                <option value={m.id}>{m.label}</option>
-              {/each}
-            </select>
-          </label>
-          <label class="gen-ctrl">
-            <span class="gen-ctrl-label">Image Size</span>
-            <select
-              class="gen-select"
-              bind:value={imageSize}
-              onchange={() => { size = imageSize; void saveImageSettings(); }}
-            >
-              {#each OPENAI_IMAGE_SIZES as imageSettingSize}
-                <option value={imageSettingSize}>{imageSettingSize}</option>
-              {/each}
-            </select>
-          </label>
-        </div>
+              {generating ? 'GENERATING VIDEO...' : 'GENERATE KLING VIDEO'}
+            </button>
+          </div>
+        {/if}
       </div>
 
       <!-- Comic Panels -->
@@ -6306,6 +6452,151 @@ REFの役割を推定してください（例: 背景資料、キャラクター
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   padding: 0 12px 12px;
+}
+
+.media-tabs {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.media-tab {
+  border: 1px solid var(--pborder);
+  border-radius: 4px;
+  background: rgba(255,255,255,0.03);
+  color: var(--muted);
+  padding: 4px 12px;
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 1px;
+  cursor: pointer;
+}
+
+.media-tab.active {
+  color: var(--cyan);
+  border-color: rgba(0,229,255,0.45);
+  background: rgba(0,229,255,0.1);
+}
+
+.video-settings {
+  padding-bottom: 12px;
+}
+
+.video-field,
+.video-reference-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 12px 10px;
+}
+
+.video-prompt {
+  width: 100%;
+  resize: vertical;
+  box-sizing: border-box;
+  border: 1px solid var(--pborder);
+  border-radius: 6px;
+  background: rgba(0,229,255,0.04);
+  color: var(--text);
+  padding: 9px 10px;
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
+
+.video-prompt:focus {
+  border-color: rgba(0,229,255,0.5);
+}
+
+.audio-toggle {
+  min-height: 34px;
+  border: 1px solid var(--pborder);
+  border-radius: 6px;
+  background: rgba(255,255,255,0.03);
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.audio-toggle.active {
+  color: #34d399;
+  border-color: rgba(52,211,153,0.45);
+  background: rgba(52,211,153,0.1);
+}
+
+.video-reference-upload {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  border: 1px dashed rgba(168,85,247,0.5);
+  border-radius: 6px;
+  color: #c4a7ff;
+  background: rgba(168,85,247,0.08);
+  font-size: 11px;
+  letter-spacing: 0.7px;
+  cursor: pointer;
+}
+
+.video-reference-upload input {
+  display: none;
+}
+
+.video-reference-preview {
+  display: grid;
+  grid-template-columns: 52px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.video-reference-preview img {
+  width: 52px;
+  height: 52px;
+  object-fit: cover;
+  border: 1px solid var(--pborder);
+  border-radius: 5px;
+}
+
+.video-reference-preview span {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.video-reference-preview button {
+  border: 0;
+  background: transparent;
+  color: var(--red);
+  font: inherit;
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.video-generate-btn {
+  width: calc(100% - 24px);
+  margin: 0 12px;
+  border: 1px solid rgba(168,85,247,0.5);
+  border-radius: 6px;
+  background: rgba(168,85,247,0.14);
+  color: #d8c4ff;
+  padding: 10px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  cursor: pointer;
+}
+
+.video-generate-btn:hover:not(:disabled) {
+  background: rgba(168,85,247,0.22);
+}
+
+.video-generate-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
 }
 
 /* ── Generation mode badge ── */
