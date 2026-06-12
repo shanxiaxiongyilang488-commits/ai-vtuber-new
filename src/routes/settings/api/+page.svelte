@@ -509,7 +509,7 @@
         <div class="provider-badge fal-badge">FAL</div>
         {@render statusBadge(falStatus)}
       </div>
-      <p class="card-note">Experimental only. Media models include OpenAI GPT Image 2, Nano Banana Pro, and Ideogram.</p>
+      <p class="card-note">FAL powers image generation and Kling video generation.</p>
 
       <div class="fields" style="grid-template-columns: 1fr;">
         <label class="field">
@@ -527,6 +527,38 @@
         <button class="btn btn-save" onclick={saveFal}>
           {saveFlash['fal'] ? 'Saved' : 'Save'}
         </button>
+      </div>
+    </section>
+
+    <section class="card video-generation-card">
+      <div class="card-header">
+        <div>
+          <p class="header-label">VIDEO GENERATION</p>
+          <h2 class="video-title">Kling 3.0 Pro</h2>
+        </div>
+        <div class="provider-badge fal-badge">FAL</div>
+      </div>
+
+      <div class="fields">
+        <label class="field">
+          <span class="field-label">Provider</span>
+          <input class="input" value="FAL" readonly />
+        </label>
+        <label class="field">
+          <span class="field-label">Model</span>
+          <input class="input" value="Kling 3.0 Pro" readonly />
+        </label>
+        <label class="field">
+          <span class="field-label">Mode</span>
+          <input class="input" value="Image to Video" readonly />
+        </label>
+      </div>
+
+      <p class="card-note">
+        Prompt, Duration, Audio, and Reference Image are configured in Studio's VIDEO GENERATION tab.
+      </p>
+      <div class="actions">
+        <a class="btn btn-save video-open-link" href="/project">Open VIDEO GENERATION</a>
       </div>
     </section>
 
@@ -858,4 +890,21 @@
     border: 1px solid #2a2d3e;
   }
   .btn-test:hover:not(:disabled) { border-color: #6366f1; color: #818cf8; }
+
+  .video-generation-card {
+    border-color: rgba(168,85,247,0.45);
+    box-shadow: 0 0 24px rgba(168,85,247,0.08);
+  }
+
+  .video-title {
+    margin: 0.2rem 0 0;
+    color: #d8c4ff;
+    font-size: 1.05rem;
+  }
+
+  .video-open-link {
+    display: inline-flex;
+    align-items: center;
+    text-decoration: none;
+  }
 </style>

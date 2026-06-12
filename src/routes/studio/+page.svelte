@@ -374,7 +374,7 @@ ${lines.map(line => `  - ${line}`).join('\n')}
     void saveImageSettings();
   }
 
-  let studioMediaType  = $state<StudioMediaType>('image');
+  let studioMediaType = $state<StudioMediaType>('video');
   let selectedStudioModel = $state<StudioModelId>(normalizeStudioModelId(_ls('studio-model')));
   let selectedStudioProviderChoice = $state<StudioProviderChoice>(
     normalizeProviderChoice(_ls('studio-provider-choice')) ?? providerChoiceForModel(normalizeStudioModelId(_ls('studio-model')))
@@ -4800,18 +4800,20 @@ REFの役割を推定してください（例: 背景資料、キャラクター
 
       <div class="panel image-panel">
         <div class="panel-hd">
-          <span class="panel-label">MEDIA</span>
+          <span class="panel-label">
+            {studioMediaType === 'video' ? 'VIDEO GENERATION' : 'IMAGE GENERATION'}
+          </span>
           <div class="media-tabs">
             <button
               class="media-tab"
               class:active={studioMediaType === 'image'}
               onclick={() => (studioMediaType = 'image')}
-            >IMAGE</button>
+            >IMAGE GENERATION</button>
             <button
               class="media-tab"
               class:active={studioMediaType === 'video'}
               onclick={() => (studioMediaType = 'video')}
-            >VIDEO</button>
+            >VIDEO GENERATION</button>
           </div>
         </div>
         {#if studioMediaType === 'image'}
@@ -4874,6 +4876,12 @@ REFの役割を推定してください（例: 背景資料、キャラクター
                   {#each VIDEO_MODELS as model}
                     <option value={model.id}>{model.label}</option>
                   {/each}
+                </select>
+              </label>
+              <label class="gen-ctrl">
+                <span class="gen-ctrl-label">Mode</span>
+                <select class="gen-select" disabled>
+                  <option>Image to Video</option>
                 </select>
               </label>
               <label class="gen-ctrl">
