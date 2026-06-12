@@ -15,7 +15,15 @@ export const PROVIDER_OPTIONS: readonly { value: Exclude<AIProvider, 'onair'>; l
 ];
 
 export const PROVIDER_MODELS: Record<AIProvider, readonly string[]> = {
-  openai:   ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1', 'o3-mini'],
+  openai:   [
+    'gpt-5.5',
+    'gpt-5.4',
+    'gpt-5.4-mini',
+    'gpt-5',
+    'gpt-5-mini',
+    'gpt-4.1',
+    'gpt-4o-mini',
+  ],
   gemini:   ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-3-flash-preview', 'gemini-3-pro-preview'],
   claude:   ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-6'],
   ollama:   ['gemma3:4b', 'gemma3:1b', 'qwen2.5:3b', 'llama3.2:3b'],
@@ -25,7 +33,7 @@ export const PROVIDER_MODELS: Record<AIProvider, readonly string[]> = {
 };
 
 export const DEFAULT_MODELS: Record<AIProvider, string> = {
-  openai:   'gpt-4o-mini',
+  openai:   'gpt-5.4-mini',
   gemini:   'gemini-2.5-flash',
   claude:   'claude-haiku-4-5-20251001',
   ollama:   'qwen2.5:3b',

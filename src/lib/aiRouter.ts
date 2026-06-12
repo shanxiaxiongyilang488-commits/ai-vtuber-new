@@ -57,17 +57,42 @@ async function parseJsonResponse(res: Response, provider: Provider): Promise<any
 }
 
 async function callOpenAI(apiKey: string, model: string, messages: Message[]): Promise<string> {
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+  const systemPrompt = messages.find((message) => message.role === "system")?.content ?? "";
+  const input = messages
+    .filter((message) => message.role !== "system")
+    .map((message) => ({
+      role: message.role,
+      content: message.content
+    }));
+  const res = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`
     },
-    body: JSON.stringify({ model, messages })
+    body: JSON.stringify({
+      model,
+      ...(systemPrompt ? { instructions: systemPrompt } : {}),
+      input,
+      store: false
+    })
   });
 
-  const data = await parseJsonResponse(res, "openai");
-  return data?.choices?.[0]?.message?.content ?? "";
+  if (!res.ok) {
+    const message = await res.text().catch(() => `HTTP ${res.status}`);
+    throw new Error(`provider=openai model=${model} message=${message}`);
+  }
+
+  const data = await res.json() as {
+    output_text?: unknown;
+    output?: Array<{ content?: Array<{ type?: unknown; text?: unknown }> }>;
+  };
+  if (typeof data.output_text === "string") return data.output_text;
+  return data.output
+    ?.flatMap((item) => item.content ?? [])
+    .filter((item) => item.type === "output_text" && typeof item.text === "string")
+    .map((item) => item.text as string)
+    .join("") ?? "";
 }
 
 async function callGemini(apiKey: string, model: string, messages: Message[]): Promise<string> {
@@ -122,7 +147,7 @@ async function callAnthropic(apiKey: string, model: string, messages: Message[])
   return data?.content?.[0]?.text ?? "";
 }
 
-export async function generateText({ model = "gpt-4o-mini", messages }: GenerateTextParams): Promise<string> {
+export async function generateText({ model = "gpt-5.4-mini", messages }: GenerateTextParams): Promise<string> {
   try {
     const provider = detectProvider(model);
     const apiKey = await getApiKey(provider);
@@ -173,7 +198,7 @@ async function openaiHandler({ prompt, character, model }: HandlerParams): Promi
   console.log("🔥 OpenAI 呼び出し開始");
 
   return await generateText({
-    model: model || character.ollamaModel || "gpt-4o-mini",
+    model: model || character.ollamaModel || "gpt-5.4-mini",
     messages: [
       { role: "system", content: buildCharacterSystemPrompt(character) },
       { role: "user", content: prompt }

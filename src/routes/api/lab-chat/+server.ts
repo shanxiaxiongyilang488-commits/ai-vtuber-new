@@ -9,7 +9,7 @@ import { chatLMStudio, LM_STUDIO_DEFAULT_MODEL as PROVIDER_LM_STUDIO_DEFAULT_MOD
 import { chatOllama, OLLAMA_DEFAULT_MODEL } from '$lib/providers/ollama';
 import { chatOpenAI, OPENAI_DEFAULT_MODEL } from '$lib/providers/openai';
 import { extractReplyText, logEmptyReply } from '$lib/providers/types';
-import { getProviderKey, readSettings } from '$lib/server/settings';
+import { readSettings } from '$lib/server/settings';
 
 type Provider = 'openai' | 'gemini' | 'claude' | 'ollama' | 'lmstudio' | 'colab-ollama';
 type LabChatRoute =
@@ -257,41 +257,6 @@ async function parseRequest(request: Request): Promise<{ body: LabChatRequest; i
 // ================================================================
 // OpenAI — Vision content builder
 // ================================================================
-function openAIUserContent(userMessage: string, images: ImageInput[]) {
-  if (images.length === 0) return userMessage;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const parts: any[] = images.map(img => ({
-    type:      'image_url',
-    image_url: { url: img.dataUrl, detail: 'high' },
-  }));
-  parts.push({ type: 'text', text: userMessage });
-  return parts;
-}
-
-async function callOpenAI(
-  systemPrompt: string,
-  userMessage:  string,
-  model?:       string,
-  images:       ImageInput[] = [],
-): Promise<string> {
-  const apiKey = await getProviderKey('openai');
-  if (!apiKey) throw new Error('OpenAI API key が未設定');
-  const actualModel = model || 'gpt-4o-mini';
-  console.log('[OPENAI KEY PREFIX]', apiKey?.slice(0,12));
-  console.log('[OPENAI MODEL]', actualModel);
-  const { default: OpenAI } = await import('openai');
-  const client = new OpenAI({ apiKey });
-  const completion = await client.chat.completions.create({
-    model: actualModel,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user',   content: openAIUserContent(userMessage, images) as any },
-    ],
-    ...(images.length > 0 ? { max_tokens: 2400 } : {}),
-  });
-  return completion.choices[0].message.content ?? '';
-}
-
 function logVisionText(provider: string, images: ImageInput[], text: string): void {
   if (images.length === 0) return;
   const preview = text.replace(/\s+/g, ' ').slice(0, 200);
@@ -651,17 +616,33 @@ export const POST: RequestHandler = async ({ request }) => {
     console.log('[OPENAI KEY SOURCE]', 'settings.json');
     console.log('[OPENAI KEY PREFIX]', apiKey?.slice(0,12));
     console.log('[OPENAI MODEL]', actualModel);
-    const text = await chatOpenAI({
-      apiKey,
-      systemPrompt: effectiveSystemPrompt,
-      userMessage,
-      model: actualModel,
-      images,
-      maxTokens,
-    });
-    console.log(`[lab-chat] openai ok (${text.length} chars)`);
-    logVisionText('openai', images, text);
-    return json(await withMemory({ text, provider: 'openai', actualModel }, text));
+    try {
+      const text = await chatOpenAI({
+        apiKey,
+        systemPrompt: effectiveSystemPrompt,
+        userMessage,
+        model: actualModel,
+        images,
+        maxTokens,
+      });
+      console.log(`[lab-chat] openai ok (${text.length} chars)`);
+      logVisionText('openai', images, text);
+      return json(await withMemory({ text, provider: 'openai', actualModel }, text));
+    } catch (caughtError) {
+      const message = caughtError instanceof Error ? caughtError.message : String(caughtError);
+      console.error('[LAB_CHAT_API_ERROR]', {
+        provider: 'openai',
+        model: actualModel,
+        message,
+      });
+      return json({
+        error: {
+          provider: 'openai',
+          model: actualModel,
+          message,
+        },
+      }, { status: 502 });
+    }
   }
 
   // ================================================================

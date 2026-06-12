@@ -71,7 +71,7 @@ export const DEFAULT_SETTINGS: ApiSettings = {
   chatConfig: { provider: 'gemini', model: 'gemini-2.5-flash' },
   imageConfig: { provider: 'openai', model: 'gpt-image-2' },
   mediaConfig: { provider: 'fal', model: 'fal-ai/nano-banana' },
-  openai: { key: '', model: 'gpt-4o-mini' },
+  openai: { key: '', model: 'gpt-5.4-mini' },
   gemini: { key: '', model: 'gemini-2.5-flash' },
   anthropic: { key: '', model: 'claude-3-5-haiku-latest' },
   fal: { key: '' },

@@ -26,6 +26,14 @@ export interface ChatResponse {
   memory?: BuiltMemoryPrompt['debug'];
 }
 
+export interface ChatErrorResponse {
+  error: {
+    provider: string;
+    model: string;
+    message: string;
+  };
+}
+
 // =========================
 // メイン処理
 // =========================
@@ -188,17 +196,30 @@ export const POST: RequestHandler = async ({ request }) => {
       ? settings.gemini.model || 'gemini-2.5-flash'
       : actualEngine === 'claude'
         ? settings.anthropic.model || 'claude-haiku-4-5-20251001'
-        : settings.openai.model || 'gpt-4o-mini';
+        : settings.openai.model || 'gpt-5.4-mini';
 
   let text: string;
+  const actualModel = configuredChatModel || defaultModel;
 
   try {
     text = await generateText({
-      model: configuredChatModel || defaultModel,
+      model: actualModel,
       messages
     });
-  } catch (err) {
-    throw error(500, String(err));
+  } catch (caughtError) {
+    const message = caughtError instanceof Error ? caughtError.message : String(caughtError);
+    console.error('[CHAT_API_ERROR]', {
+      provider: actualEngine,
+      model: actualModel,
+      message,
+    });
+    return json({
+      error: {
+        provider: actualEngine,
+        model: actualModel,
+        message,
+      },
+    } satisfies ChatErrorResponse, { status: 502 });
   }
 
   await saveMemoryTurn(text);

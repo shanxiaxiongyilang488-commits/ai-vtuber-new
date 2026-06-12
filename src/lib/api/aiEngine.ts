@@ -1,5 +1,5 @@
 import type { AIEngine } from '$lib/types/character';
-import type { ChatRequest, ChatResponse } from '../../routes/api/chat/+server';
+import type { ChatErrorResponse, ChatRequest, ChatResponse } from '../../routes/api/chat/+server';
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -88,8 +88,12 @@ export class OpenAIEngine implements IAIEngine {
     });
 
     if (!response.ok) {
-      const msg = await response.text().catch(() => `HTTP ${response.status}`);
-      throw new Error(`[OpenAIEngine] /api/chat error: ${msg}`);
+      const fallbackMessage = `HTTP ${response.status}`;
+      const data = await response.json().catch(() => null) as ChatErrorResponse | null;
+      const provider = data?.error?.provider ?? 'openai';
+      const model = data?.error?.model ?? 'unknown';
+      const message = data?.error?.message ?? fallbackMessage;
+      throw new Error(`provider=${provider} model=${model} message=${message}`);
     }
 
     const data: ChatResponse = await response.json();

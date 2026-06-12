@@ -5212,7 +5212,13 @@ async function removeReferenceImage(i: number): Promise<void> {
         } else {
           try {
             const errData = await res?.json();
-            if (errData?.message) userMsg = errData.message;
+            if (errData?.error?.message) {
+              const provider = errData.error.provider ?? 'unknown';
+              const model = errData.error.model ?? 'unknown';
+              userMsg = `provider=${provider} model=${model} message=${errData.error.message}`;
+            } else if (errData?.message) {
+              userMsg = errData.message;
+            }
           } catch { /* ignore */ }
         }
         console.error('[Lab] response fail: HTTP', res?.status ?? 'no-response', userMsg);

@@ -10,7 +10,7 @@ const CLASSIFIER_SYSTEM_PROMPT = [
 
 async function getClassifierModel(): Promise<string> {
   const settings = await readSettings();
-  return settings.gemini.key ? settings.gemini.model || 'gemini-2.5-flash' : settings.openai.model || 'gpt-4o-mini';
+  return settings.gemini.key ? settings.gemini.model || 'gemini-2.5-flash' : settings.openai.model || 'gpt-5.4-mini';
 }
 
 async function getClassifierEngine(): Promise<'openai' | 'gemini'> {
