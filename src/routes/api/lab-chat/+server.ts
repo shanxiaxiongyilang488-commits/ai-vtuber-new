@@ -614,7 +614,7 @@ export const POST: RequestHandler = async ({ request }) => {
     const actualModel = model || (provider === settings.chatConfig.provider ? settings.chatConfig.model : settings.openai.model) || OPENAI_DEFAULT_MODEL;
     const apiKey = openaiApiKey;
     console.log('[OPENAI KEY SOURCE]', 'settings.json');
-    console.log('[OPENAI KEY PREFIX]', apiKey?.slice(0,12));
+    console.log('[OPENAI KEY CONFIGURED]', Boolean(apiKey));
     console.log('[OPENAI MODEL]', actualModel);
     try {
       const text = await chatOpenAI({
@@ -728,7 +728,7 @@ export const POST: RequestHandler = async ({ request }) => {
       const apiKey = openaiApiKey;
       if (!apiKey) throw error(500, 'OpenAI API key が未設定');
       console.log('[OPENAI KEY SOURCE]', 'settings.json');
-      console.log('[OPENAI KEY PREFIX]', apiKey?.slice(0,12));
+      console.log('[OPENAI KEY CONFIGURED]', Boolean(apiKey));
       console.log('[OPENAI MODEL]', fallbackModel);
       const text = await chatOpenAI({
         apiKey,
