@@ -584,29 +584,37 @@
             <div class="hint center">{character.name}との会話を始めてください。</div>
           {/if}
           {#each messages as message (message.id)}
+            <!-- LABチャットと同じ2カラム構造: [顔アイコン] [吹き出し] -->
             <article class:user={message.role === 'user'} class:assistant={message.role === 'assistant'}>
-              {#if message.role === 'assistant'}
-                <!-- LABチャットと同じ顔アイコン表示: [丸アイコン] 名前 AIバッジ -->
-                <div class="msg-id">
-                  <span class="msg-avatar">
-                    {#if imageDataUrl}
-                      <img src={imageDataUrl} alt={character.name} />
-                    {:else}
-                      <span class="msg-avatar-fallback">{character.name.slice(0, 1)}</span>
-                    {/if}
-                  </span>
-                  <span class="msg-name">{character.name}</span>
-                  <span class="msg-ai" class:pending={!routedProvider.implemented}>
-                    <span class="msg-ai-icon">{routedProvider.icon}</span>{routedProvider.label}
-                  </span>
+              <div class="msg-avatar">
+                {#if message.role === 'assistant'}
+                  {#if imageDataUrl}
+                    <img src={imageDataUrl} alt={character.name} />
+                  {:else}
+                    <span class="msg-avatar-fallback">{character.name.slice(0, 1)}</span>
+                  {/if}
+                  <!-- ⑥ 予約枠: 将来の表情アイコン（emotion）。今回は normal 固定 / 表情変化は未実装 -->
+                  <span class="emotion-badge" title="EMOTION: {emotion}">{EMOTION_ICONS[emotion]}</span>
+                {:else}
+                  <span class="msg-avatar-fallback user-face">👤</span>
+                {/if}
+              </div>
+              <div class="msg-bubble">
+                <div class="bubble-head">
+                  {#if message.role === 'assistant'}
+                    <span class="msg-name">{character.name}</span>
+                    <span class="msg-ai" class:pending={!routedProvider.implemented}>
+                      <span class="msg-ai-icon">{routedProvider.icon}</span>{routedProvider.label}
+                    </span>
+                  {:else}
+                    <span class="msg-name">👤 YOU</span>
+                  {/if}
                 </div>
-              {:else}
-                <div class="msg-id"><span class="msg-name">YOU</span></div>
-              {/if}
-              {#if message.imageUrl}
-                <img class="message-image" src={message.imageUrl} alt="attached" />
-              {/if}
-              {#if message.text}<div>{message.text}</div>{/if}
+                {#if message.imageUrl}
+                  <img class="message-image" src={message.imageUrl} alt="attached" />
+                {/if}
+                {#if message.text}<div class="bubble-text">{message.text}</div>{/if}
+              </div>
             </article>
           {/each}
           {#if sending}<div class="hint center">{character.name} is thinking...</div>{/if}
@@ -767,37 +775,61 @@
     font-size: 8px;
     font-weight: 800;
   }
-  .messages { padding: 16px; overflow-y: auto; }
-  article {
-    position: relative;
-    max-width: 82%;
-    margin-bottom: 14px;
-    padding: 12px 14px 11px;
-    border-radius: 18px;
-    backdrop-filter: blur(2px);
-  }
-  /* LABチャットと同じ顔アイコン表示: [丸アイコン] 名前 AIバッジ */
-  .msg-id { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
+  .messages { padding: 16px; overflow-y: auto; display: flex; flex-direction: column; }
+  /* ① 2カラム構造: [顔アイコン] [吹き出し] */
+  article { display: flex; gap: 12px; align-items: flex-end; max-width: 88%; margin-bottom: 18px; }
+  article.assistant { align-self: flex-start; }
+  article.user { align-self: flex-end; flex-direction: row-reverse; }
+
+  /* ⑤ 左カラム: 56-64px 丸型顔アイコン */
   .msg-avatar {
+    position: relative;
     flex-shrink: 0;
-    width: 34px;
-    height: 34px;
+    width: 60px;
+    height: 60px;
     border-radius: 50%;
-    overflow: hidden;
     display: grid;
     place-items: center;
     background: #020617;
     border: 1.5px solid rgba(34,211,238,.5);
-    box-shadow: 0 0 0 2px rgba(34,211,238,.07), 0 0 12px rgba(34,211,238,.32);
+    box-shadow: 0 0 0 2px rgba(34,211,238,.07), 0 0 14px rgba(34,211,238,.32);
   }
-  .msg-avatar img { width: 100%; height: 100%; object-fit: cover; object-position: top; }
-  .msg-avatar-fallback { color: #67e8f9; font-size: 14px; font-weight: 800; }
+  .msg-avatar img { width: 100%; height: 100%; object-fit: cover; object-position: top; border-radius: 50%; }
+  .msg-avatar-fallback { color: #67e8f9; font-size: 22px; font-weight: 800; }
+  article.user .msg-avatar {
+    border-color: rgba(168,85,247,.55);
+    box-shadow: 0 0 0 2px rgba(168,85,247,.07), 0 0 14px rgba(168,85,247,.3);
+  }
+  article.user .msg-avatar-fallback { font-size: 26px; }
+
+  /* 右カラム: 吹き出し */
+  .msg-bubble {
+    min-width: 0;
+    padding: 11px 14px 12px;
+    backdrop-filter: blur(2px);
+  }
+  article.assistant .msg-bubble {
+    background: linear-gradient(135deg, rgba(34,211,238,.13), rgba(34,211,238,.05));
+    border: 1px solid rgba(34,211,238,.38);
+    border-radius: 4px 18px 18px 18px;
+    box-shadow: 0 0 14px rgba(34,211,238,.28), inset 0 0 12px rgba(34,211,238,.07);
+  }
+  article.user .msg-bubble {
+    background: linear-gradient(135deg, rgba(168,85,247,.16), rgba(168,85,247,.08));
+    border: 1px solid rgba(168,85,247,.4);
+    border-radius: 18px 4px 18px 18px;
+    box-shadow: 0 0 14px rgba(168,85,247,.28), inset 0 0 12px rgba(168,85,247,.08);
+  }
+
+  /* ② 吹き出しヘッダー: 名前 + AIバッジ 横並び */
+  .bubble-head { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
   .msg-name { font-size: 12px; font-weight: 800; letter-spacing: .03em; color: #f8fafc; }
+  article.assistant .msg-name { color: #67e8f9; text-shadow: 0 0 8px rgba(34,211,238,.5); }
+  article.user .msg-name { color: #d8b4fe; text-shadow: 0 0 8px rgba(168,85,247,.5); }
   .msg-ai {
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    margin-left: auto;
     padding: 2px 9px;
     border-radius: 999px;
     border: 1px solid rgba(34,211,238,.35);
@@ -809,20 +841,9 @@
   }
   .msg-ai.pending { border-color: rgba(148,163,184,.3); background: rgba(148,163,184,.12); color: #94a3b8; box-shadow: none; }
   .msg-ai-icon { font-size: 11px; line-height: 1; }
-  article.user .msg-name { color: #c4b5fd; }
-  /* ② 本文 18px / 行間 1.8 */
-  article div { font-size: 18px; line-height: 1.8; white-space: pre-wrap; }
-  article.user {
-    margin-left: auto;
-    background: linear-gradient(135deg, rgba(168,85,247,.16), rgba(168,85,247,.08));
-    border: 1px solid rgba(168,85,247,.4);
-    box-shadow: 0 0 14px rgba(168,85,247,.28), inset 0 0 12px rgba(168,85,247,.08);
-  }
-  article.assistant {
-    background: linear-gradient(135deg, rgba(34,211,238,.13), rgba(34,211,238,.05));
-    border: 1px solid rgba(34,211,238,.38);
-    box-shadow: 0 0 14px rgba(34,211,238,.28), inset 0 0 12px rgba(34,211,238,.07);
-  }
+
+  /* ⑤ 本文 18px / 行間 1.8 */
+  .bubble-text { font-size: 18px; line-height: 1.8; white-space: pre-wrap; word-break: break-word; }
   .hint { color: #64748b; font-size: 11px; }
   .hint.center { text-align: center; align-self: center; padding: 30px; }
   .message-image { display: block; max-width: 100%; max-height: 320px; margin-bottom: 6px; border-radius: 8px; border: 1px solid rgba(148,163,184,.2); }
