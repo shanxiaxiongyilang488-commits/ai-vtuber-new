@@ -8,7 +8,6 @@ import {
   getYamlScenePanel,
   parseYamlSceneDocument,
 } from '$lib/server/yamlSceneParser';
-import { getCharacter, getCharacterReferenceDataUrl } from '$lib/server/characterRegistry';
 import type { GeneratedImage, ImageSize } from '$lib/server/imageProviders/types';
 
 const DEFAULT_FAL_IMAGE_MODEL = 'fal-ai/nano-banana-pro';
@@ -249,44 +248,6 @@ type ResolvedCharacterRef = {
   image: string;
 };
 
-function registryReferenceImagesFromText(text: string): ResolvedCharacterRef[] {
-  const ids = Array.from(new Set([
-    ...Array.from(text.matchAll(/\bcharacter:([a-z0-9_-]+)\b/gi)).map((match) => match[1].toLowerCase()),
-    ...Array.from(text.matchAll(/\bN-\d{2}\b/gi)).map((match) => match[0].toLowerCase()),
-  ]));
-
-  return ids
-    .map((id) => {
-      try {
-        console.log('[YAML_CHARACTER_LOOKUP]', id);
-        const ref = getCharacterReferenceDataUrl(id);
-        if (ref) {
-          console.log('[YAML_CHARACTER_FOUND]', id);
-          console.log('[YAML_IMAGE_REF]', id);
-        }
-        return ref ? {
-          source: 'character_registry',
-          id,
-          fileName: `data/project/characters/${id}.yaml`,
-          image: ref,
-        } : null;
-      } catch (caughtError) {
-        console.warn('[YAML_IMAGE_REF_ERROR]', id, caughtError);
-        return null;
-      }
-    })
-    .filter((ref): ref is ResolvedCharacterRef => Boolean(ref));
-}
-
-function storyCharacterRefIds(yaml: string): string[] {
-  const block = yaml.match(/(?:^|\n)refs:\s*\n([\s\S]*?)(?=\n[A-Za-z0-9_]+:|$)/i)?.[1] ?? '';
-  return Array.from(new Set(block
-    .split(/\r?\n/)
-    .map((line) => line.match(/^\s*-\s*["']?([a-z0-9_-]+)["']?\s*$/i)?.[1] ?? '')
-    .map((id) => id.toLowerCase())
-    .filter(Boolean)));
-}
-
 export const POST: RequestHandler = async ({ request }) => {
   let body: YamlImageRequest;
   try {
@@ -315,49 +276,20 @@ export const POST: RequestHandler = async ({ request }) => {
   const requestedStoryCharacterSet = new Set(
     requestedStoryCharacterNames.map((name) => name.toLocaleLowerCase('ja-JP')),
   );
-  const projectCharacterIds = storyCharacterRefIds(yaml);
-  const projectCharacters = projectCharacterIds.flatMap((id) => {
-    const character = getCharacter(id);
-    const image = getCharacterReferenceDataUrl(id);
-    return character?.characterBible ? [{
-      character,
-      image,
-    }] : [];
-  });
-  const projectCharacterBible: CharacterBible | null = projectCharacters.length > 0
-    ? {
-      unitId: projectCharacterIds.map((id) => id.toUpperCase()).join('+'),
-      characters: projectCharacters.flatMap(({ character }) => character.characterBible?.characters ?? []),
-    }
-    : null;
+  const projectCharacterIds: string[] = [];
   const requestCharacterBible = body.characterBible?.unitId?.trim()
     && Array.isArray(body.characterBible.characters)
     && body.characterBible.characters.length > 0
     ? body.characterBible
     : null;
-  const characterBible = projectCharacterBible ?? requestCharacterBible;
-  const projectCharacterRefImages = projectCharacters
-    .map(({ image }) => image)
-    .filter((image): image is string => Boolean(image));
+  const characterBible = requestCharacterBible;
   const suppliedCharacterRefImages = (body.characterRefImages ?? body.refImages ?? [])
     .filter((image): image is string => typeof image === 'string' && image.startsWith('data:image/'));
   const storyReferenceImages = (body.storyReferenceImages ?? [])
     .filter((image): image is string => typeof image === 'string' && image.startsWith('data:image/'));
-  const requestCharacterRefImages = projectCharacterRefImages.length > 0
-    ? projectCharacterRefImages
-    : suppliedCharacterRefImages;
+  const requestCharacterRefImages = suppliedCharacterRefImages;
   const activeCharacterRefs = requestCharacterRefImages.map((image, index) => {
-    const projectCharacter = projectCharacters[index]?.character;
-    const meta = projectCharacter
-      ? {
-        source: 'project_character_library',
-        id: projectCharacter.id,
-        name: projectCharacter.name,
-        role: projectCharacter.role,
-        description: projectCharacter.description,
-        fileName: `data/project/characters/${projectCharacter.id}.yaml`,
-      }
-      : (body.characterRefs?.find((ref) => ref.image === image) ?? body.characterRefs?.[index]);
+    const meta = body.characterRefs?.find((ref) => ref.image === image) ?? body.characterRefs?.[index];
     return {
       source: meta?.source?.trim() || 'request_character_ref',
       id: meta?.id?.trim() || `REF-${index + 1}`,
@@ -378,7 +310,7 @@ export const POST: RequestHandler = async ({ request }) => {
     hasCharacterBible: Boolean(characterBible),
     hasStoryYaml: Boolean(yaml),
     projectCharacterIds,
-    characterSource: projectCharacters.length > 0 ? 'project_character_library' : 'request',
+    characterSource: 'request_only',
   });
   console.log('[STORY_REF_IMAGE]', {
     storyId: body.activeStory?.id ?? null,
@@ -534,8 +466,7 @@ export const POST: RequestHandler = async ({ request }) => {
   });
   console.log('[MEDIA_PROVIDER]', 'fal');
   console.log('[MEDIA_MODEL]', mediaModel.id);
-  const registryRefs = registryReferenceImagesFromText(`${prompt}\n${charNames.join('\n')}`);
-  const finalCharacterRefs = [...activeCharacterRefs, ...registryRefs].filter((ref, index, refs) =>
+  const finalCharacterRefs = activeCharacterRefs.filter((ref, index, refs) =>
     refs.findIndex((candidate) => candidate.image === ref.image) === index,
   );
   const refImages = [
@@ -545,7 +476,7 @@ export const POST: RequestHandler = async ({ request }) => {
   console.log('[YAML_IMAGE_REF_COUNT]', refImages.length);
   console.log('[YAML_IMAGE_REF_PRIORITY]', {
     primaryCharacterRefs: activeCharacterRefs.length,
-    supplementalRegistryRefs: registryRefs.length,
+    supplementalRegistryRefs: 0,
   });
   console.log('[STORY_REFS]', storyRefs.map((ref) => ({
     name: ref.name,
@@ -669,8 +600,7 @@ export const POST: RequestHandler = async ({ request }) => {
   const result = await generateMediaImage({
     prompt: finalPrompt,
     size,
-    model,
-    requestedModel: mediaModel.id,
+    selectedModelId: mediaModel.id,
     refImages: referenceImages,
     editMode: referenceImages.length > 0,
   });

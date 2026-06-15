@@ -8,6 +8,7 @@ interface VideoRequest {
   duration?: number;
   audio?: boolean;
   referenceImage?: string;
+  task?: string;
 }
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -20,10 +21,12 @@ export const POST: RequestHandler = async ({ request }) => {
 
   const prompt = body.prompt?.trim();
   if (!prompt) throw error(400, 'prompt is required');
-  if (!/^data:image\/(?:png|jpeg|webp);base64,/i.test(body.referenceImage ?? '')) {
-    throw error(400, 'referenceImage is required for Kling image-to-video');
+  const task = body.task?.trim().toLowerCase() || 'image-to-video';
+  const requiresReference = /image|reference/.test(task);
+  if (requiresReference && !/^data:image\/(?:png|jpeg|webp);base64,/i.test(body.referenceImage ?? '')) {
+    throw error(400, `referenceImage is required for ${task}`);
   }
-  const referenceImage = body.referenceImage as string;
+  const referenceImage = body.referenceImage ?? '';
   const duration = body.duration ?? 5;
   if (!Number.isInteger(duration) || duration < 3 || duration > 15) {
     throw error(400, 'duration must be an integer from 3 to 15 seconds');
@@ -45,6 +48,7 @@ export const POST: RequestHandler = async ({ request }) => {
     duration,
     audio: body.audio === true,
     referenceImage,
+    task,
   });
 
   return json({ url: result.url, model: result.model });

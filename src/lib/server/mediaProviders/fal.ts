@@ -34,6 +34,8 @@ const FAL_MODEL_MAP: Record<string, string> = {
   'flux-pro': 'fal-ai/flux-pro/v1.1',
   'Flux Pro': 'fal-ai/flux-pro/v1.1',
   'fal-ai/flux-pro/v1.1': 'fal-ai/flux-pro/v1.1',
+  'openai/gpt-image-2/edit': 'openai/gpt-image-2/edit',
+  'fal-ai/gpt-image-2/edit': 'openai/gpt-image-2/edit',
   kling: DEFAULT_FAL_VIDEO_MODEL,
   'kling-3-pro': DEFAULT_FAL_VIDEO_MODEL,
   'fal-ai/kling-video/v3/pro/image-to-video': DEFAULT_FAL_VIDEO_MODEL,
@@ -99,12 +101,40 @@ export async function generateFalImage(input: ImageGenerationInput): Promise<Gen
   const falKey = await getProviderKey('fal');
   if (!falKey) throw error(500, 'FAL API key is not configured');
 
+  const requestId = input.requestId ?? null;
   const falModel = resolveFalMediaModel(input.model);
   const hasRefs = input.refImages.length > 0;
-  const isNanoBanana = /^fal-ai\/nano-banana(?:-pro|-2)?$/.test(falModel);
+  console.log('[FAL_INPUT_IMAGES]', {
+    requestId,
+    count: input.refImages.length,
+  });
+  const isNanoBananaEdit = /^fal-ai\/nano-banana(?:-pro|-2)?\/edit$/.test(falModel);
+  const nanoBananaBaseModel = falModel.replace(/\/edit$/, '');
+  const isNanoBanana = /^fal-ai\/nano-banana(?:-pro|-2)?$/.test(nanoBananaBaseModel);
   const isFluxKontext = falModel === 'fal-ai/flux-pro/kontext';
-  const endpointModel = isNanoBanana && (input.editMode || hasRefs)
-    ? `${falModel}/edit`
+  const isGptImage2 = falModel === 'openai/gpt-image-2';
+  const isGptImage2Edit = falModel === 'openai/gpt-image-2/edit' || (isGptImage2 && hasRefs);
+  const isIdeogramV3Remix = falModel === 'fal-ai/ideogram/v3' && hasRefs;
+  const isIdeogramCharacter = falModel === 'fal-ai/ideogram/character';
+  const isIdeogramCharacterEdit = falModel === 'fal-ai/ideogram/character/edit';
+  if (isGptImage2Edit && !hasRefs) {
+    console.error('[FAL GPT IMAGE 2 EDIT MISSING image_urls]', {
+      requestId,
+      refImages: input.refImages.length,
+      model: falModel,
+      editMode: input.editMode,
+    });
+    throw error(400, 'GPT Image 2 Edit requires at least one reference image in image_urls');
+  }
+  if (isNanoBananaEdit && !hasRefs) {
+    throw error(400, 'Nano Banana Edit requires at least one reference image in image_urls');
+  }
+  const endpointModel = isNanoBanana && (isNanoBananaEdit || input.editMode || hasRefs)
+    ? `${nanoBananaBaseModel}/edit`
+    : isGptImage2Edit
+      ? 'openai/gpt-image-2/edit'
+    : isIdeogramV3Remix
+      ? 'fal-ai/ideogram/v3/remix'
     : isFluxKontext && !hasRefs
       ? 'fal-ai/flux-pro/kontext/text-to-image'
       : falModel;
@@ -120,7 +150,7 @@ export async function generateFalImage(input: ImageGenerationInput): Promise<Gen
     falBody.aspect_ratio = hasRefs ? 'auto' : sizeToAspectRatio(input.size);
     falBody.safety_tolerance = '4';
     if (hasRefs) falBody.image_urls = input.refImages;
-    if (falModel === 'fal-ai/nano-banana-pro' || falModel === 'fal-ai/nano-banana-2') {
+    if (nanoBananaBaseModel === 'fal-ai/nano-banana-pro' || nanoBananaBaseModel === 'fal-ai/nano-banana-2') {
       falBody.resolution = '1K';
     }
   } else if (isFluxKontext) {
@@ -129,6 +159,17 @@ export async function generateFalImage(input: ImageGenerationInput): Promise<Gen
     falBody.enhance_prompt = false;
     falBody.aspect_ratio = sizeToAspectRatio(input.size);
     if (hasRefs) falBody.image_url = input.refImages[0];
+  } else if (isGptImage2Edit) {
+    falBody.image_urls = input.refImages;
+    falBody.image_size = 'auto';
+    falBody.quality = 'high';
+  } else if (isIdeogramV3Remix) {
+    falBody.image_url = input.refImages[0];
+  } else if (isIdeogramCharacter) {
+    falBody.reference_image_urls = input.refImages;
+  } else if (isIdeogramCharacterEdit) {
+    falBody.image_url = input.refImages[0];
+    falBody.reference_image_urls = input.refImages;
   } else {
     falBody.image_size = sizeToFluxImageSize(input.size);
     falBody.num_inference_steps = 30;
@@ -136,12 +177,57 @@ export async function generateFalImage(input: ImageGenerationInput): Promise<Gen
   }
 
   const endpoint = `https://fal.run/${endpointModel}`;
-  console.log('[FAL REQUEST]');
-  console.log('url:', endpoint);
-  console.log('model:', falModel);
+  const imageUrlCount = Array.isArray(falBody.image_urls)
+    ? falBody.image_urls.length
+    : falBody.image_url
+      ? 1
+      : Array.isArray(falBody.reference_image_urls)
+        ? falBody.reference_image_urls.length
+        : 0;
+  console.log('[FAL_IMAGE_URLS]', {
+    requestId,
+    count: imageUrlCount,
+  });
+  console.log('[FAL_REQUEST_MODEL]', {
+    requestId,
+    model: endpointModel,
+  });
+  console.log('[FAL_REQUEST]', {
+    requestId,
+    url: endpoint,
+    model: falModel,
+    endpointModel,
+    editMode: input.editMode,
+    refImages: input.refImages.length,
+    bodyKeys: Object.keys(falBody),
+    imageUrls: Array.isArray(falBody.image_urls) ? falBody.image_urls.length : 0,
+    imageUrl: Boolean(falBody.image_url),
+    referenceImageUrls: Array.isArray(falBody.reference_image_urls)
+      ? falBody.reference_image_urls.length
+      : 0,
+  });
   console.log('[MEDIA_PROVIDER]', 'fal');
   console.log('[MEDIA_MODEL]', falModel);
-  console.log('[FAL_MEDIA_IMAGE]', { falModel, endpointModel, refImages: input.refImages.length });
+  console.log('[FAL_MEDIA_IMAGE]', {
+    requestId,
+    falModel,
+    endpointModel,
+    refImages: input.refImages.length,
+  });
+  console.log('[REF IMAGES PIPELINE mediaProviders/fal]', {
+    received: input.refImages.length,
+    convertedToImageUrls: Array.isArray(falBody.image_urls) ? falBody.image_urls.length : 0,
+    endpointModel,
+  });
+  if (isGptImage2Edit) {
+    console.log('[FAL GPT IMAGE 2 EDIT PAYLOAD FIELDS]', JSON.stringify({
+      image_urls: falBody.image_urls ?? null,
+      image_url: falBody.image_url ?? null,
+      image: falBody.image ?? null,
+      files: falBody.files ?? null,
+    }, null, 2));
+    console.log('[FAL GPT IMAGE 2 EDIT PAYLOAD]', JSON.stringify(falBody, null, 2));
+  }
 
   const falRes = await fetch(endpoint, {
     method: 'POST',
@@ -151,6 +237,14 @@ export async function generateFalImage(input: ImageGenerationInput): Promise<Gen
 
   if (!falRes.ok) {
     const msg = await falRes.text().catch(() => `HTTP ${falRes.status}`);
+    console.error('[FAL_RESULT]', {
+      requestId,
+      ok: false,
+      status: falRes.status,
+      model: falModel,
+      endpointModel,
+      error: msg.slice(0, 500),
+    });
     console.error('[FAL_MEDIA_ERROR]', msg);
     console.log('[FAL_FALLBACK]', { attempted: false, target: null });
     throw error(falRes.status >= 500 ? 500 : 400, `FAL API error: ${msg.slice(0, 300)}`);
@@ -158,7 +252,27 @@ export async function generateFalImage(input: ImageGenerationInput): Promise<Gen
 
   const falData = await falRes.json();
   const images = normalizeImages(falData?.images ?? []);
-  if (images.length === 0) throw error(500, 'No image URL returned from FAL');
+  console.log('[FAL_RESULT]', {
+    requestId,
+    ok: true,
+    status: falRes.status,
+    model: falModel,
+    endpointModel,
+    responseKeys: Object.keys(falData ?? {}),
+    images: images.length,
+  });
+  if (images.length === 0) {
+    console.error('[FAL_RESULT]', {
+      requestId,
+      ok: false,
+      status: falRes.status,
+      model: falModel,
+      endpointModel,
+      reason: 'no_image_url',
+      responseKeys: Object.keys(falData ?? {}),
+    });
+    throw error(500, 'No image URL returned from FAL');
+  }
   await recordImageGenerationUsage({
     provider: 'fal',
     model: falModel,
@@ -173,13 +287,14 @@ export async function generateFalVideo(input: {
   duration: number;
   audio: boolean;
   referenceImage: string;
+  task?: string;
 }): Promise<{ url: string; model: string }> {
   const falKey = await getProviderKey('fal');
   if (!falKey) throw error(500, 'FAL API key is not configured');
 
   const model = resolveFalMediaModel(input.model, DEFAULT_FAL_VIDEO_MODEL);
-  if (!(model in VIDEO_MODEL_CONFIG)) throw error(400, `Unknown FAL video model: ${model}`);
-  const cfg = VIDEO_MODEL_CONFIG[model as keyof typeof VIDEO_MODEL_CONFIG];
+  const knownConfig = VIDEO_MODEL_CONFIG[model as keyof typeof VIDEO_MODEL_CONFIG];
+  const task = input.task?.toLowerCase() || 'image-to-video';
 
   console.log('[MEDIA_PROVIDER]', 'fal');
   console.log('[MEDIA_MODEL]', model);
@@ -191,18 +306,23 @@ export async function generateFalVideo(input: {
     referenceImage: Boolean(input.referenceImage),
   });
 
-  const falBody = cfg.buildBody(
-    input.prompt.trim(),
-    input.duration,
-    input.audio,
-    input.referenceImage,
-  );
+  const falBody: Record<string, unknown> = knownConfig
+    ? knownConfig.buildBody(input.prompt.trim(), input.duration, input.audio, input.referenceImage)
+    : {
+        prompt: input.prompt.trim(),
+        duration: String(input.duration),
+        generate_audio: input.audio,
+      };
+  if (!knownConfig && input.referenceImage) {
+    if (/reference-to-video/.test(task)) falBody.image_urls = [input.referenceImage];
+    else falBody.image_url = input.referenceImage;
+  }
   console.log('[FAL_VIDEO_PAYLOAD]', {
     ...falBody,
     start_image_url: `${input.referenceImage.slice(0, 32)}...`,
   });
 
-  const falRes = await fetch(`https://queue.fal.run/${cfg.endpoint}`, {
+  const falRes = await fetch(`https://queue.fal.run/${knownConfig?.endpoint ?? model}`, {
     method: 'POST',
     headers: { Authorization: `Key ${falKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(falBody),
@@ -258,7 +378,12 @@ export async function generateFalVideo(input: {
     throw error(500, `${model} result error: ${msg.slice(0, 300)}`);
   }
   const falData = await resultRes.json();
-  const videoUrl = getNestedValue(falData, cfg.resultPath);
+  const videoUrl = knownConfig
+    ? getNestedValue(falData, knownConfig.resultPath)
+    : getNestedValue(falData, ['video', 'url'])
+      ?? getNestedValue(falData, ['videos', '0', 'url'])
+      ?? getNestedValue(falData, ['output', 'video', 'url'])
+      ?? getNestedValue(falData, ['url']);
   if (!videoUrl) throw error(500, `No video URL in response from ${model}`);
   return { url: videoUrl, model };
 }

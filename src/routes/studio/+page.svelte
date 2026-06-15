@@ -6,6 +6,16 @@
     normalizeMediaModelId,
     type MediaProviderName,
   } from '$lib/config/mediaModels';
+  import {
+    CHARACTER_PROFILE_FILENAME,
+    type CharacterProfileJson,
+  } from '$lib/types/characterProfile';
+  import type {
+    FalDiscoveredModel,
+    FalDiscoveryResponse,
+    FalModelCatalog,
+    FalModelCategory,
+  } from '$lib/types/falDiscovery';
 
   // ============================================================
   // State
@@ -317,7 +327,14 @@ ${lines.map(line => `  - ${line}`).join('\n')}
   type StudioProvider = MediaProviderName;
   type StudioProviderChoice = StudioProvider;
   type StudioModelId = string;
-  type StudioModelOption = { id: StudioModelId; label: string; provider: StudioProvider; edit: boolean; apiModel: string };
+  type StudioModelOption = {
+    id: StudioModelId;
+    label: string;
+    provider: StudioProvider;
+    edit: boolean;
+    apiModel: string;
+    task?: string;
+  };
   const DEFAULT_STUDIO_MODELS: StudioModelOption[] = AVAILABLE_IMAGE_MODELS.map((model) => ({
     id: model.id,
     label: model.label,
@@ -325,25 +342,80 @@ ${lines.map(line => `  - ${line}`).join('\n')}
     edit: model.edit,
     apiModel: model.apiModel,
   }));
-  let studioModels = $state<StudioModelOption[]>(DEFAULT_STUDIO_MODELS);
-
+  type FalRecommendedCategory = Exclude<FalModelCategory, '3d'>;
+  const FAL_RECOMMENDED_MODEL_IDS: Record<FalRecommendedCategory, readonly string[]> = {
+    image: [
+      'fal-ai/nano-banana-2',
+      'fal-ai/nano-banana-2/edit',
+      'fal-ai/nano-banana-pro',
+      'fal-ai/nano-banana-pro/edit',
+      'openai/gpt-image-2',
+      'openai/gpt-image-2/edit',
+      'fal-ai/ideogram/v3',
+      'fal-ai/ideogram/character',
+      'fal-ai/ideogram/character/edit',
+      'fal-ai/flux-pro/v1.1',
+      'fal-ai/recraft/v3/text-to-image',
+      'fal-ai/imagen4/preview',
+    ],
+    video: [
+      'fal-ai/kling-video/o3/pro/text-to-video',
+      'bytedance/seedance-2.0/text-to-video',
+      'fal-ai/vidu/q3/text-to-video',
+      'xai/grok-imagine-video/text-to-video',
+    ],
+    audio: [
+      'fal-ai/elevenlabs/tts/eleven-v3',
+      'fal-ai/minimax/speech-2.8-hd',
+      'fal-ai/dia-tts',
+      'fal-ai/elevenlabs/speech-to-text/scribe-v2',
+      'fal-ai/minimax-music/v2.6',
+      'fal-ai/stable-audio-3/medium/text-to-audio',
+    ],
+  };
+  const RECOMMENDED_STUDIO_MODELS = DEFAULT_STUDIO_MODELS.filter((model) =>
+    model.provider !== 'fal' || FAL_RECOMMENDED_MODEL_IDS.image.includes(model.apiModel),
+  );
+  const VERIFIED_FAL_EDIT_ENDPOINTS = new Set([
+    'fal-ai/nano-banana-2/edit',
+    'fal-ai/nano-banana-pro/edit',
+  ]);
+  let studioModels = $state<StudioModelOption[]>(RECOMMENDED_STUDIO_MODELS);
   const STUDIO_PROVIDER_CHOICES: { id: StudioProviderChoice; label: string }[] =
     AVAILABLE_MEDIA_PROVIDER_OPTIONS;
 
-  const VIDEO_MODELS = [
+  type StudioVideoModelOption = {
+    id: string;
+    label: string;
+    desc: string;
+    imageModel?: string;
+  };
+  const DEFAULT_VIDEO_MODELS: StudioVideoModelOption[] = [
     {
-      id: 'fal-ai/kling-video/v3/pro/image-to-video',
-      label: 'Kling 3.0 Pro',
-      desc: 'FAL image-to-video',
+      id: 'fal-ai/kling-video/o3/pro/text-to-video',
+      label: 'Kling',
+      desc: 'text-to-video',
+      imageModel: 'fal-ai/kling-video/o3/pro/image-to-video',
     },
-  ] as const;
-  type VideoModelId = typeof VIDEO_MODELS[number]['id'];
+  ];
+  type VideoModelId = string;
 
-  type StudioMediaType = 'image' | 'video';
+  type StudioMediaType = 'image' | 'video' | 'audio';
+  const EMPTY_FAL_CATALOG: FalModelCatalog = { image: [], video: [], audio: [], '3d': [] };
+  let falCatalog = $state<FalModelCatalog>(EMPTY_FAL_CATALOG);
+  let falModelsLoading = $state(false);
+  let falModelsFetchedAt = $state('');
+  let falVideoModels = $state<StudioVideoModelOption[]>(DEFAULT_VIDEO_MODELS);
+  let falAudioModels = $state<FalDiscoveredModel[]>([]);
 
   const _ls = (k: string) => (typeof localStorage !== 'undefined' ? localStorage.getItem(k) : null);
   function normalizeStudioModelId(raw: string | null): StudioModelId {
-    const normalized = normalizeMediaModelId(raw ?? undefined);
+    if (!raw?.trim()) {
+      return studioModels[0]?.id ?? 'fal-ai/nano-banana-2';
+    }
+    const direct = raw ? studioModels.find((model) => model.id === raw || model.apiModel === raw) : undefined;
+    if (direct) return direct.id;
+    const normalized = normalizeMediaModelId(raw);
     return studioModels.some(m => m.id === normalized)
       ? normalized
       : (studioModels[0]?.id ?? 'fal-ai/nano-banana-2');
@@ -362,28 +434,71 @@ ${lines.map(line => `  - ${line}`).join('\n')}
     return studioModels.filter((m) => m.provider === choice);
   }
 
-  function setStudioProviderChoice(choice: StudioProviderChoice): void {
-    selectedStudioProviderChoice = choice;
-    const availableModels = studioModelsForProvider(choice);
-    if (!availableModels.some(m => m.id === selectedStudioModel) && availableModels[0]) {
-      selectedStudioModel = availableModels[0].id;
-    }
-    const model = studioModels.find(m => m.id === selectedStudioModel) ?? availableModels[0];
-    imageProvider = choice;
-    imageModel = model?.apiModel ?? 'fal-ai/nano-banana';
+  function applySelectedStudioModel(): void {
+    const model = studioModels.find((item) => item.id === selectedStudioModel) ?? selectedStudioModelConfig;
+    selectedStudioProviderChoice = model.provider;
+    imageProvider = model.provider;
+    imageModel = model.apiModel;
+    console.log('[STUDIO MODEL SELECTION]', {
+      displayName: model.label,
+      selectedModel: model.id,
+      resolvedModel: model.apiModel,
+      provider: model.provider,
+      matches: selectedStudioModel === model.id,
+    });
     void saveImageSettings();
   }
 
-  let studioMediaType = $state<StudioMediaType>('video');
+  function selectStudioMediaType(mediaType: StudioMediaType): void {
+    studioMediaType = mediaType;
+    if (mediaType === 'image') {
+      selectedStudioProviderChoice = 'fal';
+      const models = studioModelsForProvider('fal');
+      if (!models.some((model) => model.id === selectedStudioModel) && models[0]) {
+        selectedStudioModel = models[0].id;
+        applySelectedStudioModel();
+      }
+    }
+    console.log('[STUDIO MEDIA TYPE]', { mediaType });
+  }
+
+  function applySelectedVideoModel(): void {
+    const model = falVideoModels.find((item) => item.id === studioVideoModel);
+    console.log('[STUDIO MODEL SELECTION]', {
+      mediaType: 'video',
+      displayName: model?.label ?? null,
+      selectedModel: studioVideoModel,
+      resolvedModel: model?.id ?? null,
+      provider: 'fal',
+      matches: model?.id === studioVideoModel,
+    });
+  }
+
+  function applySelectedAudioModel(): void {
+    const model = falAudioModels.find((item) => item.id === studioAudioModel);
+    console.log('[STUDIO MODEL SELECTION]', {
+      mediaType: 'audio',
+      displayName: model?.name ?? null,
+      selectedModel: studioAudioModel,
+      resolvedModel: model?.id ?? null,
+      provider: 'fal',
+      matches: model?.id === studioAudioModel,
+    });
+  }
+
+  let studioMediaType = $state<StudioMediaType>(
+    ['image', 'video', 'audio'].includes(_ls('studio-media-type') ?? '')
+      ? _ls('studio-media-type') as StudioMediaType
+      : 'image',
+  );
   let selectedStudioModel = $state<StudioModelId>(normalizeStudioModelId(_ls('studio-model')));
   let selectedStudioProviderChoice = $state<StudioProviderChoice>(
     normalizeProviderChoice(_ls('studio-provider-choice')) ?? providerChoiceForModel(normalizeStudioModelId(_ls('studio-model')))
   );
   let studioVideoModel = $state<VideoModelId>(
-    VIDEO_MODELS.some(m => m.id === _ls('studio-video-model'))
-      ? (_ls('studio-video-model') as VideoModelId)
-      : 'fal-ai/kling-video/v3/pro/image-to-video'
+    _ls('studio-video-model') || 'fal-ai/kling-video/o3/pro/text-to-video'
   );
+  let studioAudioModel = $state(_ls('studio-audio-model') ?? '');
   let selectedStudioModelConfig = $derived(studioModels.find(m => m.id === selectedStudioModel) ?? studioModels[0]);
   let selectedProvider          = $derived<StudioProvider>(selectedStudioModelConfig.provider);
   let selectedEditMode          = $derived(selectedStudioModelConfig.edit);
@@ -393,6 +508,83 @@ ${lines.map(line => `  - ${line}`).join('\n')}
   let videoAudio = $state(false);
   let videoReferenceImage = $state('');
   let videoReferenceName = $state('');
+  let selectedFalVideoConfig = $derived(
+    falVideoModels.find((model) => model.id === studioVideoModel),
+  );
+
+  async function loadFalModels(force = false): Promise<void> {
+    if (!force && falModelsFetchedAt) return;
+    if (falModelsLoading) return;
+    falModelsLoading = true;
+    try {
+      const response = await fetch(`/api/fal/models${force ? '?refresh=1' : ''}`);
+      const data = await response.json() as FalDiscoveryResponse & { message?: string };
+      if (!response.ok) throw new Error(data.message || `HTTP ${response.status}`);
+      falCatalog = data.categories;
+      falModelsFetchedAt = data.fetchedAt;
+      studioModels = RECOMMENDED_STUDIO_MODELS
+        .filter((option) =>
+          option.provider === 'fal'
+          && (
+            data.categories.image.some((model) => model.id === option.apiModel)
+            || VERIFIED_FAL_EDIT_ENDPOINTS.has(option.apiModel)
+          )
+        )
+        .map((option) => {
+          const discovered = data.categories.image.find((model) => model.id === option.apiModel);
+          return discovered
+            ? { ...option, edit: option.edit || discovered.edit, task: discovered.task }
+            : option;
+        });
+
+      const videoFamilies: Record<string, { label: string; imageModel: string }> = {
+        'fal-ai/kling-video/o3/pro/text-to-video': {
+          label: 'Kling',
+          imageModel: 'fal-ai/kling-video/o3/pro/image-to-video',
+        },
+        'bytedance/seedance-2.0/text-to-video': {
+          label: 'Seedance',
+          imageModel: 'bytedance/seedance-2.0/image-to-video',
+        },
+        'fal-ai/vidu/q3/text-to-video': {
+          label: 'Vidu',
+          imageModel: 'fal-ai/vidu/q3/image-to-video',
+        },
+        'xai/grok-imagine-video/text-to-video': {
+          label: 'Grok Imagine Video',
+          imageModel: 'xai/grok-imagine-video/image-to-video',
+        },
+      };
+      falVideoModels = FAL_RECOMMENDED_MODEL_IDS.video
+        .map((id) => data.categories.video.find((model) => model.id === id))
+        .filter((model): model is FalDiscoveredModel => Boolean(model))
+        .map((model) => ({
+          id: model.id,
+          label: videoFamilies[model.id]?.label ?? model.name,
+          desc: model.task,
+          imageModel: videoFamilies[model.id]?.imageModel,
+        }));
+      falAudioModels = FAL_RECOMMENDED_MODEL_IDS.audio
+        .map((id) => data.categories.audio.find((model) => model.id === id))
+        .filter((model): model is FalDiscoveredModel => Boolean(model));
+      if (!falAudioModels.some((model) => model.id === studioAudioModel)) {
+        studioAudioModel = falAudioModels[0]?.id ?? '';
+      }
+
+      const imageModels = studioModelsForProvider('fal');
+      if (!imageModels.some((model) => model.id === selectedStudioModel) && imageModels[0]) {
+        selectedStudioModel = imageModels[0].id;
+      }
+      if (!falVideoModels.some((model) => model.id === studioVideoModel) && falVideoModels[0]) {
+        studioVideoModel = falVideoModels[0].id;
+      }
+    } catch (error) {
+      console.warn('[studio] FAL discovery unavailable:', error);
+      if (falVideoModels.length === 0) falVideoModels = DEFAULT_VIDEO_MODELS;
+    } finally {
+      falModelsLoading = false;
+    }
+  }
 
   function normalizeOpenAIImageSize(value: unknown): OpenAIImageSize {
     return OPENAI_IMAGE_SIZES.includes(value as OpenAIImageSize) ? value as OpenAIImageSize : '1024x1024';
@@ -405,11 +597,15 @@ ${lines.map(line => `  - ${line}`).join('\n')}
       const settings = await res.json();
       const image = settings?.image ?? {};
       const loadedImageModel = settings?.mediaConfig?.model ?? settings?.mediaModel ?? image.model;
+      const loadedProvider = settings?.mediaConfig?.provider ?? settings?.mediaProvider ?? imageProvider;
       imageModel = typeof loadedImageModel === 'string' && loadedImageModel.trim() ? loadedImageModel : 'fal-ai/nano-banana';
       imageSize = normalizeOpenAIImageSize(image.size);
       size = imageSize;
       selectedStudioProviderChoice = imageProvider;
-      selectedStudioModel = normalizeStudioModelId(imageModel);
+      selectedStudioModel = studioModels.find((model) =>
+        model.provider === loadedProvider
+        && (model.id === imageModel || model.apiModel === imageModel)
+      )?.id ?? normalizeStudioModelId(imageModel);
       selectedStudioProviderChoice = providerChoiceForModel(selectedStudioModel);
       imageProvider = selectedStudioProviderChoice;
     } catch (error) {
@@ -447,6 +643,7 @@ ${lines.map(line => `  - ${line}`).join('\n')}
   $effect(() => { try { localStorage.setItem('studio-model',        selectedStudioModel); } catch {} });
   $effect(() => { try { localStorage.setItem('studio-provider-choice', selectedStudioProviderChoice); } catch {} });
   $effect(() => { try { localStorage.setItem('studio-video-model',  studioVideoModel); } catch {} });
+  $effect(() => { try { localStorage.setItem('studio-audio-model',  studioAudioModel); } catch {} });
   $effect(() => { size = imageSize; });
   $effect(() => {
     imageProvider = selectedProvider;
@@ -454,7 +651,8 @@ ${lines.map(line => `  - ${line}`).join('\n')}
   });
   $effect(() => {
     if (studioMediaType !== 'image') return;
-    const availableModels = studioModelsForProvider(selectedStudioProviderChoice);
+    selectedStudioProviderChoice = 'fal';
+    const availableModels = studioModelsForProvider('fal');
     if (!availableModels.some(m => m.id === selectedStudioModel) && availableModels[0]) {
       selectedStudioModel = availableModels[0].id;
     }
@@ -484,14 +682,18 @@ ${lines.map(line => `  - ${line}`).join('\n')}
 
   function buildAllRefImages(): string[] {
     const result: string[] = [];
+    const isTransportableImage = (value: string | null | undefined): value is string =>
+      typeof value === 'string' && /^(?:data:|https?:\/\/)/.test(value.trim());
     const addRef = (ref: RefImage | null) => {
       if (!ref) return;
       // Prefer full-resolution originals; fall back to thumbnails
-      const sources = ref.originals?.filter(t => t?.startsWith('data:')) ?? [];
+      const sources = ref.originals?.filter(isTransportableImage) ?? [];
       const all = sources.length > 0
         ? sources
         : (ref.thumbs?.length ? ref.thumbs : (ref.thumb ? [ref.thumb] : []));
-      for (const t of all) { if (t?.startsWith('data:')) result.push(t); }
+      for (const t of all) {
+        if (isTransportableImage(t)) result.push(t.trim());
+      }
     };
     for (const ref of referenceImages) addRef(ref);
     return result;
@@ -499,13 +701,14 @@ ${lines.map(line => `  - ${line}`).join('\n')}
 
   // 実際の data URL を持つ参照画像が1枚以上あれば true
   let hasReferenceImages = $derived(buildAllRefImages().length > 0);
-  let generationMode     = $derived(
-    batchMode         ? 'batch'
-    : studioMediaType === 'video' ? 'video'
-    : selectedEditMode            ? 'edit'
-    :                               'text-to-image'
-  );
-
+  $effect(() => {
+    if (hasReferenceImages || !selectedStudioModelConfig.edit) return;
+    const fallback = studioModels.find((model) => !model.edit);
+    if (fallback) {
+      selectedStudioModel = fallback.id;
+      applySelectedStudioModel();
+    }
+  });
   // ── Manga text overlay ────────────────────────────────────
   const MANGA_FONTS = [
     { id: 'noto',  label: 'Noto Sans JP',   css: '"Noto Sans JP", sans-serif' },
@@ -572,11 +775,17 @@ ${lines.map(line => `  - ${line}`).join('\n')}
     originals: string[];
     thumbs: string[];
     createdAt: string;
+    profile: CharacterProfileJson;
   };
 
   const CHARACTER_LIBRARY_KEY = 'studio-character-library';
   let characterLibrary = $state<CharacterSet[]>([]);
   let characterSetName = $state('');
+  let characterPersonality = $state('');
+  let characterSpeechStyle = $state('');
+  let characterLikes = $state('');
+  let characterDislikes = $state('');
+  let characterMemories = $state('');
 
   // ── One Panel Pro Mode ────────────────────────────────────
   let proModeOpen   = $state(false);
@@ -713,29 +922,45 @@ async function buildPrompt(basePrompt: string, refDescription: string) {
   // Actions
   // ============================================================
 
-  function resolveRefImages(editMode = selectedEditMode): string[] {
-    if (!editMode) return [];
+  function resolveRefImages(referenceRequired = false): string[] {
     const imgs = buildAllRefImages();
-    if (imgs.length === 0)
+    if (referenceRequired && imgs.length === 0)
       throw new Error('Edit モデルが選択されていますが参照画像が設定されていません。REFERENCE IMAGES に画像をアップロードしてください。');
     return imgs;
   }
 
   async function callGenerateImage(p: string, s: ImageSize, modelOverride?: StudioModelId): Promise<string> {
+    const flowId = `edit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const modelConfig = modelOverride
       ? (studioModels.find(m => m.id === modelOverride) ?? selectedStudioModelConfig)
       : selectedStudioModelConfig;
     const provider = modelConfig.provider;
-    const editMode = modelConfig.edit;
     const apiModel = modelConfig.apiModel;
-    const refImages     = resolveRefImages(editMode);
-    const effectiveMode = editMode ? 'edit' : 'text-to-image';
+    const refImages = resolveRefImages();
+    console.log('[REFERENCE_IMAGES]', { requestId: flowId, count: refImages.length });
+    const editMode = modelConfig.edit || refImages.length > 0;
+    const resolvedTask = editMode ? 'image-to-image' : 'text-to-image';
+    console.log('[EDIT FLOW][GENERATE START]', {
+      flowId,
+      selectedModel: modelConfig.id,
+      editModel: modelConfig.edit,
+      referenceImages: refImages.length,
+    });
+    console.log('[STUDIO MODEL EXECUTION]', {
+      mediaType: studioMediaType,
+      displayName: modelConfig.label,
+      selectedModel: modelConfig.id,
+      apiModel,
+      resolvedTask,
+      referenceImages: refImages.length,
+      matches: (modelOverride ?? selectedStudioModel) === modelConfig.id,
+    });
     console.log('[studio] callGenerateImage', {
       selectedModel:  modelOverride ?? selectedStudioModel,
       apiModel,
       provider,
       editMode,
-      generationMode: effectiveMode,
+      resolvedTask,
       imageCount:     refImages.length,
       imageSizes:     refImages.map(r => `${Math.round(r.length / 1024)}KB`),
     });
@@ -750,22 +975,23 @@ async function buildPrompt(basePrompt: string, refDescription: string) {
     const payload = {
       prompt: enhanced,
       size: s,
-      model: apiModel,
-      provider,
       editMode,
       selectedModel: modelOverride ?? selectedStudioModel,
+      requestId: flowId,
+      flowId,
       refImages,
       locale: UI_LOCALE,
       renderMode: imageCompositionMode,
       speechBubble: speechBubbleMode,
     };
     console.log('[studio] image generate button payload', payload);
-    console.log('[studio] fetch /api/generate provider/model', { provider: payload.provider, model: payload.model });
+    console.log('[studio] fetch /api/generate selectedModel', payload.selectedModel);
     const res = await fetch('/api/generate', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify(payload),
     });
+    console.log('[EDIT FLOW][GENERATE RESPONSE]', { flowId, status: res.status, ok: res.ok });
     if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.message ?? `HTTP ${res.status}`); }
     const data = await res.json();
     const imageUrl = data?.images?.[0]?.url ?? data?.url;
@@ -774,24 +1000,33 @@ async function buildPrompt(basePrompt: string, refDescription: string) {
   }
 
   async function callGenerateVideo(p: string): Promise<string> {
-    if (!videoReferenceImage) throw new Error('Reference Imageを選択してください。');
+    const videoModel = selectedFalVideoConfig;
+    const resolvedVideoModel = videoReferenceImage && videoModel?.imageModel
+      ? videoModel.imageModel
+      : studioVideoModel;
+    const resolvedTask = videoReferenceImage ? 'image-to-video' : 'text-to-video';
     console.log('[studio] callGenerateVideo', {
+      mediaType: 'video',
+      displayName: videoModel?.label ?? null,
       selectedModel: studioVideoModel,
+      resolvedModel: resolvedVideoModel,
       provider: 'fal',
-      generationMode: 'image-to-video',
+      resolvedTask,
+      matches: videoModel?.id === studioVideoModel,
       duration:      videoDuration,
       audio:         videoAudio,
-      referenceImage: videoReferenceName || '(selected)',
+      referenceImage: videoReferenceName || null,
     });
     const res = await fetch('/api/studio/generate-video', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         prompt: p,
-        model: studioVideoModel,
+        model: resolvedVideoModel,
         duration: videoDuration,
         audio: videoAudio,
         referenceImage: videoReferenceImage,
+        task: resolvedTask,
         locale: UI_LOCALE,
       }),
     });
@@ -804,10 +1039,6 @@ async function buildPrompt(basePrompt: string, refDescription: string) {
   async function generateKlingVideo(): Promise<void> {
     const prompt = videoPrompt.trim();
     if (!prompt || generating) return;
-    if (!videoReferenceImage) {
-      errorMsg = 'Reference Imageを選択してください。';
-      return;
-    }
     errorMsg = '';
     generating = true;
     previewVideoUrl = null;
@@ -825,6 +1056,9 @@ async function buildPrompt(basePrompt: string, refDescription: string) {
     if (studioMediaType === 'video') {
       return { videoUrl: await callGenerateVideo(p) };
     }
+    if (studioMediaType === 'audio') {
+      throw new Error('Audio generation is not available in the manga pipeline.');
+    }
     return { imageUrl: await callGenerateImage(p, s) };
   }
 
@@ -839,6 +1073,8 @@ async function buildPrompt(basePrompt: string, refDescription: string) {
     try {
       if (studioMediaType === 'video') {
         previewVideoUrl = await callGenerateVideo(p);
+      } else if (studioMediaType === 'audio') {
+        throw new Error('Audio generation is not available in the manga pipeline.');
       } else {
         const url = await callGenerateImage(p, size);
         previewUrl    = url;
@@ -2556,6 +2792,50 @@ ${panelLines}
     return refs.map(ref => normalizeRef(JSON.parse(JSON.stringify(ref)) as RefImage) ?? emptyRefImage());
   }
 
+  function profileList(value: unknown): string[] {
+    const source = Array.isArray(value)
+      ? value
+      : typeof value === 'string'
+        ? value.split(/\r?\n/)
+        : [];
+    return Array.from(new Set(source.map(String).map(item => item.trim()).filter(Boolean)));
+  }
+
+  function normalizeCharacterProfile(value: unknown, fallback: {
+    name?: string;
+    image?: string;
+    createdAt?: string;
+  } = {}): CharacterProfileJson {
+    const raw = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+    const now = new Date().toISOString();
+    const createdAt = typeof raw.created_at === 'string' && raw.created_at
+      ? raw.created_at
+      : fallback.createdAt || now;
+    return {
+      name: typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim() : fallback.name?.trim() || 'Character',
+      image: typeof raw.image === 'string' ? raw.image : fallback.image || '',
+      personality: typeof raw.personality === 'string' ? raw.personality.trim() : profileList(raw.personality).join('\n'),
+      speech_style: typeof raw.speech_style === 'string' ? raw.speech_style.trim() : profileList(raw.speech_style).join('\n'),
+      likes: profileList(raw.likes),
+      dislikes: profileList(raw.dislikes),
+      memories: profileList(raw.memories),
+      created_at: createdAt,
+      updated_at: typeof raw.updated_at === 'string' && raw.updated_at ? raw.updated_at : createdAt,
+    };
+  }
+
+  function profileToRef(profile: CharacterProfileJson): RefImage[] {
+    if (!profile.image) return [];
+    return [{
+      thumb: profile.image,
+      thumbs: [profile.image],
+      originals: [profile.image],
+      label: profile.name,
+      name: `${profile.name || 'character'}.png`,
+      names: [`${profile.name || 'character'}.png`],
+    }];
+  }
+
   function loadCharacterLibrary(): void {
     if (typeof localStorage === 'undefined') return;
     try {
@@ -2567,15 +2847,24 @@ ${panelLines}
         .filter(item => item?.name && Array.isArray(item.referenceImages))
         .map(item => {
           const referenceImages = cloneRefImages(item.referenceImages);
+          const originals = Array.isArray(item.originals) ? item.originals : referenceImages.flatMap(ref => ref.originals ?? []);
+          const thumbs = Array.isArray(item.thumbs) ? item.thumbs : referenceImages.flatMap(ref => ref.thumbs ?? []);
+          const profile = normalizeCharacterProfile(item.profile, {
+            name: item.name,
+            image: originals[0] || thumbs[0] || '',
+            createdAt: item.createdAt,
+          });
           return {
             id: item.id ?? genId(),
-            name: item.name,
+            name: profile.name,
             referenceImages,
-            originals: Array.isArray(item.originals) ? item.originals : referenceImages.flatMap(ref => ref.originals ?? []),
-            thumbs: Array.isArray(item.thumbs) ? item.thumbs : referenceImages.flatMap(ref => ref.thumbs ?? []),
-            createdAt: item.createdAt ?? new Date().toISOString(),
+            originals,
+            thumbs,
+            createdAt: profile.created_at,
+            profile,
           };
         });
+      saveCharacterLibrary();
     } catch { /* ignore */ }
   }
 
@@ -2750,24 +3039,84 @@ ${panelLines}
       errorMsg = '保存する参照画像がありません。';
       return;
     }
+    const existing = characterLibrary.find(item => item.name.toLocaleLowerCase() === name.toLocaleLowerCase());
+    const now = new Date().toISOString();
+    const profile: CharacterProfileJson = {
+      name,
+      image: refs.flatMap(ref => ref.originals ?? [])[0] || refs.flatMap(ref => ref.thumbs ?? [])[0] || '',
+      personality: characterPersonality.trim(),
+      speech_style: characterSpeechStyle.trim(),
+      likes: profileList(characterLikes),
+      dislikes: profileList(characterDislikes),
+      memories: profileList(characterMemories),
+      created_at: existing?.profile.created_at ?? now,
+      updated_at: now,
+    };
     const item: CharacterSet = {
-      id: genId(),
+      id: existing?.id ?? genId(),
       name,
       referenceImages: refs,
       originals: refs.flatMap(ref => ref.originals ?? []),
       thumbs: refs.flatMap(ref => ref.thumbs?.length ? ref.thumbs : (ref.thumb ? [ref.thumb] : [])),
-      createdAt: new Date().toISOString(),
+      createdAt: profile.created_at,
+      profile,
     };
-    characterLibrary = [item, ...characterLibrary];
-    characterSetName = '';
+    characterLibrary = [item, ...characterLibrary.filter(entry => entry.id !== item.id)];
     errorMsg = '';
     saveCharacterLibrary();
   }
 
   function loadCharacterSet(item: CharacterSet): void {
-    referenceImages = cloneRefImages(item.referenceImages);
+    referenceImages = cloneRefImages(item.referenceImages.length ? item.referenceImages : profileToRef(item.profile));
     charProfiles = referenceImages.map(() => '');
+    characterSetName = item.profile.name;
+    characterPersonality = item.profile.personality;
+    characterSpeechStyle = item.profile.speech_style;
+    characterLikes = item.profile.likes.join('\n');
+    characterDislikes = item.profile.dislikes.join('\n');
+    characterMemories = item.profile.memories.join('\n');
     saveRefImages();
+  }
+
+  function exportCharacterProfile(item: CharacterSet): void {
+    const blob = new Blob([JSON.stringify(item.profile, null, 2) + '\n'], {
+      type: 'application/json;charset=utf-8',
+    });
+    triggerDownload(blob, CHARACTER_PROFILE_FILENAME);
+  }
+
+  async function importCharacterProfile(file: File): Promise<void> {
+    try {
+      const parsed = JSON.parse(await file.text()) as unknown;
+      if (!parsed || typeof parsed !== 'object' || typeof (parsed as Record<string, unknown>).name !== 'string') {
+        throw new Error('name is required');
+      }
+      const profile = normalizeCharacterProfile(parsed);
+      const refs = profileToRef(profile);
+      const existing = characterLibrary.find(item => item.name.toLocaleLowerCase() === profile.name.toLocaleLowerCase());
+      const item: CharacterSet = {
+        id: existing?.id ?? genId(),
+        name: profile.name,
+        referenceImages: refs,
+        originals: profile.image ? [profile.image] : [],
+        thumbs: profile.image ? [profile.image] : [],
+        createdAt: profile.created_at,
+        profile,
+      };
+      characterLibrary = [item, ...characterLibrary.filter(entry => entry.id !== item.id)];
+      saveCharacterLibrary();
+      loadCharacterSet(item);
+      errorMsg = '';
+    } catch (error) {
+      errorMsg = `character_profile.json の読み込みに失敗しました: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+
+  async function importCharacterProfileFile(event: Event): Promise<void> {
+    const input = event.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = '';
+    if (file) await importCharacterProfile(file);
   }
 
   type StudioPageMode = 'one-page' | 'two-page';
@@ -2865,6 +3214,11 @@ ${panelLines}
     referenceImages = [];
     charProfiles = [];
     characterSetName = '';
+    characterPersonality = '';
+    characterSpeechStyle = '';
+    characterLikes = '';
+    characterDislikes = '';
+    characterMemories = '';
     generatedPanels = [];
     mangaPageMode = 1;
     previewUrl = null;
@@ -3116,22 +3470,29 @@ REFの役割を推定してください（例: 背景資料、キャラクター
   }
 
   // ── Vision: analyze one ref → extract character profile ──
-  async function analyzeCharacter(ref: RefImage, index: number): Promise<string> {
+  async function analyzeCharacter(ref: RefImage, index: number, requestId: string): Promise<string> {
     // Prefer full-resolution originals for Vision; fall back to thumbnails
-    const originals = (ref.originals ?? []).filter((t): t is string => !!t?.startsWith('data:'));
+    const isTransportableImage = (value: string | null | undefined): value is string =>
+      typeof value === 'string' && /^(?:data:|https?:\/\/)/.test(value.trim());
+    const originals = (ref.originals ?? []).filter(isTransportableImage);
     const thumbs = originals.length > 0
       ? originals
       : (ref.thumbs?.length ? ref.thumbs : [ref.thumb])
-          .filter((t): t is string => !!t?.startsWith('data:'));
+          .filter(isTransportableImage);
     if (thumbs.length === 0) return ref.label.trim();
 
     const fd = new FormData();
     fd.append('provider',    'openai');
+    fd.append('requestId',   requestId);
     fd.append('model',       'gpt-4o');
     fd.append('systemPrompt', buildVisionAnalysisSystemPrompt());
     fd.append('userMessage', buildVisionAnalysisUserPrompt(ref, index, thumbs.length));
 
     thumbs.forEach((t, i) => {
+      if (/^https?:\/\//.test(t)) {
+        fd.append(`image_url_${i}`, t);
+        return;
+      }
       const commaIdx = t.indexOf(',');
       const header   = t.slice(0, commaIdx);
       const b64      = t.slice(commaIdx + 1);
@@ -3139,22 +3500,60 @@ REFの役割を推定してください（例: 背景資料、キャラクター
       const bytes    = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
       fd.append(`image_${i}`, new Blob([bytes], { type: mime }), `reference_${index + 1}_${i}.jpg`);
     });
+    console.log('[REFERENCE_IMAGES]', { requestId, count: thumbs.length });
 
     const res = await fetch('/api/lab-chat', { method: 'POST', body: fd });
-    if (!res.ok) throw new Error(`Vision API HTTP ${res.status}`);
-    const data = await res.json();
-    const text = (data.text ?? '').trim();
+    const rawResponse = await res.text();
+    console.log('[CHARACTER_RAW_JSON]', rawResponse);
+    if (!res.ok) throw new Error(`Vision API HTTP ${res.status}: ${rawResponse.slice(0, 300)}`);
+
+    let text = '';
+    try {
+      const data = JSON.parse(rawResponse) as { text?: unknown };
+      text = typeof data.text === 'string' ? data.text.trim() : rawResponse.trim();
+    } catch (parseError) {
+      const message = parseError instanceof Error ? parseError.message : String(parseError);
+      const positionMatch = message.match(/position\s+(\d+)/i);
+      const position = positionMatch ? Number(positionMatch[1]) : null;
+      console.error('[CHARACTER_JSON_PARSE_ERROR]', {
+        error: message,
+        position,
+        aroundPosition: position === null
+          ? rawResponse.slice(0, 700)
+          : rawResponse.slice(Math.max(0, position - 120), position + 120),
+        rawLength: rawResponse.length,
+      });
+      console.warn('[CHARACTER_RAW_JSON_SAVED_AS_PROFILE]', {
+        reference: ref.name || `REF${index + 1}`,
+        rawLength: rawResponse.length,
+      });
+      return rawResponse;
+    }
+    console.log('[CHARACTER_RAW_MODEL_TEXT]', text);
     console.log(`[vision] reference_${index + 1}_0.jpg analysis length=${text.length}`);
     console.log(`[vision] preview=${text.replace(/\s+/g, ' ').slice(0, 200)}`);
     return text;
   }
 
   async function analyzeCharacterImages(): Promise<void> {
-    if (analyzingChars || referenceImages.length === 0) return;
+    const flowId = `vision-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    if (analyzingChars || referenceImages.length === 0) {
+      console.log('[EDIT FLOW][VISION STOP]', {
+        flowId,
+        reason: analyzingChars ? 'already_analyzing' : 'no_reference_images',
+      });
+      return;
+    }
+    console.log('[EDIT FLOW][VISION START]', {
+      flowId,
+      selectedModel: selectedStudioModel,
+      editModel: selectedStudioModelConfig.edit,
+      referenceImages: referenceImages.length,
+    });
     analyzingChars = true;
     errorMsg = '';
     try {
-      const profiles = await Promise.all(referenceImages.map((ref, i) => analyzeCharacter(ref, i)));
+      const profiles = await Promise.all(referenceImages.map((ref, i) => analyzeCharacter(ref, i, flowId)));
       charProfiles = profiles;
       const integrated = buildReferenceAnalysisText();
       if (integrated) {
@@ -3162,7 +3561,19 @@ REFの役割を推定してください（例: 背景資料、キャラクター
         console.log(`[vision] integrated preview=${integrated.replace(/\s+/g, ' ').slice(0, 200)}`);
       }
       saveRefImages();
+      console.log('[EDIT FLOW][VISION COMPLETE]', {
+        flowId,
+        profiles: profiles.length,
+        nextStep: 'return_to_ui',
+        generateMediaImageCalled: false,
+        reason: 'Vision analysis and image generation are separate UI actions',
+      });
     } catch (e) {
+      console.error('[EDIT FLOW][VISION ERROR]', {
+        flowId,
+        error: e instanceof Error ? e.message : String(e),
+        generateMediaImageCalled: false,
+      });
       errorMsg = `キャラ解析失敗: ${e instanceof Error ? e.message : String(e)}`;
     } finally {
       analyzingChars = false;
@@ -3239,36 +3650,55 @@ REFの役割を推定してください（例: 背景資料、キャラクター
     revisedPrompt = null;
     generating    = true;
     previewUrl    = null;
-    const refImages     = resolveRefImages();
-    const effectiveMode = selectedEditMode ? 'edit' : 'text-to-image';
+    const refImages = resolveRefImages();
+    const editMode = selectedEditMode || refImages.length > 0;
+    const resolvedTask = editMode ? 'image-to-image' : 'text-to-image';
+    console.log('[STUDIO MODEL EXECUTION]', {
+      mediaType: studioMediaType,
+      displayName: selectedStudioModelConfig.label,
+      selectedModel: selectedStudioModel,
+      apiModel: studioImageModel,
+      resolvedTask,
+      referenceImages: refImages.length,
+      matches: selectedStudioModelConfig.id === selectedStudioModel,
+    });
     console.log('[studio] generatePro', {
       selectedModel:  selectedStudioModel,
       apiModel:       studioImageModel,
       provider:       selectedProvider,
-      editMode:       selectedEditMode,
-      generationMode: effectiveMode,
+      editMode,
+      resolvedTask,
       imageCount:     refImages.length,
       imageSizes:     refImages.map(r => `${Math.round(r.length / 1024)}KB`),
     });
     try {
+      const flowId = `edit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      console.log('[REFERENCE_IMAGES]', { requestId: flowId, count: refImages.length });
+      console.log('[EDIT FLOW][GENERATE START]', {
+        flowId,
+        selectedModel: selectedStudioModel,
+        editModel: selectedEditMode,
+        referenceImages: refImages.length,
+      });
       const payload = {
         prompt: injectRefs(`${p}, ${buildNegativeHint()}`),
         size,
-        model: studioImageModel,
-        provider: selectedProvider,
-        editMode: selectedEditMode,
+        editMode,
         selectedModel: selectedStudioModel,
+        requestId: flowId,
+        flowId,
         refImages,
         renderMode: imageCompositionMode,
         speechBubble: speechBubbleMode,
       };
       console.log('[studio] image generate button payload', payload);
-      console.log('[studio] fetch /api/generate provider/model', { provider: payload.provider, model: payload.model });
+      console.log('[studio] fetch /api/generate selectedModel', payload.selectedModel);
       const res = await fetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
+      console.log('[EDIT FLOW][GENERATE RESPONSE]', { flowId, status: res.status, ok: res.ok });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.message ?? `HTTP ${res.status}`);
@@ -3786,6 +4216,12 @@ REFの役割を推定してください（例: 背景資料、キャラクター
         originals: [original],
         thumbs: [thumb],
         createdAt: new Date().toISOString(),
+        profile: normalizeCharacterProfile({
+          name: label,
+          image: original,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }),
       };
       characterLibrary = [item, ...characterLibrary];
       saveCharacterLibrary();
@@ -3890,7 +4326,10 @@ REFの役割を推定してください（例: 背景資料、キャラクター
   loadDiaryHistory();
   onMount(() => {
     loadStudioSession();
-    void loadImageSettings();
+    void (async () => {
+      await loadFalModels();
+      await loadImageSettings();
+    })();
   });
 </script>
 
@@ -4029,8 +4468,8 @@ REFの役割を推定してください（例: 背景資料、キャラクター
         {#if refPanelOpen}
           <div class="char-lib">
             <div class="char-lib-hd">
-              <span class="char-lib-title">CHARACTER LIBRARY</span>
-              <span class="char-lib-count">{characterLibrary.length} saved</span>
+              <span class="char-lib-title">CHARACTER STUDIO</span>
+              <span class="char-lib-count">{characterLibrary.length} saved locally</span>
             </div>
             <div class="char-lib-save-row">
               <input
@@ -4044,8 +4483,34 @@ REFの役割を推定してください（例: 背景資料、キャラクター
                 onclick={saveCurrentCharacterSet}
                 disabled={!characterSetName.trim() || referenceImages.length === 0}
               >
-                SAVE SET
+                SAVE
               </button>
+              <label class="char-lib-import-btn" title="character_profile.json を読み込む">
+                IMPORT
+                <input type="file" accept=".json,application/json" onchange={importCharacterProfileFile} />
+              </label>
+            </div>
+            <div class="char-profile-grid">
+              <label>
+                <span>PERSONALITY</span>
+                <textarea bind:value={characterPersonality} rows="2" placeholder="性格"></textarea>
+              </label>
+              <label>
+                <span>SPEECH STYLE</span>
+                <textarea bind:value={characterSpeechStyle} rows="2" placeholder="口調"></textarea>
+              </label>
+              <label>
+                <span>LIKES</span>
+                <textarea bind:value={characterLikes} rows="2" placeholder="1行に1項目"></textarea>
+              </label>
+              <label>
+                <span>DISLIKES</span>
+                <textarea bind:value={characterDislikes} rows="2" placeholder="1行に1項目"></textarea>
+              </label>
+              <label class="wide">
+                <span>MEMORIES</span>
+                <textarea bind:value={characterMemories} rows="2" placeholder="1行に1件"></textarea>
+              </label>
             </div>
             {#if characterLibrary.length > 0}
               <div class="char-lib-list">
@@ -4060,9 +4525,19 @@ REFの役割を推定してください（例: 背景資料、キャラクター
                   >
                     <span class="char-lib-item-main">
                       <span class="char-lib-item-name">{item.name}</span>
-                      <span class="char-lib-item-meta">{item.referenceImages.length} refs / {item.originals.length || item.thumbs.length} imgs</span>
+                      <span class="char-lib-item-meta">{item.referenceImages.length} refs / {item.profile.memories.length} memories</span>
                     </span>
-                    <span class="char-lib-item-date">{formatDate(item.createdAt)}</span>
+                    <span class="char-lib-item-date">{formatDate(item.profile.updated_at)}</span>
+                    <button
+                      class="char-lib-load"
+                      title="ローカルストレージから読み込む"
+                      onclick={(e) => { e.stopPropagation(); loadCharacterSet(item); }}
+                    >LOAD</button>
+                    <button
+                      class="char-lib-export"
+                      title="character_profile.json を保存"
+                      onclick={(e) => { e.stopPropagation(); exportCharacterProfile(item); }}
+                    >EXPORT</button>
                     <button
                       class="char-lib-del"
                       title="削除"
@@ -4420,63 +4895,45 @@ REFの役割を推定してください（例: 背景資料、キャラクター
         ></textarea>
         <div class="prompt-foot">
           <span class="prompt-hint">Ctrl+Enter → 企画書解析 → 自由コマ数YAML → 漫画ページ生成</span>
-          <div class="gen-mode-badge"
-            class:is-i2i={generationMode === 'image-to-image'}
-            class:is-edit={generationMode === 'edit'}
-            class:is-video={generationMode === 'video'}
-            class:is-batch={generationMode === 'batch'}
-          >
-            {#if generationMode === 'batch'}▦ Batch
-            {:else if generationMode === 'edit'}✏ Edit
-            {:else if generationMode === 'image-to-image'}◈ Image-to-Image
-            {:else if generationMode === 'video'}▶ Video
-            {:else}◻ Text-to-Image
-            {/if}
-          </div>
         </div>
 
         <!-- ── Generation controls ── -->
         <div class="gen-controls-row">
 
-          <!-- 1. 生成タイプ -->
           <div class="gen-ctrl">
-            <span class="gen-ctrl-label">生成タイプ</span>
-            <select class="gen-select" value="batch" disabled>
-              <option value="batch">▦ Batch page</option>
-            </select>
-          </div>
-
-          <!-- 2. API provider -->
-          <div class="gen-ctrl">
-            <span class="gen-ctrl-label">API Provider</span>
+            <span class="gen-ctrl-label">Media Type</span>
             <select
               class="gen-select"
-              value={selectedStudioProviderChoice}
-              onchange={(e) => setStudioProviderChoice((e.currentTarget as HTMLSelectElement).value as StudioProviderChoice)}
+              value={studioMediaType}
+              onchange={(e) => selectStudioMediaType((e.currentTarget as HTMLSelectElement).value as StudioMediaType)}
             >
-              {#each STUDIO_PROVIDER_CHOICES as p}
-                <option value={p.id}>{p.label}</option>
-              {/each}
+              <option value="image">Image</option>
+              <option value="video">Video</option>
+              <option value="audio">Audio</option>
             </select>
           </div>
 
-          <!-- 3. モデル -->
           <div class="gen-ctrl gen-ctrl-wide">
-            <span class="gen-ctrl-label">Model / Engine</span>
-            <select
-              class="gen-select"
-              bind:value={selectedStudioModel}
-              onchange={() => {
-                const model = studioModels.find(m => m.id === selectedStudioModel) ?? selectedStudioModelConfig;
-                imageProvider = model.provider;
-                imageModel = model.apiModel;
-                void saveImageSettings();
-              }}
-            >
-              {#each studioModelsForProvider(selectedStudioProviderChoice) as m}
-                <option value={m.id}>{m.label}</option>
-              {/each}
-            </select>
+            <span class="gen-ctrl-label">Model</span>
+            {#if studioMediaType === 'image'}
+              <select class="gen-select" bind:value={selectedStudioModel} onchange={applySelectedStudioModel}>
+                {#each studioModelsForProvider('fal') as m}
+                  <option value={m.id} disabled={m.edit && !hasReferenceImages}>{m.label}</option>
+                {/each}
+              </select>
+            {:else if studioMediaType === 'video'}
+              <select class="gen-select" bind:value={studioVideoModel} onchange={applySelectedVideoModel}>
+                {#each falVideoModels as model}
+                  <option value={model.id}>{model.label}</option>
+                {/each}
+              </select>
+            {:else}
+              <select class="gen-select" bind:value={studioAudioModel} onchange={applySelectedAudioModel}>
+                {#each falAudioModels as model}
+                  <option value={model.id}>{model.name}</option>
+                {/each}
+              </select>
+            {/if}
           </div>
 
         </div>
@@ -4801,50 +5258,37 @@ REFの役割を推定してください（例: 背景資料、キャラクター
       <div class="panel image-panel">
         <div class="panel-hd">
           <span class="panel-label">
-            {studioMediaType === 'video' ? 'VIDEO GENERATION' : 'IMAGE GENERATION'}
+            {studioMediaType === 'image' ? 'IMAGE' : studioMediaType === 'video' ? 'VIDEO' : 'AUDIO'}
           </span>
           <div class="media-tabs">
             <button
               class="media-tab"
               class:active={studioMediaType === 'image'}
-              onclick={() => (studioMediaType = 'image')}
-            >IMAGE GENERATION</button>
+              onclick={() => selectStudioMediaType('image')}
+            >IMAGE</button>
             <button
               class="media-tab"
               class:active={studioMediaType === 'video'}
-              onclick={() => (studioMediaType = 'video')}
-            >VIDEO GENERATION</button>
+              onclick={() => selectStudioMediaType('video')}
+            >VIDEO</button>
+            <button
+              class="media-tab"
+              class:active={studioMediaType === 'audio'}
+              onclick={() => selectStudioMediaType('audio')}
+            >AUDIO</button>
           </div>
         </div>
         {#if studioMediaType === 'image'}
           <div class="image-settings-grid">
             <label class="gen-ctrl">
-              <span class="gen-ctrl-label">MEDIA_PROVIDER</span>
-              <select
-                class="gen-select"
-                value={selectedStudioProviderChoice}
-                onchange={(e) => setStudioProviderChoice((e.currentTarget as HTMLSelectElement).value as StudioProviderChoice)}
-              >
-                {#each STUDIO_PROVIDER_CHOICES as provider}
-                  <option value={provider.id}>{provider.label}</option>
-                {/each}
-              </select>
-            </label>
-            <label class="gen-ctrl">
               <span class="gen-ctrl-label">MEDIA_MODEL</span>
               <select
                 class="gen-select"
                 bind:value={selectedStudioModel}
-                onchange={() => {
-                  const model = studioModels.find(m => m.id === selectedStudioModel) ?? selectedStudioModelConfig;
-                  selectedStudioProviderChoice = model.provider;
-                  imageProvider = model.provider;
-                  imageModel = model.apiModel;
-                  void saveImageSettings();
-                }}
+                onchange={applySelectedStudioModel}
               >
-                {#each studioModelsForProvider(selectedStudioProviderChoice) as m}
-                  <option value={m.id}>{m.label}</option>
+                {#each studioModelsForProvider('fal') as m}
+                  <option value={m.id} disabled={m.edit && !hasReferenceImages}>{m.label}</option>
                 {/each}
               </select>
             </label>
@@ -4861,27 +5305,15 @@ REFの役割を推定してください（例: 背景資料、キャラクター
               </select>
             </label>
           </div>
-        {:else}
+        {:else if studioMediaType === 'video'}
           <div class="video-settings">
             <div class="image-settings-grid">
               <label class="gen-ctrl">
-                <span class="gen-ctrl-label">Provider</span>
-                <select class="gen-select" disabled>
-                  <option>FAL</option>
-                </select>
-              </label>
-              <label class="gen-ctrl">
                 <span class="gen-ctrl-label">Model</span>
-                <select class="gen-select" bind:value={studioVideoModel} disabled>
-                  {#each VIDEO_MODELS as model}
+                <select class="gen-select" bind:value={studioVideoModel} onchange={applySelectedVideoModel}>
+                  {#each falVideoModels as model}
                     <option value={model.id}>{model.label}</option>
                   {/each}
-                </select>
-              </label>
-              <label class="gen-ctrl">
-                <span class="gen-ctrl-label">Mode</span>
-                <select class="gen-select" disabled>
-                  <option>Image to Video</option>
                 </select>
               </label>
               <label class="gen-ctrl">
@@ -4939,12 +5371,24 @@ REFの役割を推定してください（例: 背景資料、キャラクター
               class="video-generate-btn"
               class:generating
               onclick={generateKlingVideo}
-              disabled={generating || !videoPrompt.trim() || !videoReferenceImage}
+              disabled={generating || !videoPrompt.trim()}
             >
-              {generating ? 'GENERATING VIDEO...' : 'GENERATE KLING VIDEO'}
+              {generating ? 'GENERATING VIDEO...' : 'GENERATE VIDEO'}
             </button>
           </div>
+        {:else}
+          <div class="image-settings-grid">
+            <label class="gen-ctrl">
+              <span class="gen-ctrl-label">Model</span>
+              <select class="gen-select" bind:value={studioAudioModel} onchange={applySelectedAudioModel}>
+                {#each falAudioModels as model}
+                  <option value={model.id}>{model.name}</option>
+                {/each}
+              </select>
+            </label>
+          </div>
         {/if}
+
       </div>
 
       <!-- Comic Panels -->
@@ -6608,38 +7052,6 @@ REFの役割を推定してください（例: 背景資料、キャラクター
 }
 
 /* ── Generation mode badge ── */
-.gen-mode-badge {
-  font-size: 10px;
-  letter-spacing: 0.6px;
-  padding: 2px 8px;
-  border-radius: 3px;
-  border: 1px solid var(--pborder);
-  color: var(--muted);
-  background: rgba(255,255,255,0.03);
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-.gen-mode-badge.is-i2i {
-  color: #34d399;
-  border-color: rgba(52,211,153,0.35);
-  background: rgba(52,211,153,0.07);
-}
-.gen-mode-badge.is-video {
-  color: var(--pu);
-  border-color: rgba(168,85,247,0.35);
-  background: rgba(168,85,247,0.07);
-}
-.gen-mode-badge.is-edit {
-  color: #f97316;
-  border-color: rgba(249,115,22,0.35);
-  background: rgba(249,115,22,0.07);
-}
-.gen-mode-badge.is-batch {
-  color: var(--gold);
-  border-color: rgba(251,191,36,0.35);
-  background: rgba(251,191,36,0.07);
-}
-
 .revised-prompt {
   margin-top: 12px;
   padding: 10px 12px;
@@ -8917,6 +9329,54 @@ REFの役割を推定してください（例: 背景資料、キャラクター
   gap: 6px;
 }
 
+.char-lib-import-btn {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  padding: 5px 10px;
+  border: 1px solid rgba(167,139,250,0.3);
+  border-radius: 4px;
+  background: rgba(167,139,250,0.07);
+  color: #c4b5fd;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  cursor: pointer;
+}
+.char-lib-import-btn input { display: none; }
+
+.char-profile-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.char-profile-grid label {
+  display: grid;
+  gap: 3px;
+}
+.char-profile-grid label.wide { grid-column: 1 / -1; }
+.char-profile-grid span {
+  color: var(--muted);
+  font-size: 8px;
+  letter-spacing: 0.8px;
+}
+.char-profile-grid textarea {
+  width: 100%;
+  min-height: 44px;
+  box-sizing: border-box;
+  padding: 5px 7px;
+  resize: vertical;
+  border: 1px solid rgba(0,229,255,0.16);
+  border-radius: 4px;
+  outline: none;
+  background: rgba(0,5,18,0.42);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.char-profile-grid textarea:focus { border-color: rgba(0,229,255,0.42); }
+
 .char-lib-name-input {
   flex: 1;
   min-width: 0;
@@ -9014,6 +9474,34 @@ REFの役割を推定してください（例: 背景資料、キャラクター
   font-size: 10px;
   cursor: pointer;
 }
+.char-lib-export {
+  flex-shrink: 0;
+  padding: 4px 6px;
+  border: 1px solid rgba(167,139,250,0.24);
+  border-radius: 4px;
+  background: rgba(167,139,250,0.06);
+  color: #c4b5fd;
+  font-family: inherit;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+.char-lib-load {
+  flex-shrink: 0;
+  padding: 4px 6px;
+  border: 1px solid rgba(0,229,255,0.24);
+  border-radius: 4px;
+  background: rgba(0,229,255,0.06);
+  color: var(--cy);
+  font-family: inherit;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+.char-lib-load:hover { background: rgba(0,229,255,0.14); }
+.char-lib-export:hover { background: rgba(167,139,250,0.14); }
 .char-lib-del:hover {
   color: #f87171;
   background: rgba(248,113,113,0.1);

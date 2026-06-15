@@ -5,6 +5,7 @@ export type MediaModelInfo = {
   label: string;
   provider: MediaProviderName;
   apiModel: string;
+  endpoint?: string;
   kind: 'image' | 'video';
   edit: boolean;
   estimatedCost: number | null;
@@ -27,6 +28,17 @@ export const BUILTIN_MEDIA_MODELS: MediaModelInfo[] = [
     source: 'builtin',
   },
   {
+    id: 'fal-ai/nano-banana-2/edit',
+    label: 'Nano Banana 2 Edit',
+    provider: 'fal',
+    apiModel: 'fal-ai/nano-banana-2/edit',
+    kind: 'image',
+    edit: true,
+    estimatedCost: 0.15,
+    aliases: ['nano-banana-2-edit', 'Nano Banana 2 Edit'],
+    source: 'builtin',
+  },
+  {
     id: 'fal-ai/nano-banana-pro',
     label: 'Nano Banana Pro',
     provider: 'fal',
@@ -35,6 +47,39 @@ export const BUILTIN_MEDIA_MODELS: MediaModelInfo[] = [
     edit: false,
     estimatedCost: 0.15,
     aliases: ['nano-banana-pro', 'Nano Banana Pro'],
+    source: 'builtin',
+  },
+  {
+    id: 'fal-ai/nano-banana-pro/edit',
+    label: 'Nano Banana Pro Edit',
+    provider: 'fal',
+    apiModel: 'fal-ai/nano-banana-pro/edit',
+    kind: 'image',
+    edit: true,
+    estimatedCost: 0.15,
+    aliases: ['nano-banana-pro-edit', 'Nano Banana Pro Edit'],
+    source: 'builtin',
+  },
+  {
+    id: 'fal:openai/gpt-image-2',
+    label: 'GPT Image 2',
+    provider: 'fal',
+    apiModel: 'openai/gpt-image-2',
+    kind: 'image',
+    edit: false,
+    estimatedCost: null,
+    aliases: ['FAL GPT Image 2', 'openai/gpt-image-2'],
+    source: 'builtin',
+  },
+  {
+    id: 'fal:openai/gpt-image-2/edit',
+    label: 'GPT Image 2 Edit',
+    provider: 'fal',
+    apiModel: 'openai/gpt-image-2/edit',
+    kind: 'image',
+    edit: true,
+    estimatedCost: null,
+    aliases: ['FAL GPT Image 2 Edit', 'openai/gpt-image-2/edit'],
     source: 'builtin',
   },
   {
@@ -87,7 +132,7 @@ export const BUILTIN_MEDIA_MODELS: MediaModelInfo[] = [
     provider: 'fal',
     apiModel: 'fal-ai/ideogram/character',
     kind: 'image',
-    edit: false,
+    edit: true,
     estimatedCost: null,
     aliases: ['Ideogram Character', 'ideogram-character'],
     source: 'builtin',
@@ -150,14 +195,21 @@ export const BUILTIN_MEDIA_MODELS: MediaModelInfo[] = [
   },
 ];
 
-export const AVAILABLE_MEDIA_MODELS = BUILTIN_MEDIA_MODELS;
+export const AVAILABLE_MEDIA_MODELS = BUILTIN_MEDIA_MODELS.map((model): MediaModelInfo => ({
+  ...model,
+  endpoint: model.apiModel,
+}));
 
 export const AVAILABLE_IMAGE_MODELS = AVAILABLE_MEDIA_MODELS.filter((model) =>
   model.kind === 'image' && !model.hidden && model.enabled !== false
 );
 
+export const OPENAI_IMAGE_MODELS = AVAILABLE_IMAGE_MODELS.filter((model) =>
+  model.provider === 'openai'
+);
+
 export const mediaModelsByProvider: Record<MediaProviderName, MediaModelInfo[]> = {
-  openai: AVAILABLE_IMAGE_MODELS.filter((model) => model.provider === 'openai'),
+  openai: OPENAI_IMAGE_MODELS,
   fal: AVAILABLE_IMAGE_MODELS.filter((model) => model.provider === 'fal'),
   ideogram: AVAILABLE_IMAGE_MODELS.filter((model) => model.provider === 'ideogram'),
 };
@@ -242,5 +294,8 @@ export function mediaProviderForModel(model?: string): MediaProviderName {
 }
 
 export function normalizeMediaModelId(model?: string): string {
+  if (!model?.trim()) {
+    return (AVAILABLE_IMAGE_MODELS[0] ?? AVAILABLE_MEDIA_MODELS[0]).id;
+  }
   return resolveMediaModelInfo(model).id;
 }

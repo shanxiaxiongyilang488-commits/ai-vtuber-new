@@ -15,7 +15,9 @@ export type MediaModelInfo = {
   label: string;
   provider: MediaProviderName;
   apiModel: string;
+  endpoint?: string;
   kind: 'image' | 'video';
+  edit?: boolean;
   estimatedCost: number | null;
   aliases?: string[];
 };
@@ -156,18 +158,43 @@ export function resolveMediaModel(model?: string): MediaModelInfo {
     return fallback;
   }
 
+  if (configMediaMatch) {
+    const resolved: MediaModelInfo = {
+      id: configMediaMatch.id,
+      label: configMediaMatch.label,
+      provider: configMediaMatch.provider,
+      apiModel: configMediaMatch.apiModel,
+      endpoint: configMediaMatch.endpoint ?? configMediaMatch.apiModel,
+      kind: configMediaMatch.kind,
+      edit: configMediaMatch.edit,
+      estimatedCost: configMediaMatch.estimatedCost,
+      aliases: configMediaMatch.aliases,
+    };
+    console.log('[mediaProviders/registry] resolveMediaModel resolved', {
+      reason: 'model_config_match',
+      input: model ?? null,
+      resolved: {
+        id: resolved.id,
+        provider: resolved.provider,
+        endpoint: resolved.endpoint,
+      },
+    });
+    return resolved;
+  }
+
   if (serverMatch) {
+    const resolved = { ...serverMatch, endpoint: serverMatch.apiModel };
     console.log('[mediaProviders/registry] resolveMediaModel resolved', {
       reason: 'server_registry_match',
       input: model ?? null,
       raw,
       resolved: {
-        id: serverMatch.id,
-        provider: serverMatch.provider,
-        apiModel: serverMatch.apiModel,
+        id: resolved.id,
+        provider: resolved.provider,
+        endpoint: resolved.endpoint,
       },
     });
-    return serverMatch;
+    return resolved;
   }
 
   console.log('[mediaProviders/registry] resolveMediaModel fallback', {
@@ -189,34 +216,45 @@ export function resolveMediaModel(model?: string): MediaModelInfo {
   return fallback;
 }
 
-export async function generateMediaImage(input: ImageGenerationInput & {
-  requestedModel?: string;
-}): Promise<{ images: GeneratedImage[]; model: MediaModelInfo }> {
-  const resolveInput = input.requestedModel ?? input.model;
-  console.log('[mediaProviders/registry] generateMediaImage resolve source', {
-    inputModel: input.model ?? null,
-    requestedModel: input.requestedModel ?? null,
-    resolveInput,
+export async function generateMediaImage(
+  input: Omit<ImageGenerationInput, 'model'> & { selectedModelId: string; flowId?: string },
+): Promise<{ images: GeneratedImage[]; model: MediaModelInfo }> {
+  const { selectedModelId, flowId, ...generationInput } = input;
+  const model = resolveMediaModel(selectedModelId);
+  console.log('[EDIT FLOW][generateMediaImage ENTER]', {
+    flowId: flowId ?? null,
+    selectedModel: selectedModelId,
+    provider: model.provider,
+    endpoint: model.endpoint ?? model.apiModel,
+    refImages: generationInput.refImages.length,
   });
-  const model = resolveMediaModel(resolveInput);
   console.log('[mediaProviders/registry] generateMediaImage resolved final', {
-    requestProvider: null,
-    requestModel: resolveInput ?? null,
+    selectedModel: selectedModelId,
     resolvedProvider: model.provider,
-    resolvedModel: model.apiModel,
+    resolvedModel: model.endpoint ?? model.apiModel,
     resolvedModelId: model.id,
   });
   console.log('[MEDIA_PROVIDER]', model.provider);
   console.log('[MEDIA_MODEL]', model.id);
+  console.log('[REF IMAGES PIPELINE mediaProviders/registry]', {
+    received: input.refImages.length,
+    provider: model.provider,
+    model: model.apiModel,
+    editMode: input.editMode,
+  });
 
   if (model.provider === 'fal') {
     return {
-      images: await generateFalImage({ ...input, model: model.apiModel }),
+      images: await generateFalImage({
+        ...generationInput,
+        requestId: flowId,
+        model: model.endpoint ?? model.apiModel,
+      }),
       model,
     };
   }
 
-  const providerInput = { ...input, model: model.apiModel };
+  const providerInput = { ...generationInput, model: model.endpoint ?? model.apiModel };
   const images = model.provider === 'openai'
     ? await generateOpenAIImage(providerInput)
     : model.provider === 'ideogram'

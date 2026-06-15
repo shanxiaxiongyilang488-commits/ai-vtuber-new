@@ -8,6 +8,8 @@ const OPENAI_MODEL_MAP: Record<string, string> = {
   'gpt-image-2': 'gpt-image-2',
   'GPT Image 2': 'gpt-image-2',
   'openai/GPT Image 2': 'gpt-image-2',
+  'openai/gpt-image-2': 'gpt-image-2',
+  'openai/gpt-image-2/edit': 'gpt-image-2',
   'GPT Image': OPENAI_IMAGE_MODEL,
   OpenAI: OPENAI_IMAGE_MODEL,
   openai: OPENAI_IMAGE_MODEL,
@@ -37,9 +39,7 @@ export async function generateOpenAIImage(input: ImageGenerationInput): Promise<
   const requestUrl = input.editMode || primaryRef
     ? 'https://api.openai.com/v1/images/edits'
     : 'https://api.openai.com/v1/images/generations';
-  const requestModel = input.editMode || primaryRef
-    ? (model === 'gpt-image-2' ? 'gpt-image-1' : model)
-    : model;
+  const requestModel = model;
   console.log('[OPENAI REQUEST]');
   console.log('url:', requestUrl);
   console.log('model:', requestModel);
@@ -57,7 +57,7 @@ export async function generateOpenAIImage(input: ImageGenerationInput): Promise<
     if (input.editMode || primaryRef) {
       if (!primaryRef) throw error(400, 'Reference image is required for OpenAI image edit');
       result = await (openai.images.edit as any)({
-          model: model === 'gpt-image-2' ? 'gpt-image-1' : model,
+          model,
           image: dataUrlToFile(primaryRef),
           prompt: input.prompt,
           n: 1,
