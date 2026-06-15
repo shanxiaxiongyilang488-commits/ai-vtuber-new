@@ -121,10 +121,7 @@
   // AI Router: the engine assigned to the current character (Personality Engine).
   let routedProvider = $state<RoutedProvider>(routeProvider('AUTO'));
 
-  // 予約枠: 将来の表情変化用。今回は表情変化を実装せず 'normal' 固定で表示のみ。
-  type Emotion = 'normal';
-  const EMOTION_ICONS: Record<Emotion, string> = { normal: '🙂' };
-  let emotion = $state<Emotion>('normal');
+  // 感情システムは将来用に予約（emotion: 'normal' 相当）。今回はUI表示しない／表情変化は未実装。
 
   const LAB_INJECT_MEMORY_KEY = 'lab-inject-character-memory';
 
@@ -565,8 +562,6 @@
         <div class="character-head">
           <div class="portrait">
             {#if imageDataUrl}<img src={imageDataUrl} alt={character.name} />{:else}<span>NO IMAGE</span>{/if}
-            <!-- 予約枠: 将来の表情変化用（現在は normal 固定 / 表情変化は未実装） -->
-            <span class="emotion-badge" title="EMOTION: {emotion}">{EMOTION_ICONS[emotion]}</span>
           </div>
           <div class="head-info">
             <h2>{character.name}</h2>
@@ -584,32 +579,30 @@
             <div class="hint center">{character.name}との会話を始めてください。</div>
           {/if}
           {#each messages as message (message.id)}
-            <!-- LABチャットと同じ2カラム構造: [顔アイコン] [吹き出し] -->
+            <!-- LABチャット同様の2カラム: [顔アイコン+名前+AIモデル] [吹き出し] -->
             <article class:user={message.role === 'user'} class:assistant={message.role === 'assistant'}>
-              <div class="msg-avatar">
-                {#if message.role === 'assistant'}
-                  {#if imageDataUrl}
-                    <img src={imageDataUrl} alt={character.name} />
+              <div class="msg-id">
+                <div class="msg-avatar">
+                  {#if message.role === 'assistant'}
+                    {#if imageDataUrl}
+                      <img src={imageDataUrl} alt={character.name} />
+                    {:else}
+                      <span class="msg-avatar-fallback">{character.name.slice(0, 1)}</span>
+                    {/if}
                   {:else}
-                    <span class="msg-avatar-fallback">{character.name.slice(0, 1)}</span>
+                    <span class="msg-avatar-fallback user-face">👤</span>
                   {/if}
-                  <!-- ⑥ 予約枠: 将来の表情アイコン（emotion）。今回は normal 固定 / 表情変化は未実装 -->
-                  <span class="emotion-badge" title="EMOTION: {emotion}">{EMOTION_ICONS[emotion]}</span>
+                </div>
+                {#if message.role === 'assistant'}
+                  <span class="msg-name">{character.name}</span>
+                  <span class="msg-ai" class:pending={!routedProvider.implemented}>
+                    <span class="msg-ai-icon">{routedProvider.icon}</span>{routedProvider.label}
+                  </span>
                 {:else}
-                  <span class="msg-avatar-fallback user-face">👤</span>
+                  <span class="msg-name">YOU</span>
                 {/if}
               </div>
               <div class="msg-bubble">
-                <div class="bubble-head">
-                  {#if message.role === 'assistant'}
-                    <span class="msg-name">{character.name}</span>
-                    <span class="msg-ai" class:pending={!routedProvider.implemented}>
-                      <span class="msg-ai-icon">{routedProvider.icon}</span>{routedProvider.label}
-                    </span>
-                  {:else}
-                    <span class="msg-name">👤 YOU</span>
-                  {/if}
-                </div>
                 {#if message.imageUrl}
                   <img class="message-image" src={message.imageUrl} alt="attached" />
                 {/if}
@@ -725,7 +718,7 @@
     flex-shrink: 0;
     display: grid;
     place-items: center;
-    overflow: visible;
+    overflow: hidden;
     border-radius: 14px;
     background: #020617;
     color: #475569;
@@ -734,22 +727,6 @@
     box-shadow: 0 0 16px rgba(34,211,238,.35), inset 0 0 10px rgba(34,211,238,.12);
   }
   .portrait img { width: 100%; height: 100%; object-fit: cover; border-radius: 13px; }
-  /* 予約枠: 将来の表情アイコン表示位置 */
-  .emotion-badge {
-    position: absolute;
-    right: -6px;
-    bottom: -6px;
-    width: 22px;
-    height: 22px;
-    display: grid;
-    place-items: center;
-    border-radius: 50%;
-    background: #0b1220;
-    border: 1px solid rgba(34,211,238,.5);
-    box-shadow: 0 0 8px rgba(34,211,238,.4);
-    font-size: 12px;
-    line-height: 1;
-  }
   .role { display: inline-flex; align-items: center; gap: 5px; color: #fbbf24; font-size: 12px; font-weight: 700; }
   .role-tag { font-size: 11px; }
   .desc { color: #94a3b8; font-size: 11px; line-height: 1.5; margin: 5px 0 0; }
@@ -776,35 +753,39 @@
     font-weight: 800;
   }
   .messages { padding: 16px; overflow-y: auto; display: flex; flex-direction: column; }
-  /* ① 2カラム構造: [顔アイコン] [吹き出し] */
-  article { display: flex; gap: 12px; align-items: flex-end; max-width: 88%; margin-bottom: 18px; }
+  /* ① 2カラム構造: [顔アイコン+名前+AIモデル] [吹き出し] */
+  article { display: flex; gap: 12px; align-items: flex-start; max-width: 90%; margin-bottom: 20px; }
   article.assistant { align-self: flex-start; }
   article.user { align-self: flex-end; flex-direction: row-reverse; }
 
-  /* ⑤ 左カラム: 56-64px 丸型顔アイコン */
+  /* 左カラム: アイコン → 名前 → AIモデル の縦積み */
+  .msg-id { display: flex; flex-direction: column; align-items: center; gap: 6px; flex-shrink: 0; width: 92px; }
+
+  /* 顔アイコン 64〜80px（LABチャット同等） */
   .msg-avatar {
-    position: relative;
     flex-shrink: 0;
-    width: 60px;
-    height: 60px;
+    width: 72px;
+    height: 72px;
     border-radius: 50%;
+    overflow: hidden;
     display: grid;
     place-items: center;
     background: #020617;
     border: 1.5px solid rgba(34,211,238,.5);
-    box-shadow: 0 0 0 2px rgba(34,211,238,.07), 0 0 14px rgba(34,211,238,.32);
+    box-shadow: 0 0 0 2px rgba(34,211,238,.07), 0 0 16px rgba(34,211,238,.34);
   }
-  .msg-avatar img { width: 100%; height: 100%; object-fit: cover; object-position: top; border-radius: 50%; }
-  .msg-avatar-fallback { color: #67e8f9; font-size: 22px; font-weight: 800; }
+  .msg-avatar img { width: 100%; height: 100%; object-fit: cover; object-position: top; }
+  .msg-avatar-fallback { color: #67e8f9; font-size: 26px; font-weight: 800; }
   article.user .msg-avatar {
     border-color: rgba(168,85,247,.55);
-    box-shadow: 0 0 0 2px rgba(168,85,247,.07), 0 0 14px rgba(168,85,247,.3);
+    box-shadow: 0 0 0 2px rgba(168,85,247,.07), 0 0 16px rgba(168,85,247,.32);
   }
-  article.user .msg-avatar-fallback { font-size: 26px; }
+  article.user .msg-avatar-fallback { font-size: 30px; }
 
-  /* 右カラム: 吹き出し */
+  /* 右カラム: 吹き出し（サイバー調を維持） */
   .msg-bubble {
     min-width: 0;
+    margin-top: 2px;
     padding: 11px 14px 12px;
     backdrop-filter: blur(2px);
   }
@@ -821,11 +802,19 @@
     box-shadow: 0 0 14px rgba(168,85,247,.28), inset 0 0 12px rgba(168,85,247,.08);
   }
 
-  /* ② 吹き出しヘッダー: 名前 + AIバッジ 横並び */
-  .bubble-head { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
-  .msg-name { font-size: 12px; font-weight: 800; letter-spacing: .03em; color: #f8fafc; }
+  /* アイコン下: キャラ名（中央寄せ） */
+  .msg-name {
+    max-width: 92px;
+    text-align: center;
+    font-size: 13px;
+    font-weight: 800;
+    letter-spacing: .03em;
+    color: #f8fafc;
+    overflow-wrap: anywhere;
+  }
   article.assistant .msg-name { color: #67e8f9; text-shadow: 0 0 8px rgba(34,211,238,.5); }
   article.user .msg-name { color: #d8b4fe; text-shadow: 0 0 8px rgba(168,85,247,.5); }
+  /* 名前の下: AIモデルバッジ */
   .msg-ai {
     display: inline-flex;
     align-items: center;
