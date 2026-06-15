@@ -3,6 +3,7 @@
   import CharacterLibraryCard, {
     type CharacterLibraryItem,
   } from '$lib/components/characters/CharacterLibraryCard.svelte';
+  import PersonalityEngineModal from '$lib/components/characters/PersonalityEngineModal.svelte';
   import { sessionStore } from '$lib/stores/sessionStore';
 
   let characters = $state<CharacterLibraryItem[]>([]);
@@ -10,6 +11,12 @@
   let errorMessage = $state('');
   let editingId = $state('');
   let busyId = $state('');
+
+  // Personality Engine modal (CHARACTER LIBRARY CHAT button)
+  let providerSettings = $state<Record<string, { provider: string }>>({});
+  let chatModalCharacter = $state<CharacterLibraryItem | null>(null);
+  let chatModalProvider = $state('AUTO');
+  let chatModalBusy = $state(false);
   let createOpen = $state(false);
   let newId = $state('');
   let newName = $state('');
@@ -42,10 +49,47 @@
         }
         return { ...entry, image: entry.image ?? '', imageDataUrl };
       }));
+      void loadProviderSettings();
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
     } finally {
       loading = false;
+    }
+  }
+
+  async function loadProviderSettings(): Promise<void> {
+    try {
+      const response = await fetch('/api/character-settings');
+      if (!response.ok) return;
+      const data = await response.json();
+      providerSettings = data?.settings && typeof data.settings === 'object' ? data.settings : {};
+    } catch {
+      // Non-fatal: the modal falls back to AUTO when settings can't be loaded.
+    }
+  }
+
+  function openChatModal(character: CharacterLibraryItem): void {
+    chatModalCharacter = character;
+    chatModalProvider = providerSettings[character.id]?.provider ?? 'AUTO';
+  }
+
+  async function startChat(): Promise<void> {
+    const character = chatModalCharacter;
+    if (!character) return;
+    chatModalBusy = true;
+    try {
+      const response = await fetch('/api/character-settings', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id: character.id, provider: chatModalProvider }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.message ?? 'AI設定の保存に失敗しました。');
+      providerSettings = { ...providerSettings, [character.id]: { provider: chatModalProvider } };
+      window.location.href = `/character-memory?id=${encodeURIComponent(character.id)}`;
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+      chatModalBusy = false;
     }
   }
 
@@ -92,6 +136,26 @@
       const data = await response.json();
       if (!response.ok) throw new Error(data?.message ?? 'キャラクター更新に失敗しました。');
       editingId = '';
+      await loadCharacters();
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      busyId = '';
+    }
+  }
+
+  async function deleteCharacter(id: string, name: string): Promise<void> {
+    if (!window.confirm(`「${name}」(${id}) をCharacter Libraryから削除しますか？`)) return;
+
+    busyId = id;
+    errorMessage = '';
+    try {
+      const response = await fetch(`/api/characters/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.message ?? 'キャラクター削除に失敗しました。');
+      if (editingId === id) editingId = '';
       await loadCharacters();
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
@@ -254,10 +318,23 @@
           onSave={(input) => updateCharacter(character.id, input)}
           onImageChange={(file) => changeImage(character.id, file)}
           onGenerateSheet={() => generateCharacterYaml(character)}
-          onChat={() => (window.location.href = `/characters/${encodeURIComponent(character.id)}/chat`)}
+          onUseCharacter={() => (window.location.href = `/lab?useCharacter=${encodeURIComponent(character.id)}`)}
+          onChat={() => openChatModal(character)}
+          onDelete={() => deleteCharacter(character.id, character.name)}
         />
       {/each}
     </main>
+  {/if}
+
+  {#if chatModalCharacter}
+    <PersonalityEngineModal
+      characterName={chatModalCharacter.name}
+      characterImage={chatModalCharacter.imageDataUrl ?? ''}
+      bind:provider={chatModalProvider}
+      busy={chatModalBusy}
+      onCancel={() => (chatModalCharacter = null)}
+      onStart={startChat}
+    />
   {/if}
 </div>
 
