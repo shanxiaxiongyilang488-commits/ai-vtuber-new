@@ -2,6 +2,16 @@
   import { onMount } from 'svelte';
   import { page } from '$app/state';
   import { routeProvider, type RoutedProvider } from '$lib/ai/aiProviderRouter';
+  import {
+    GROWTH_PARAMS,
+    clampGrowth,
+    evaluateGrowth,
+    growthLogEntries,
+    initialGrowthValues,
+    type GrowthKey,
+    type GrowthLogEntry,
+    type GrowthValues,
+  } from '$lib/character-memory/growthSystem';
 
   type CharacterListItem = {
     id: string;
@@ -121,6 +131,27 @@
   // AI Router: the engine assigned to the current character (Personality Engine).
   let routedProvider = $state<RoutedProvider>(routeProvider('AUTO'));
 
+  // 🧠 Growth System V2 — 送信時にユーザーの文章だけを見てキーワード一致で加算する。
+  // AI返答では変化させない。emotion / 表情 / 画像生成 / Memory保存 とは無関係（UI内の一時値のみ）。
+  // 値は永続化しない（character-memory.json には一切書き込まない）。
+  let growthValues = $state<GrowthValues>(initialGrowthValues());
+  let growthLog = $state<GrowthLogEntry[]>([]);
+  let growthLogTimer: ReturnType<typeof setTimeout> | undefined;
+
+  // 送信ボタン押下時のみ呼ぶ。ユーザー入力テキストだけを評価して数値を変動させる。
+  function applyGrowthFromUserText(userText: string): void {
+    const delta = evaluateGrowth(userText);
+    const entries = growthLogEntries(delta);
+    if (entries.length === 0) return;
+    for (const key of Object.keys(delta) as GrowthKey[]) {
+      growthValues[key] = clampGrowth(growthValues[key] + (delta[key] ?? 0));
+    }
+    growthLog = entries;
+    if (growthLogTimer) clearTimeout(growthLogTimer);
+    // 変動時だけ表示し、3秒後に自動消去する。
+    growthLogTimer = setTimeout(() => { growthLog = []; }, 3000);
+  }
+
   // 感情システムは将来用に予約（emotion: 'normal' 相当）。今回はUI表示しない／表情変化は未実装。
 
   const LAB_INJECT_MEMORY_KEY = 'lab-inject-character-memory';
@@ -162,6 +193,10 @@
     memory = emptyMemory();
     imageDataUrl = '';
     updatedAt = '';
+    // 成長パラメータはキャラ切替でセッション初期値(50)へリセット（永続化しない）。
+    growthValues = initialGrowthValues();
+    growthLog = [];
+    if (growthLogTimer) clearTimeout(growthLogTimer);
     try {
       const response = await fetch(`/api/character-memory/${encodeURIComponent(id)}`);
       const data = await response.json();
@@ -285,6 +320,8 @@
     pendingImage = '';
     sending = true;
     errorMessage = '';
+    // Growth System V2: 送信時にユーザーの文章だけで判定（AI返答は見ない）。
+    applyGrowthFromUserText(text);
     try {
       const savedUrl = attached ? await persistImage(attached) : '';
       const userText = text || (attached ? 'この画像を見て、感想を聞かせて。' : '');
@@ -651,13 +688,39 @@
         <div class="memory-header">
           <div>
             <p class="panel-label">CHARACTER MEMORY</p>
-            <h2>会話から育つ設定</h2>
+            <h2>成長パラメータ</h2>
           </div>
           <button onclick={updateMemoryFromHistory} disabled={analyzing || messages.length === 0}>
             {analyzing ? '解析中...' : '履歴から更新'}
           </button>
         </div>
 
+        <!-- 🧠 Growth System V2: 送信時にユーザー文章のキーワードで自動変化（レーダー・emotionは未実装） -->
+        <section class="growth-system">
+          <p class="growth-title">🧠 Growth System</p>
+          {#each GROWTH_PARAMS as param (param.key)}
+            <div class="growth-row">
+              <span class="growth-name">{param.label}</span>
+              <div class="growth-bar"><div class="growth-fill" style={`width:${growthValues[param.key]}%`}></div></div>
+              <span class="growth-value">{growthValues[param.key]}</span>
+            </div>
+          {/each}
+        </section>
+
+        {#if growthLog.length > 0}
+          <!-- 変動時だけ表示。3秒後に自動消去。 -->
+          <div class="growth-log">
+            <p class="growth-log-title">📈 Growth Log</p>
+            {#each growthLog as entry (entry.label)}
+              <div class="growth-log-row">
+                <span class="growth-log-name">{entry.label}</span>
+                <span class="growth-log-delta">{entry.amount > 0 ? '+' : ''}{entry.amount}</span>
+              </div>
+            {/each}
+          </div>
+        {/if}
+
+        <p class="section-divider">会話メモリ</p>
         <label><span>性格</span><textarea rows="4" value={memory.personality.join('\n')} oninput={(e) => updateMemoryList('personality', e.currentTarget.value)}></textarea></label>
         <label><span>口調</span><textarea rows="4" value={memory.speechStyle.join('\n')} oninput={(e) => updateMemoryList('speechStyle', e.currentTarget.value)}></textarea></label>
         <label><span>好き</span><textarea rows="3" value={memory.likes.join('\n')} oninput={(e) => updateMemoryList('likes', e.currentTarget.value)}></textarea></label>
@@ -863,6 +926,74 @@
   .memory-header { display: flex; justify-content: space-between; gap: 8px; align-items: start; }
   .memory-header p, .memory-header h2 { margin: 0; }
   .memory-header h2 { margin-top: 3px; font-size: 15px; }
+
+  /* 🧠 Growth System V1 — 固定値の数値バー */
+  .growth-system {
+    margin-top: 14px;
+    padding: 12px;
+    border: 1px solid rgba(34,211,238,.22);
+    border-radius: 10px;
+    background: rgba(34,211,238,.05);
+  }
+  .growth-title {
+    margin: 0 0 10px;
+    color: #67e8f9;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .08em;
+    text-shadow: 0 0 8px rgba(34,211,238,.4);
+  }
+  .growth-row { display: grid; grid-template-columns: 48px 1fr 28px; align-items: center; gap: 8px; margin-top: 8px; }
+  .growth-name { color: #cbd5e1; font-size: 11px; font-weight: 700; }
+  .growth-bar {
+    height: 8px;
+    border-radius: 999px;
+    background: rgba(148,163,184,.16);
+    overflow: hidden;
+    box-shadow: inset 0 0 6px rgba(2,6,23,.6);
+  }
+  .growth-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, rgba(34,211,238,.55), rgba(34,211,238,.95));
+    box-shadow: 0 0 8px rgba(34,211,238,.5);
+  }
+  .growth-value { color: #a5f3fc; font-size: 11px; font-weight: 800; text-align: right; }
+
+  /* 📈 Growth Log — 変動時だけ表示（3秒で自動消去） */
+  .growth-log {
+    margin-top: 12px;
+    padding: 10px 12px;
+    border: 1px solid rgba(74,222,128,.35);
+    border-radius: 10px;
+    background: rgba(74,222,128,.08);
+    box-shadow: 0 0 12px rgba(74,222,128,.22);
+    animation: growth-log-in .2s ease-out;
+  }
+  .growth-log-title {
+    margin: 0 0 8px;
+    color: #86efac;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .08em;
+  }
+  .growth-log-row { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; }
+  .growth-log-name { color: #cbd5e1; font-size: 12px; font-weight: 700; }
+  .growth-log-delta { color: #4ade80; font-size: 12px; font-weight: 800; text-shadow: 0 0 8px rgba(74,222,128,.5); }
+  @keyframes growth-log-in {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .section-divider {
+    margin: 16px 0 0;
+    padding-top: 12px;
+    border-top: 1px solid rgba(148,163,184,.16);
+    color: #22d3ee;
+    font-size: 8px;
+    font-weight: 800;
+    letter-spacing: .15em;
+  }
   label { display: grid; gap: 4px; margin-top: 10px; }
   label span { color: #94a3b8; font-size: 9px; font-weight: 800; }
   .save-memory { width: 100%; margin-top: 12px; border-color: rgba(251,191,36,.35); color: #fde68a; }
