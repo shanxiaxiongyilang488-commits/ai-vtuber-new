@@ -38,7 +38,7 @@
       voice = character.voice ?? character.voiceId ?? 'none';
       voiceId = character.voiceId != null? String(character.voiceId): '4';
       speakerId = character.speakerId ?? 1;
-      systemPrompt = character.systemPrompt;
+      systemPrompt = character.systemPrompt ?? character.prompt ?? '';
       avatarPreview = character.avatar ?? null;
       ollamaModel = character.ollamaModel ?? '';
     }

@@ -21,7 +21,9 @@
     onSave,
     onImageChange,
     onGenerateSheet,
+    onUseCharacter,
     onChat,
+    onDelete,
   }: {
     character: CharacterLibraryItem;
     editing?: boolean;
@@ -31,7 +33,9 @@
     onSave: (input: Pick<CharacterLibraryItem, 'name' | 'role' | 'description'>) => void | Promise<void>;
     onImageChange: (file: File) => void | Promise<void>;
     onGenerateSheet: () => void | Promise<void>;
+    onUseCharacter: () => void;
     onChat: () => void;
+    onDelete: () => void | Promise<void>;
   } = $props();
 
   let name = $state(untrack(() => character.name));
@@ -116,8 +120,18 @@
         {/if}
       </section>
       <div class="card-actions">
-        <button class="chat-button" onclick={onChat}>Character Chat</button>
-        <button class="edit-button" onclick={onEdit}>編集</button>
+        <button
+          class="use-button"
+          onclick={onUseCharacter}
+          disabled={busy || !character.hasReference}
+        >
+          Use Character
+        </button>
+        <button class="chat-button" onclick={onChat}>CHAT</button>
+        <button class="edit-button" onclick={onEdit} disabled={busy}>編集</button>
+        <button class="delete-button" onclick={onDelete} disabled={busy}>
+          {busy ? '削除中...' : '削除'}
+        </button>
       </div>
     {/if}
   </div>
@@ -240,9 +254,16 @@
     cursor: pointer;
   }
   button:disabled { cursor: not-allowed; opacity: 0.45; }
-  .card-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 12px; }
+  .card-actions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; margin-top: 12px; }
+  .use-button { border-color: rgba(34, 211, 238, 0.5); color: #67e8f9; }
   .chat-button { border-color: rgba(251, 191, 36, 0.38); color: #fde68a; }
   .edit-button { width: 100%; }
+  .delete-button {
+    width: 100%;
+    border-color: rgba(248, 113, 113, 0.45);
+    background: rgba(248, 113, 113, 0.08);
+    color: #fca5a5;
+  }
   .actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 12px; }
   .secondary { border-color: rgba(148, 163, 184, 0.25); color: #94a3b8; }
 </style>

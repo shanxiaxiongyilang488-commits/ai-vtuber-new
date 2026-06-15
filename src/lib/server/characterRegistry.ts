@@ -48,7 +48,6 @@ export interface RegisterCharacterInput {
   role?: string;
   description?: string;
   referenceImageDataUrl?: string;
-  sheetImageDataUrl?: string;
 }
 
 export interface UpdateCharacterInput {
@@ -85,6 +84,7 @@ const PROJECT_ROOT = resolve(process.cwd(), 'data', 'project');
 const CHARACTER_YAML_ROOT = join(PROJECT_ROOT, 'characters');
 const CHARACTER_ASSET_ROOT = join(PROJECT_ROOT, 'character-assets');
 const LEGACY_CHARACTER_ROOT = resolve(process.cwd(), 'data', 'characters');
+const LEGACY_MIGRATION_MARKER = join(PROJECT_ROOT, '.character-registry-migrated');
 const PROFILE_FILE = 'profile.json';
 const REFERENCE_FILE = 'reference.png';
 const SHEET_FILE = 'sheet.png';
@@ -95,8 +95,10 @@ const MEMORY_FILE = 'memory.json';
 function ensureRoot(): void {
   mkdirSync(CHARACTER_YAML_ROOT, { recursive: true });
   mkdirSync(CHARACTER_ASSET_ROOT, { recursive: true });
+  if (existsSync(LEGACY_MIGRATION_MARKER)) return;
   migrateLegacyCharacters();
   splitMultiCharacterYamlFiles();
+  writeFileSync(LEGACY_MIGRATION_MARKER, new Date().toISOString(), 'utf-8');
 }
 
 function normalizeId(id: string): string {
@@ -340,10 +342,6 @@ export function registerCharacter(input: RegisterCharacterInput): CharacterRegis
   if (input.referenceImageDataUrl) {
     writeFileSync(imagePath(id, REFERENCE_FILE), dataUrlToBuffer(input.referenceImageDataUrl));
   }
-  if (input.sheetImageDataUrl) {
-    writeFileSync(imagePath(id, SHEET_FILE), dataUrlToBuffer(input.sheetImageDataUrl));
-  }
-
   return toEntry(profile);
 }
 
@@ -442,10 +440,10 @@ export function searchCharacters(query: string): CharacterRegistryEntry[] {
 }
 
 export function deleteCharacter(id: string): boolean {
-  const dir = characterDir(id);
+  const profileFile = profilePath(id);
   const yamlFile = characterYamlPath(id);
-  if (!existsSync(dir) && !existsSync(yamlFile)) return false;
-  rmSync(dir, { recursive: true, force: true });
+  if (!existsSync(profileFile) && !existsSync(yamlFile)) return false;
+  rmSync(profileFile, { force: true });
   rmSync(yamlFile, { force: true });
   return true;
 }

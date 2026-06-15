@@ -19,7 +19,7 @@
     <button
       class="emoji-btn"
       onclick={() => {
-        const idx = (EMOJIS.indexOf(character.avatarEmoji) + 1) % EMOJIS.length;
+        const idx = (EMOJIS.indexOf(character.avatarEmoji ?? '') + 1) % EMOJIS.length;
         onUpdate({ avatarEmoji: EMOJIS[idx] });
       }}
       disabled={disabled}

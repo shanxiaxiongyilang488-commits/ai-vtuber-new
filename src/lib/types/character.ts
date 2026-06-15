@@ -65,15 +65,15 @@ export interface Character {
   catchPhrase?: string;
 
   // 👇 既存
-  systemPrompt: string;
+  systemPrompt?: string;
   prompt?: string;
 
   aiEngine: AIEngine;
 
   voiceEngine: VoiceEngine;
   voice?: string;
-  voiceId: string;
-  speakerId: number;
+  voiceId?: string;
+  speakerId?: number;
 
   // 👇 エラー対策（今出てるやつ）
   avatarEmoji?: string;

@@ -26,7 +26,6 @@ export const POST: RequestHandler = async ({ request }) => {
         role: String(fd.get('role') ?? ''),
         description: String(fd.get('description') ?? ''),
         referenceImageDataUrl: await formDataImage(fd.get('reference')),
-        sheetImageDataUrl: await formDataImage(fd.get('sheet')),
       });
       return json({ character }, { status: 201 });
     }
@@ -38,7 +37,6 @@ export const POST: RequestHandler = async ({ request }) => {
       role: String(body?.role ?? ''),
       description: String(body?.description ?? ''),
       referenceImageDataUrl: typeof body?.referenceImageDataUrl === 'string' ? body.referenceImageDataUrl : undefined,
-      sheetImageDataUrl: typeof body?.sheetImageDataUrl === 'string' ? body.sheetImageDataUrl : undefined,
     });
     return json({ character }, { status: 201 });
   } catch (error) {
