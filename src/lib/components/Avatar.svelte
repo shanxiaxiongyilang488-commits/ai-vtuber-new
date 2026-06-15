@@ -2,27 +2,45 @@
   import { createEventDispatcher, onDestroy } from 'svelte';
   import { createVolumeAnalyzer, type VolumeAnalyzer } from '$lib/utils/audioAnalyzer';
 
-  export let name = 'Avatar';
-  export let faceSrc = '/vtuber/face.png';
-  export let mouthCloseSrc = '/vtuber/mouth_close.png';
-  export let mouthMidSrc = '/vtuber/mouth_mid.png';
-  export let mouthOpenSrc = '/vtuber/mouth_open.png';
-
-  export let audioSrc = '';
-  export let autoPlayOnSourceChange = true;
-  export let controls = false;
-  export let loop = false;
-  export let preload: 'none' | 'metadata' | 'auto' = 'auto';
-
-  export let width = 320;
-  export let mouthWidth = 88;
-  export let mouthBottom = 46;
-  export let mouthLeft = 50;
-  export let mouthRotation = 0;
-
-  export let midThreshold = 0.08;
-  export let openThreshold = 0.16;
-  export let idleMouth = 'close';
+  let {
+    name = 'Avatar',
+    faceSrc = '/vtuber/face.png',
+    mouthCloseSrc = '/vtuber/mouth_close.png',
+    mouthMidSrc = '/vtuber/mouth_mid.png',
+    mouthOpenSrc = '/vtuber/mouth_open.png',
+    audioSrc = '',
+    autoPlayOnSourceChange = true,
+    controls = false,
+    loop = false,
+    preload = 'auto',
+    width = 320,
+    mouthWidth = 88,
+    mouthBottom = 46,
+    mouthLeft = 50,
+    mouthRotation = 0,
+    midThreshold = 0.08,
+    openThreshold = 0.16,
+    idleMouth = 'close',
+  }: {
+    name?: string;
+    faceSrc?: string;
+    mouthCloseSrc?: string;
+    mouthMidSrc?: string;
+    mouthOpenSrc?: string;
+    audioSrc?: string;
+    autoPlayOnSourceChange?: boolean;
+    controls?: boolean;
+    loop?: boolean;
+    preload?: 'none' | 'metadata' | 'auto';
+    width?: number;
+    mouthWidth?: number;
+    mouthBottom?: number;
+    mouthLeft?: number;
+    mouthRotation?: number;
+    midThreshold?: number;
+    openThreshold?: number;
+    idleMouth?: string;
+  } = $props();
 
   const dispatch = createEventDispatcher<{
     play: { src: string };
@@ -37,15 +55,16 @@
   let volume = 0;
   let mouthState: 'close' | 'mid' | 'open' = idleMouth as 'close' | 'mid' | 'open';
 
-  $: if (audioSrc && autoPlayOnSourceChange && audioSrc !== initializedSrc && audioEl) {
-    initializedSrc = audioSrc;
-    void playAudio(audioSrc);
-  }
-
-  $: if (!audioSrc) {
-    mouthState = idleMouth as 'close' | 'mid' | 'open';
-    volume = 0;
-  }
+  $effect(() => {
+    if (audioSrc && autoPlayOnSourceChange && audioSrc !== initializedSrc && audioEl) {
+      initializedSrc = audioSrc;
+      void playAudio(audioSrc);
+    }
+    if (!audioSrc) {
+      mouthState = idleMouth as 'close' | 'mid' | 'open';
+      volume = 0;
+    }
+  });
 
   function resolveMouthState(nextVolume: number): 'close' | 'mid' | 'open' {
     if (nextVolume >= openThreshold) return 'open';

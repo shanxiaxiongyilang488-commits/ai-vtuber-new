@@ -24,6 +24,7 @@ const LM_STUDIO_DEFAULT_MODEL = 'qwen/qwen3-4b';
 const OLLAMA_TIMEOUT_MS = 120000;
 
 interface LabChatRequest {
+  requestId?: string;
   route?: LabChatRoute;
   provider?: Provider;
   model?: string;
@@ -194,6 +195,7 @@ async function parseRequest(request: Request): Promise<{ body: LabChatRequest; i
     const providerValue = fd.get('provider');
     const conversationHistory = parseConversationHistory(parseFormJson(fd.get('conversationHistory')));
     const body: LabChatRequest = {
+      requestId: typeof fd.get('requestId') === 'string' ? String(fd.get('requestId')) : undefined,
       route:        isLabChatRoute(fd.get('route')) ? fd.get('route') as LabChatRoute : undefined,
       provider:     typeof providerValue === 'string' && providerValue ? providerValue as Provider : undefined,
       model:        (fd.get('model') as string | null) ?? undefined,
@@ -208,8 +210,11 @@ async function parseRequest(request: Request): Promise<{ body: LabChatRequest; i
       userMessage:  (fd.get('userMessage') as string) ?? '',
     };
     const images: ImageInput[] = [];
-    for (let i = 0; fd.has(`image_${i}`); i++) {
-      const file = fd.get(`image_${i}`) as File;
+    const imageEntries = Array.from(fd.entries())
+      .filter((entry): entry is [string, File] => /^image_\d+$/.test(entry[0]) && entry[1] instanceof File)
+      .sort(([a], [b]) => Number(a.slice('image_'.length)) - Number(b.slice('image_'.length)));
+    for (const [key, file] of imageEntries) {
+      const i = Number(key.slice('image_'.length));
       const buf  = await file.arrayBuffer();
       const b64  = Buffer.from(buf).toString('base64');
       const mime = file.type || 'image/jpeg';
@@ -236,6 +241,10 @@ async function parseRequest(request: Request): Promise<{ body: LabChatRequest; i
     if (notes.length > 0) {
       body.userMessage = `${body.userMessage}\n${notes.join(' ')}`;
     }
+    console.log('[REFERENCE_IMAGES]', {
+      requestId: body.requestId ?? null,
+      count: images.length,
+    });
     return { body, images, enableMemoryByDefault: true };
   }
 
@@ -251,6 +260,10 @@ async function parseRequest(request: Request): Promise<{ body: LabChatRequest; i
     images.push({ dataUrl, name: `json_image_${i}` });
   }
 
+  console.log('[REFERENCE_IMAGES]', {
+    requestId: body.requestId ?? null,
+    count: images.length,
+  });
   return { body, images, enableMemoryByDefault: images.length > 0 };
 }
 
@@ -618,6 +631,7 @@ export const POST: RequestHandler = async ({ request }) => {
     console.log('[OPENAI MODEL]', actualModel);
     try {
       const text = await chatOpenAI({
+        requestId: body.requestId,
         apiKey,
         systemPrompt: effectiveSystemPrompt,
         userMessage,
@@ -731,6 +745,7 @@ export const POST: RequestHandler = async ({ request }) => {
       console.log('[OPENAI KEY CONFIGURED]', Boolean(apiKey));
       console.log('[OPENAI MODEL]', fallbackModel);
       const text = await chatOpenAI({
+        requestId: body.requestId,
         apiKey,
         systemPrompt: effectiveSystemPrompt,
         userMessage,

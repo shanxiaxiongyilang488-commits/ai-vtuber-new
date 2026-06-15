@@ -18,11 +18,11 @@
   }
 
   function getCharacterColor(characterId: 'char1' | 'char2'): string {
-    return characterId === 'char1' ? appStore.char1.color : appStore.char2.color;
+    return (characterId === 'char1' ? appStore.char1.color : appStore.char2.color) ?? '#94a3b8';
   }
 
   function getCharacterEmoji(characterId: 'char1' | 'char2'): string {
-    return characterId === 'char1' ? appStore.char1.avatarEmoji : appStore.char2.avatarEmoji;
+    return (characterId === 'char1' ? appStore.char1.avatarEmoji : appStore.char2.avatarEmoji) ?? '';
   }
 
   // The character currently "typing"

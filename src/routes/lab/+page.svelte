@@ -1,13 +1,10 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
   import { createVoiceEngine } from '$lib/api/voiceEngine';
   import { PROVIDER_MODELS, PROVIDER_OPTIONS, type AIProvider } from '$lib/config/models';
   import {
     AVAILABLE_IMAGE_MODELS,
-    AVAILABLE_MEDIA_PROVIDER_OPTIONS,
-    mediaModelsForProvider as mediaModelsForProviderConfig,
     normalizeMediaModelId,
-    type MediaProviderName,
   } from '$lib/config/mediaModels';
   import { sessionStore } from '$lib/stores/sessionStore';
   import AvatarViewer          from '$lib/components/AvatarViewer.svelte';
@@ -18,7 +15,7 @@
   import { addSpecialMemory, getSpecialMemoryHint } from '$lib/ai/memory/specialMemory';
   import { recordTalk, getAnniversaryHint, computeDailyDrift, shouldApplyDrift, markDriftApplied } from '$lib/ai/memory/anniversaryMemory';
   import { recordVisit, getHabitHint } from '$lib/ai/memory/habitMemory';
-  import { getLatestImageMemory, saveImageMemory } from '$lib/ai/memory/imageMemory';
+  import { saveImageMemory } from '$lib/ai/memory/imageMemory';
   import { clearLabChatHistory, loadLabChatHistory, migrateLabChatHistoryFromLocalStorage, saveLabChatHistory } from '$lib/ai/memory/labChatHistory';
   import { CHARACTER_PROFILES } from '$lib/ai/characters/characterProfiles';
   import { buildEmotionStyleHint } from '$lib/ai/emotion/emotionStyleEngine';
@@ -491,6 +488,7 @@
 
   // ── Reference Images (Chat Upload) ───────────────────────────
   type ReferenceImage = {
+    sessionId: string;
     name:    string;
     role: string;
     description: string;
@@ -500,6 +498,21 @@
     sourceUrl?: string; // original image used for Vision and image generation
     characterId?: string;
     registryName?: string;
+  };
+
+  type ImageRoute = 'character_sheet' | 'manga_continue' | 'image_edit' | 'normal_generate';
+
+  type CharacterRegistryItem = {
+    id: string;
+    name: string;
+    role: string;
+    description: string;
+    hasReference: boolean;
+  };
+
+  type RefLibraryItem = {
+    id: string;
+    name: string;
   };
 
   type StoryReference = {
@@ -540,9 +553,11 @@
   };
 
   let referenceImages = $state<ReferenceImage[]>([]);
-  let characterRegistrationName = $state('');
-  let characterRegistrationRole = $state('');
-  let characterRegistryLoading = $state(false);
+  let storyReferenceImages = $state<ReferenceImage[]>([]);
+  let characterAnalyzeImages = $state<ReferenceImage[]>([]);
+  let mangaContinueImages = $state<ReferenceImage[]>([]);
+  let refLibrary = $state<RefLibraryItem[]>([]);
+  let refLibraryLoading = $state(false);
   let storyReferences = $state<StoryReference[]>([]);
   const LS_STORY_REFS = 'lab-story-refs';
   const LS_STORY_CONTINUITY = 'lab-story-continuity-memory';
@@ -552,6 +567,71 @@
   let visionContext   = $state('');
   let characterBible  = $state<CharacterBible | null>(null);
   let characterBibleSource = $state<'character_registry' | 'vision_analysis' | null>(null);
+  let referenceImageSequence = 0;
+
+  function nextReferenceImageSessionId(): string {
+    referenceImageSequence += 1;
+    return `ref-${Date.now()}-${referenceImageSequence}`;
+  }
+
+  function referenceImageId(ref: ReferenceImage, index: number): string {
+    return ref.characterId || ref.registryName || ref.fileName || ref.name || `REF-${index + 1}`;
+  }
+
+  function logVisionInput(route: ImageRoute, images: ReferenceImage[]): void {
+    console.log('[VISION_INPUT_IMAGES]', images.map((ref, index) => ({
+      id: referenceImageId(ref, index),
+      name: ref.name,
+      fileName: ref.fileName ?? null,
+      hasDataUrl: Boolean(ref.dataUrl),
+      hasSourceUrl: Boolean(ref.sourceUrl),
+    })));
+    console.log('[VISION_INPUT_COUNT]', images.length);
+    console.log('[VISION_INPUT_IDS]', images.map(referenceImageId));
+    console.log('[IMAGE_ROUTE]', route);
+  }
+
+  function currentVisionImages(): ReferenceImage[] {
+    return [...storyReferenceImages, ...referenceImages];
+  }
+
+  function imagesForRoute(route: ImageRoute): ReferenceImage[] {
+    if (route === 'character_sheet') return [...characterAnalyzeImages];
+    if (route === 'manga_continue') return [...mangaContinueImages];
+    return [...referenceImages];
+  }
+
+  function snapshotImagesForRoute(route: ImageRoute): ReferenceImage[] {
+    const images = currentVisionImages();
+    if (route === 'character_sheet') characterAnalyzeImages = images;
+    if (route === 'manga_continue') mangaContinueImages = images;
+    return images;
+  }
+
+  function resolveImageRoute(
+    intent?: { intent?: string; action?: string; subtype?: string },
+    text = '',
+  ): ImageRoute {
+    const candidates = [intent?.action, intent?.subtype, intent?.intent]
+      .filter((value): value is string => Boolean(value))
+      .map((value) => value.toLowerCase());
+    if (candidates.some((value) => value === 'character_sheet' || value === 'create_character_materials')) {
+      return 'character_sheet';
+    }
+    if (candidates.some((value) => (
+      value === 'create_story_sequel'
+      || value === 'generate_manga_page'
+      || value === 'manga_page'
+      || value === 'manga_continue'
+    )) || isStoryContinuationRequest(text)) {
+      return 'manga_continue';
+    }
+    if (candidates.some((value) => value === 'image_edit' || value === 'image_variation')
+      || (currentVisionImages().length > 0 && labImageModelConfig.edit)) {
+      return 'image_edit';
+    }
+    return 'normal_generate';
+  }
   const VISION_STRICT_RULES = [
     'VISION STRICT MODE.',
     '画像内で直接確認できる視覚的事実だけを出力してください。',
@@ -642,8 +722,8 @@
   // ============================================================
   // AI config — sessionStore で一元管理
   // ============================================================
-  type LabImageProvider = MediaProviderName;
   type LabImageModelId = string;
+  type LabMediaType = 'image' | 'video' | 'audio';
   type LabGenerationMode = 'chat' | 'yaml' | 'text-to-image' | 'image-to-image';
 
   const LAB_GENERATION_MODES: { id: LabGenerationMode; label: string }[] = [
@@ -653,16 +733,22 @@
     { id: 'image-to-image', label: 'Image to Image' },
   ];
 
-  const LAB_IMAGE_PROVIDERS: { id: LabImageProvider; label: string }[] =
-    AVAILABLE_MEDIA_PROVIDER_OPTIONS;
-
-  function normalizeLabImageProvider(raw: string | null): LabImageProvider {
-    if (LAB_IMAGE_PROVIDERS.some((provider) => provider.id === raw)) return raw as LabImageProvider;
-    return 'fal';
-  }
+  const LAB_IMAGE_MODELS = AVAILABLE_IMAGE_MODELS.filter((model) => model.provider === 'fal');
+  const LAB_VIDEO_MODELS = [
+    { id: 'fal-ai/kling-video/o3/pro/text-to-video', label: 'Kling', provider: 'fal' },
+    { id: 'bytedance/seedance-2.0/text-to-video', label: 'Seedance', provider: 'fal' },
+    { id: 'fal-ai/vidu/q3/text-to-video', label: 'Vidu', provider: 'fal' },
+    { id: 'xai/grok-imagine-video/text-to-video', label: 'Grok Imagine Video', provider: 'fal' },
+  ] as const;
+  const LAB_AUDIO_MODELS = [
+    { id: 'fal-ai/elevenlabs/tts/eleven-v3', label: 'ElevenLabs TTS', provider: 'fal' },
+    { id: 'fal-ai/minimax/speech-2.8-hd', label: 'MiniMax Speech', provider: 'fal' },
+    { id: 'fal-ai/dia-tts', label: 'Dia TTS', provider: 'fal' },
+  ] as const;
 
   function normalizeLabImageModel(raw: string | null): LabImageModelId {
-    const normalized = normalizeMediaModelId(raw ?? undefined);
+    if (!raw?.trim()) return AVAILABLE_IMAGE_MODELS[0]?.id ?? 'fal-ai/nano-banana-2';
+    const normalized = normalizeMediaModelId(raw);
     return AVAILABLE_IMAGE_MODELS.some((model) => model.id === normalized)
       ? normalized
       : (AVAILABLE_IMAGE_MODELS[0]?.id ?? 'fal-ai/nano-banana-2');
@@ -672,20 +758,31 @@
     return typeof localStorage === 'undefined' ? null : localStorage.getItem(key);
   }
 
-  function imageModelsForProvider(provider: LabImageProvider) {
-    return mediaModelsForProviderConfig(provider, 'image');
-  }
-
-  function setLabImageProvider(provider: LabImageProvider): void {
-    labImageProvider = provider;
-    const available = imageModelsForProvider(provider);
-    if (!available.some((model) => model.id === labImageModel) && available[0]) {
-      labImageModel = available[0].id;
+  function logLabModelSelection(): void {
+    if (labMediaType === 'image') {
+      console.log('[LAB MODEL SELECTION]', {
+        selectedModel: labImageModel,
+        resolvedModel: labImageModelConfig.apiModel,
+        provider: labImageModelConfig.provider,
+      });
+      return;
     }
+    const model = labMediaType === 'video'
+      ? LAB_VIDEO_MODELS.find((item) => item.id === labVideoModel)
+      : LAB_AUDIO_MODELS.find((item) => item.id === labAudioModel);
+    console.log('[LAB MODEL SELECTION]', {
+      selectedModel: model?.id ?? null,
+      resolvedModel: model?.id ?? null,
+      provider: model?.provider ?? null,
+    });
   }
 
-  function imageProviderLabel(provider: LabImageProvider): string {
-    return LAB_IMAGE_PROVIDERS.find((item) => item.id === provider)?.label ?? provider;
+  function selectedLabMediaModelLabel(): string {
+    if (labMediaType === 'image') return labImageModelConfig.label;
+    if (labMediaType === 'video') {
+      return LAB_VIDEO_MODELS.find((item) => item.id === labVideoModel)?.label ?? labVideoModel;
+    }
+    return LAB_AUDIO_MODELS.find((item) => item.id === labAudioModel)?.label ?? labAudioModel;
   }
 
   function routerConfidenceTone(confidence: number | undefined): 'high' | 'mid' | 'low' {
@@ -702,27 +799,23 @@
       : (AVATARS.find((avatar) => avatar.presetId === activePreset)?.name ?? activePreset),
   });
 
-  let labImageProvider = $state<LabImageProvider>(normalizeLabImageProvider(localStorageValue('studio-provider-choice')));
   let labImageModel = $state<LabImageModelId>(normalizeLabImageModel(localStorageValue('studio-model')));
+  let labMediaType = $state<LabMediaType>('image');
+  let labVideoModel = $state<string>(LAB_VIDEO_MODELS[0].id);
+  let labAudioModel = $state<string>(LAB_AUDIO_MODELS[0].id);
   let labGenerationMode = $state<LabGenerationMode>('chat');
   let labImageModelConfig = $derived(
     AVAILABLE_IMAGE_MODELS.find((model) => model.id === labImageModel) ?? AVAILABLE_IMAGE_MODELS[0]
   );
   let labGenerationModeConfig = $derived(LAB_GENERATION_MODES.find((mode) => mode.id === labGenerationMode) ?? LAB_GENERATION_MODES[0]);
-  let labGenerationNeedsImage = $derived(labGenerationMode === 'image-to-image');
-  let labImageApiProvider = $derived<LabImageProvider>(labImageModelConfig.provider);
-
-  $effect(() => {
-    const available = imageModelsForProvider(labImageProvider);
-    if (!available.some((model) => model.id === labImageModel) && available[0]) {
-      labImageModel = available[0].id;
-    }
-  });
-  $effect(() => {
-    try { localStorage.setItem('studio-provider-choice', labImageProvider); } catch {}
-  });
+  let labGenerationNeedsImage = $derived(Boolean(labImageModelConfig.edit));
   $effect(() => {
     try { localStorage.setItem('studio-model', labImageModel); } catch {}
+  });
+  $effect(() => {
+    if (currentVisionImages().length > 0 || !labImageModelConfig.edit) return;
+    const fallback = LAB_IMAGE_MODELS.find((model) => !model.edit);
+    if (fallback) labImageModel = fallback.id;
   });
   // API Status check
   type APIStatus = 'OK' | 'Missing API Key' | 'Unauthorized' | 'Error' | '---';
@@ -1604,6 +1697,74 @@
   const YAML_IMPORT_KEY  = 'studio-yaml-import';
   let mangaConverting = $state<string | null>(null);
 
+  type MangaResultPanel = {
+    scene: string;
+    prompt: string;
+    imageUrl: string | null;
+    generating: boolean;
+    error: string;
+  };
+  type MangaResult = {
+    sourceText: string;
+    storyYaml: string;
+    refImages: string[];
+    panels: MangaResultPanel[];
+  };
+  let mangaResult = $state<MangaResult | null>(null);
+  let mangaGenerating = $state(false);
+
+  async function generateMangaPanelImage(index: number): Promise<void> {
+    if (!mangaResult) return;
+    const panel = mangaResult.panels[index];
+    if (!panel || panel.generating) return;
+    panel.generating = true;
+    panel.error = '';
+    try {
+      const promptText = [panel.prompt, panel.scene].filter(Boolean).join('\n');
+      const res = await fetch('/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: promptText,
+          size: '1024x1024',
+          renderMode: 'manga',
+          refImages: mangaResult.refImages,
+          editMode: mangaResult.refImages.length > 0,
+        }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d?.message ?? `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      const imageUrl = data?.images?.[0]?.url ?? data?.url ?? '';
+      if (!imageUrl) throw new Error('画像が返されませんでした');
+      panel.imageUrl = imageUrl as string;
+    } catch (e) {
+      panel.error = e instanceof Error ? e.message : String(e);
+      console.warn('[MANGA_PANEL_GEN_ERROR]', { index, error: panel.error });
+    } finally {
+      panel.generating = false;
+    }
+  }
+
+  async function generateMangaImages(): Promise<void> {
+    if (!mangaResult || mangaGenerating) return;
+    mangaGenerating = true;
+    try {
+      for (let i = 0; i < mangaResult.panels.length; i++) {
+        await generateMangaPanelImage(i);
+      }
+    } finally {
+      mangaGenerating = false;
+    }
+  }
+
+  function openMangaInStudio(): void {
+    // MANGA_IMPORT_KEY は convertToManga で書き込み済み。詳細編集はSTUDIO側で再生成する。
+    window.open('/project', '_blank');
+  }
+
   function regenerateYonkomaPanel(panelNum: number, title: string, fields: YonkomaField[]) {
     const desc = fields.map(f => `${f.key}: ${f.value}`).join(' / ');
     inputText = `4コマ漫画「${title}」のpanel${panelNum}だけ書き直して。現在:「${desc}」。ギャグ寄り、もっとキャラらしく面白く。`;
@@ -1652,34 +1813,24 @@
     mangaConverting = msg.time;
     try {
       const storyYaml = storyYamlOverride.trim() || latestYamlForImageGeneration();
-      const bible = referenceImages.length > 0
-        ? await analyzeReferencesForCharacterBible([...referenceImages])
-        : await loadCharacterBible();
+      mangaContinueImages = snapshotImagesForRoute('manga_continue');
+      logVisionInput('manga_continue', mangaContinueImages);
+      const bible: CharacterBible | null = null;
       console.log('[MANGA_LAB_INPUT]', {
-        referenceImages,
+        referenceImages: mangaContinueImages,
         characterBible: bible,
         storyYaml,
       });
       console.log('[MANGA_LAB_INPUT_STATUS]', {
-        referenceImageCount: referenceImages.length,
+        referenceImageCount: mangaContinueImages.length,
         hasCharacterBible: Boolean(bible),
         hasStoryYaml: Boolean(storyYaml),
       });
-      logRegisteredCharacterMemory(referenceImages.length > 0 && Boolean(storyYaml));
-      if (referenceImages.length === 0) {
+      logRegisteredCharacterMemory(mangaContinueImages.length > 0 && Boolean(storyYaml), mangaContinueImages);
+      if (mangaContinueImages.length === 0) {
         messages = [...messages, {
           role: 'error',
-          text: bible
-            ? 'CharacterBibleはありますがREF画像が0枚のため、MANGA生成を中止しました。REF画像を登録してください。'
-            : 'MANGA生成にはREF画像が必要です。REF画像を登録してください。',
-          time: getTime(),
-        }];
-        return;
-      }
-      if (referenceImages.length > 0 && !bible) {
-        messages = [...messages, {
-          role: 'error',
-          text: 'CharacterBibleを作成できなかったためMANGA生成を中止しました。REF画像を確認してください。',
+          text: 'MANGA生成には現在選択中のREF画像が必要です。画像を選択してください。',
           time: getTime(),
         }];
         return;
@@ -1696,7 +1847,7 @@
 
       // Fast path: already a manga-mode message — extract [prompt] directly
       const parsed = parseMangaResponse(msg.text);
-      if (parsed && referenceImages.length === 0) {
+      if (parsed && mangaContinueImages.length === 0) {
         const promptSec = parsed.find(s => s.label === 'prompt');
         const sceneSec  = parsed.find(s => s.label === 'scene');
         panels = promptSec
@@ -1743,7 +1894,7 @@
             model,
             systemPrompt: convSystemPrompt,
             userMessage: contextText,
-            images: referenceImages.map((ref) => ref.sourceUrl || ref.dataUrl).filter(Boolean),
+            images: mangaContinueImages.map((ref) => ref.sourceUrl || ref.dataUrl).filter(Boolean),
             memory: { enabled: false },
           }),
         });
@@ -1757,7 +1908,7 @@
         localStorage.setItem(MANGA_IMPORT_KEY, JSON.stringify({
           panels,
           sourceText: msg.text.slice(0, 60),
-          referenceImages: referenceImages.map((ref) => ({
+          referenceImages: mangaContinueImages.map((ref) => ({
             name: ref.name,
             dataUrl: ref.dataUrl || ref.sourceUrl || '',
             originalDataUrl: ref.sourceUrl || ref.dataUrl,
@@ -1766,8 +1917,8 @@
               ref.description,
             ].filter(Boolean).join(' / ') || ref.name,
           })),
-          characterRefs: referenceImages.map((ref) => ref.sourceUrl || ref.dataUrl).filter(Boolean),
-          registeredCharacters: referenceImages.map((ref) => ({
+          characterRefs: mangaContinueImages.map((ref) => ref.sourceUrl || ref.dataUrl).filter(Boolean),
+          registeredCharacters: mangaContinueImages.map((ref) => ({
             id: ref.characterId,
             name: ref.name,
             role: ref.role,
@@ -1779,7 +1930,20 @@
           storyYaml,
         }));
       }
-      window.open('/project', '_blank');
+
+      mangaResult = {
+        sourceText: msg.text.slice(0, 60),
+        storyYaml,
+        refImages: mangaContinueImages.map((ref) => ref.sourceUrl || ref.dataUrl).filter(Boolean),
+        panels: panels.map((p) => ({
+          scene: p.scene,
+          prompt: p.prompt,
+          imageUrl: null,
+          generating: false,
+          error: '',
+        })),
+      };
+      void generateMangaImages();
     } catch (e) {
       console.error('[Lab] convertToManga:', e);
     } finally {
@@ -1818,90 +1982,6 @@
     });
   }
 
-  async function registerReferenceImageCharacter(input: {
-    id: string;
-    name: string;
-    role: string;
-    description: string;
-    referenceImageDataUrl: string;
-  }): Promise<void> {
-    const res = await fetch('/api/characters', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(input),
-    });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data?.message ?? `Character Registry HTTP ${res.status}`);
-    }
-    console.log('[CHARACTER_REGISTRY_REGISTERED]', {
-      id: input.id,
-      name: input.name,
-    });
-  }
-
-  function nextReferenceRegistryName(): string {
-    const used = new Set(referenceImages.map((ref) => ref.registryName?.toUpperCase()).filter(Boolean));
-    for (let i = 1; i <= 999; i++) {
-      const name = `N-${i.toString().padStart(2, '0')}`;
-      if (!used.has(name)) return name;
-    }
-    return `N-${(referenceImages.length + 1).toString().padStart(2, '0')}`;
-  }
-
-  async function loadRegisteredCharacters(): Promise<void> {
-    characterRegistryLoading = true;
-    try {
-      const res = await fetch('/api/characters');
-      if (!res.ok) throw new Error(`Character Registry HTTP ${res.status}`);
-      const data = await res.json();
-      const characters = Array.isArray(data?.characters) ? data.characters : [];
-      const loaded = await Promise.all(characters.flatMap((character: Record<string, unknown>) => {
-        const id = typeof character.id === 'string' ? character.id : '';
-        if (!id || character.hasReference !== true) return [];
-        return [fetch(`/api/characters/${encodeURIComponent(id)}/reference`)
-          .then(async (referenceRes) => {
-            if (!referenceRes.ok) return null;
-            const referenceData = await referenceRes.json();
-            const image = typeof referenceData?.referenceImageDataUrl === 'string'
-              ? referenceData.referenceImageDataUrl
-              : '';
-            if (!image) return null;
-            return {
-              name: typeof character.name === 'string'
-                && character.name.trim().toLowerCase() !== id.toLowerCase()
-                ? character.name
-                : '',
-              role: typeof character.role === 'string' ? character.role : '',
-              description: typeof character.description === 'string' ? character.description : '',
-              fileName: 'reference.png',
-              dataUrl: image,
-              sourceUrl: image,
-              note: typeof character.description === 'string' && character.description.trim()
-                ? character.description
-                : (typeof character.name === 'string' ? character.name : id),
-              characterId: id,
-              registryName: id.toUpperCase(),
-            } satisfies ReferenceImage;
-          })
-          .catch(() => null)];
-      }));
-      referenceImages = loaded.filter((ref): ref is ReferenceImage => Boolean(ref));
-      characterBible = null;
-      characterBibleSource = null;
-      await loadCharacterBible(referenceImages);
-      console.log('[CHARACTER_REGISTRY_LOADED]', referenceImages.map((ref) => ({
-        id: ref.characterId,
-        name: ref.name,
-        role: ref.role,
-      })));
-    } catch (error) {
-      console.warn('[CHARACTER_REGISTRY_LOAD_ERROR]', error);
-    } finally {
-      characterRegistryLoading = false;
-    }
-  }
-
   async function updateRegisteredCharacter(ref: ReferenceImage): Promise<void> {
     if (!ref.characterId) return;
     try {
@@ -1922,8 +2002,55 @@
     }
   }
 
-  function logRegisteredCharacterMemory(applied: boolean): void {
-    console.log('[CHARACTER_MEMORY]', referenceImages.map((ref) => ({
+  async function loadRefLibrary(): Promise<void> {
+    refLibraryLoading = true;
+    try {
+      const res = await fetch('/api/ref-library');
+      if (!res.ok) throw new Error(`REF LIBRARY HTTP ${res.status}`);
+      const data = await res.json();
+      const items = Array.isArray(data?.items) ? data.items : [];
+      refLibrary = items.flatMap((item: Record<string, unknown>) => {
+        const id = typeof item.id === 'string' ? item.id : '';
+        if (!id) return [];
+        return [{ id, name: typeof item.name === 'string' ? item.name : id }];
+      });
+    } catch (error) {
+      console.warn('[REF_LIBRARY_LOAD_ERROR]', error);
+    } finally {
+      refLibraryLoading = false;
+    }
+  }
+
+  async function useRefLibraryImage(item: RefLibraryItem, target: 'ref' | 'story'): Promise<void> {
+    try {
+      const response = await fetch(`/api/ref-library/${encodeURIComponent(item.id)}/image`);
+      if (!response.ok) throw new Error(`REF image HTTP ${response.status}`);
+      const data = await response.json();
+      const sourceUrl = typeof data?.imageDataUrl === 'string' ? data.imageDataUrl : '';
+      if (!sourceUrl) throw new Error('REF image is empty');
+      const ref: ReferenceImage = {
+        sessionId: nextReferenceImageSessionId(),
+        name: item.name,
+        role: '',
+        description: '',
+        fileName: `${item.id}.png`,
+        dataUrl: sourceUrl,
+        sourceUrl,
+        note: item.name,
+      };
+      if (target === 'story') {
+        storyReferenceImages = [...storyReferenceImages, ref];
+      } else {
+        referenceImages = [...referenceImages, ref];
+      }
+      console.log('[REF_LIBRARY_USE]', { id: item.id, target });
+    } catch (error) {
+      console.warn('[REF_LIBRARY_USE_ERROR]', error);
+    }
+  }
+
+  function logRegisteredCharacterMemory(applied: boolean, refs = referenceImages): void {
+    console.log('[CHARACTER_MEMORY]', refs.map((ref) => ({
       id: ref.characterId,
       name: ref.name,
       role: ref.role,
@@ -1962,7 +2089,7 @@
     }));
   }
 
-  async function loadCharacterBible(refs = referenceImages): Promise<CharacterBible | null> {
+  async function loadCharacterBible(refs: ReferenceImage[] = []): Promise<CharacterBible | null> {
     if (characterBible) return characterBible;
     const id = refs.find((ref) => ref.characterId)?.characterId;
     if (!id) return null;
@@ -2020,13 +2147,27 @@
   async function analyzeReferencesForCharacterBible(refs: ReferenceImage[]): Promise<CharacterBible | null> {
     const images = refs.map((ref) => ref.sourceUrl || ref.dataUrl).filter(Boolean);
     if (images.length === 0) return null;
+    const route: ImageRoute = 'character_sheet';
+    characterAnalyzeImages = [...refs];
+    logVisionInput(route, characterAnalyzeImages);
     visionScanning = true;
     try {
       const provider = $sessionStore.provider === 'openai' || $sessionStore.provider === 'gemini' || $sessionStore.provider === 'claude'
         ? $sessionStore.provider
         : 'gemini';
       const model = provider === $sessionStore.provider ? ($sessionStore.model || undefined) : undefined;
-      const refLabels = refs.map((ref) => ref.registryName || ref.characterId || ref.name);
+      const refLabels = refs.map((ref, index) => referenceImageId(ref, index));
+      const expectedCharacters = refLabels.map((id) => ({
+        id,
+        hair_color: '...',
+        eye_color: '...',
+        ears: '...',
+        tail: '...',
+        android_parts: '...',
+        outfit: '...',
+        accessories: '...',
+        appearance: '...',
+      }));
       const response = await fetch('/api/lab-chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2041,7 +2182,7 @@
             'Detect every distinct visible person across all supplied images.',
             'Return JSON only, without markdown or explanation.',
             'Use exactly this schema:',
-            '{"unitId":"S-22","characters":[{"id":"N-01","hair_color":"...","eye_color":"...","ears":"...","tail":"...","android_parts":"...","outfit":"...","accessories":"...","appearance":"..."}]}',
+            JSON.stringify({ unitId: 'CURRENT_SELECTION', characters: expectedCharacters }),
             'characters must contain every visible person, not only the first person.',
             'Extract hair_color, eye_color, ears, tail, android_parts, outfit, accessories, and appearance from the supplied Character Ref images.',
             'Every visual field may contain only directly visible facts. Use "none visible" when a feature is visibly absent and "unknown" when it cannot be determined.',
@@ -2050,7 +2191,7 @@
           ].join('\n'),
           userMessage: [
             'Create the Character Sheet visual profile from the attached Character Ref images.',
-            'unitId: S-22',
+            'unitId must be CURRENT_SELECTION. Do not reuse an ID from prior requests.',
             `REF labels (identity labels only, not appearance evidence): ${refLabels.join(', ')}`,
             'Analyze the pixels first and return the required JSON only.',
           ].join('\n'),
@@ -2081,84 +2222,219 @@
     }
   }
 	
-	  async function handleReferenceImageUpload(e: Event): Promise<void> {
-	  const input = e.currentTarget as HTMLInputElement;
-	  const files = Array.from(input.files ?? []);
+  async function filesToReferenceImages(files: File[]): Promise<ReferenceImage[]> {
+    return Promise.all(files.map(async (file) => ({
+      sessionId: nextReferenceImageSessionId(),
+      name: file.name.replace(/\.[^/.]+$/, '').replace(/[_-]/g, ' '),
+      role: '',
+      description: '',
+      fileName: file.name,
+      dataUrl: await createLabThumbnail(file),
+      sourceUrl: await readFileAsDataUrl(file),
+      note: file.name,
+    })));
+  }
 
-	  input.value = '';
-	
-	  for (const file of files) {
-	
-	    const sourceUrl = await readFileAsDataUrl(file);
-	    const dataUrl = await createLabThumbnail(file);
-	    const registryName = nextReferenceRegistryName();
-	    const characterId = registryName.toLowerCase();
-	
-	    const fallbackName = file.name
-	      .replace(/\.[^/.]+$/, '')
-	      .replace(/[_-]/g, ' ');
-      const name = characterRegistrationName.trim() || fallbackName;
-      const role = characterRegistrationRole.trim();
-      const description = '';
-
-	    try {
-	      await registerReferenceImageCharacter({
-	        id: characterId,
-	        name,
-          role,
-	        description,
-	        referenceImageDataUrl: sourceUrl,
-	      });
-	    } catch (error) {
-	      console.error('[CHARACTER_REGISTRY_ERROR]', error);
-	      messages = [...messages, {
-	        role: 'error',
-	        text: `Character Registry registration failed: ${registryName}`,
-	        time: getTime(),
-	      }];
-	      continue;
-	    }
-	
-	    referenceImages.push({
-	      name,
-        role,
-        description,
-	      fileName: file.name,
-	      dataUrl,
-	      sourceUrl,
-	      note: description || name,
-	      characterId,
-	      registryName,
-	    });
-	  }
-    characterRegistrationName = '';
-    characterRegistrationRole = '';
+  async function handleTemporaryReferenceImageUpload(e: Event): Promise<void> {
+    const input = e.currentTarget as HTMLInputElement;
+    const files = Array.from(input.files ?? []);
+    input.value = '';
+    referenceImages = [...referenceImages, ...await filesToReferenceImages(files)];
     characterBible = null;
     characterBibleSource = null;
-    console.log('[MANGA_LAB_REFERENCE_IMAGES]', referenceImages);
-    if (referenceImages.length > 0) {
-      await analyzeReferencesForCharacterBible([...referenceImages]);
-    }
-	}
+    console.log('[REF_RESTORE]', {
+      source: 'user_upload',
+      count: referenceImages.length,
+      restored: false,
+      ids: referenceImages.map(referenceImageId),
+    });
+  }
 
-async function removeReferenceImage(i: number): Promise<void> {
-  const ref = referenceImages[i];
-  if (ref?.characterId) {
+  async function handleStoryReferenceImageUpload(e: Event): Promise<void> {
+    const input = e.currentTarget as HTMLInputElement;
+    const files = Array.from(input.files ?? []);
+    input.value = '';
+    storyReferenceImages = [...storyReferenceImages, ...await filesToReferenceImages(files)];
+    console.log('[STORY_REF_IMAGES]', {
+      count: storyReferenceImages.length,
+      ids: storyReferenceImages.map(referenceImageId),
+      restored: false,
+    });
+  }
+
+  async function useCharacterRegistryImage(character: CharacterRegistryItem): Promise<void> {
+    if (!character.hasReference) return;
     try {
-      const res = await fetch(`/api/characters/${encodeURIComponent(ref.characterId)}`, {
-        method: 'DELETE',
+      const response = await fetch(`/api/characters/${encodeURIComponent(character.id)}/reference`);
+      if (!response.ok) throw new Error(`Character reference HTTP ${response.status}`);
+      const data = await response.json();
+      const sourceUrl = typeof data?.referenceImageDataUrl === 'string'
+        ? data.referenceImageDataUrl
+        : '';
+      if (!sourceUrl) throw new Error('Character reference image is empty');
+      if (referenceImages.some((ref) => ref.characterId === character.id)) return;
+      referenceImages = [...referenceImages, {
+        sessionId: nextReferenceImageSessionId(),
+        name: character.name,
+        role: character.role,
+        description: character.description,
+        fileName: `${character.id}.png`,
+        dataUrl: sourceUrl,
+        sourceUrl,
+        note: character.description || character.name,
+        characterId: character.id,
+        registryName: character.id.toUpperCase(),
+      }];
+      console.log('[CHARACTER_REGISTRY_EXPLICIT_REF]', {
+        id: character.id,
+        addedToVision: true,
+        referenceImagesLength: referenceImages.length,
       });
-      if (!res.ok && res.status !== 404) throw new Error(`Character delete HTTP ${res.status}`);
     } catch (error) {
-      console.warn('[CHARACTER_REGISTRY_DELETE_ERROR]', error);
-      return;
+      console.warn('[CHARACTER_REGISTRY_EXPLICIT_REF_ERROR]', error);
     }
   }
-  referenceImages.splice(i, 1);
-  characterBible = null;
-  characterBibleSource = null;
-  visionContext = '';
-}
+
+  async function useRequestedCharacter(): Promise<void> {
+    const id = new URL(window.location.href).searchParams.get('useCharacter')?.trim();
+    if (!id) return;
+    try {
+      const response = await fetch(`/api/characters/${encodeURIComponent(id)}`);
+      if (!response.ok) throw new Error(`Character HTTP ${response.status}`);
+      const data = await response.json();
+      const value = data?.character as Partial<CharacterRegistryItem> | undefined;
+      if (!value || typeof value.id !== 'string') throw new Error('Character data is invalid');
+      await useCharacterRegistryImage({
+        id: value.id,
+        name: typeof value.name === 'string' ? value.name : value.id,
+        role: typeof value.role === 'string' ? value.role : '',
+        description: typeof value.description === 'string' ? value.description : '',
+        hasReference: value.hasReference === true,
+      });
+    } catch (error) {
+      console.warn('[CHARACTER_REGISTRY_EXPLICIT_LOAD_ERROR]', error);
+    } finally {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('useCharacter');
+      window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+    }
+  }
+
+  // Manual handoff from Character Memory Chat. Reads a one-shot payload from
+  // sessionStorage and copies it into the custom persona ONCE. No reactive sync.
+  function injectRequestedCharacterMemory(): void {
+    const url = new URL(window.location.href);
+    if (!url.searchParams.get('injectMemory')) return;
+    try {
+      const raw = sessionStorage.getItem(LAB_INJECT_MEMORY_KEY);
+      if (!raw) return;
+      const payload = JSON.parse(raw) as {
+        name?: string;
+        personality?: unknown;
+        speechStyle?: unknown;
+        likes?: unknown;
+        dislikes?: unknown;
+        appearance?: unknown;
+      };
+      const list = (value: unknown): string[] =>
+        Array.isArray(value) ? value.map(String).map((s) => s.trim()).filter(Boolean) : [];
+      const personalityList = list(payload.personality);
+      const speechStyleList = list(payload.speechStyle);
+      const likesList       = list(payload.likes);
+      const dislikesList    = list(payload.dislikes);
+      const appearance = typeof payload.appearance === 'string' ? payload.appearance.trim() : '';
+      const name       = typeof payload.name === 'string' ? payload.name.trim() : '';
+
+      // Copy the five injected fields into the custom persona (one-time).
+      activePreset = 'custom';
+      if (name) {
+        customProfile.name = name;
+        charName = name;
+      }
+      if (speechStyleList.length) customProfile.speechStyle = speechStyleList.join('、');
+      const memoLines = [
+        personalityList.length ? `性格：${personalityList.join('、')}` : '',
+        likesList.length       ? `好き：${likesList.join('、')}` : '',
+        dislikesList.length    ? `嫌い：${dislikesList.join('、')}` : '',
+        appearance             ? `外見：${appearance}` : '',
+      ].filter(Boolean);
+      if (memoLines.length) customProfile.memo = memoLines.join('\n');
+      localStorage.setItem(LS_CUSTOM_PROFILE, JSON.stringify(customProfile));
+      messages = [...messages, {
+        role: 'ai',
+        text: `Character Memoryから「${name || 'キャラクター'}」を投入しました。性格・口調・好き・嫌い・外見をカスタム人格へコピーしています。`,
+        time: getTime(),
+      }];
+      console.log('[LAB_INJECT_MEMORY]', {
+        name,
+        personality: personalityList.length,
+        speechStyle: speechStyleList.length,
+        likes: likesList.length,
+        dislikes: dislikesList.length,
+        appearance: Boolean(appearance),
+      });
+    } catch (error) {
+      console.warn('[LAB_INJECT_MEMORY_ERROR]', error);
+    } finally {
+      sessionStorage.removeItem(LAB_INJECT_MEMORY_KEY);
+      url.searchParams.delete('injectMemory');
+      window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+    }
+  }
+
+  async function removeReferenceImage(sessionId: string): Promise<void> {
+    const before = referenceImages.length;
+    const target = referenceImages.find((ref) => ref.sessionId === sessionId);
+    console.log('[REF_IMAGE_DELETE_CLICK]', {
+      sessionId,
+      id: target ? referenceImageId(target, referenceImages.indexOf(target)) : null,
+      referenceImagesLengthBefore: before,
+    });
+    if (!target) {
+      console.warn('[REF_IMAGE_DELETE_NOT_FOUND]', {
+        sessionId,
+        referenceImagesLength: before,
+      });
+      return;
+    }
+
+    referenceImages = referenceImages.filter((ref) => ref.sessionId !== sessionId);
+    characterAnalyzeImages = characterAnalyzeImages.filter((ref) => ref.sessionId !== sessionId);
+    mangaContinueImages = mangaContinueImages.filter((ref) => ref.sessionId !== sessionId);
+    characterBible = null;
+    characterBibleSource = null;
+    visionContext = '';
+    const after = referenceImages.length;
+    console.log('[REF_IMAGE_DELETE_STATE]', {
+      sessionId,
+      referenceImagesLengthBefore: before,
+      referenceImagesLengthAfter: after,
+      removed: before - after,
+      stillPresent: referenceImages.some((ref) => ref.sessionId === sessionId),
+    });
+
+    await tick();
+    const renderedCards = document.querySelectorAll('[data-ref-image-card]').length;
+    console.log('[REF_IMAGE_DELETE_RENDER]', {
+      sessionId,
+      referenceImagesLength: referenceImages.length,
+      renderedCards,
+      uiRerendered: renderedCards === referenceImages.length,
+      restored: referenceImages.some((ref) => ref.sessionId === sessionId),
+    });
+  }
+
+  function removeStoryReferenceImage(i: number): void {
+    const removed = storyReferenceImages[i];
+    storyReferenceImages.splice(i, 1);
+    characterAnalyzeImages = characterAnalyzeImages.filter((ref) => ref !== removed);
+    mangaContinueImages = mangaContinueImages.filter((ref) => ref !== removed);
+  }
+
+  async function analyzeCurrentReferenceImages(): Promise<void> {
+    characterAnalyzeImages = snapshotImagesForRoute('character_sheet');
+    await analyzeReferencesForCharacterBible(characterAnalyzeImages);
+  }
 
   function resolveStoryReferenceFormat(content: string): StoryReference['format'] | null {
     const topLevelKeys = new Set(
@@ -2274,11 +2550,9 @@ async function removeReferenceImage(i: number): Promise<void> {
   async function analyzeReferenceImage() {
     visionScanning = true;
     try {
-      const referenceQuery = inputText.trim() || 'REF画像を分析してください。';
-      const resolved = await resolveImageReference(referenceQuery);
-      const fallbackImage = referenceImages[0] ?? null;
-      const imageUrl = resolved?.imageUrl ?? fallbackImage?.dataUrl;
-      const imageName = resolved ? 'Image Memory' : fallbackImage?.name;
+      const fallbackImage = currentVisionImages()[0] ?? null;
+      const imageUrl = fallbackImage?.sourceUrl || fallbackImage?.dataUrl;
+      const imageName = fallbackImage?.name;
 
       if (!imageUrl) {
         console.warn('[Vision] reference image not found');
@@ -2349,72 +2623,16 @@ async function removeReferenceImage(i: number): Promise<void> {
     return new Blob([arr], { type: mime });
   }
 
-  function wantsImageMemoryReference(text: string): boolean {
-    const normalized = text.replace(/\s+/g, '');
-    const previousImagePhrases = [
-      /前(?:の|に)?(?:描いた|描いてくれた|生成した)?画像/,
-      /さっき(?:の|に)?(?:描いた|生成した)?画像/,
-      /この前(?:の|に)?(?:描いた|生成した)?画像/,
-      /最後(?:の|に生成した)?画像/,
-      /直前(?:の|に生成した)?画像/,
-      /先ほど(?:の|に生成した)?画像/,
-      /生成した画像/,
-      /描いた画像/,
-      /前描いた/,
-    ];
-    if (previousImagePhrases.some((pattern) => pattern.test(normalized))) return true;
-    if (/画像(?:の)?(?:色|詳細|説明|見た目|外見|特徴|解析|分析)/.test(normalized)) return true;
-
-    const refersToImage = /画像|イラスト|絵|生成結果|猫耳|耳|髪|服|目|背景|色/.test(normalized);
-    const asksAboutImage = /色|詳細|説明|見た目|外見|特徴|何色|どんな|解析|分析|教えて|覚えてる/.test(normalized);
-    const temporalReference = /前|さっき|この前|最後|直前|先ほど|生成した|描いた/.test(normalized);
-    return refersToImage && asksAboutImage && temporalReference;
-  }
-
-  async function resolveImageReference(text: string): Promise<{ imageUrl: string; note: string } | null> {
-    if (!wantsImageMemoryReference(text)) return null;
-
-    const latest = await getLatestImageMemory();
-    if (!latest?.imageUrl) return null;
-
-    return {
-      imageUrl: latest.imageUrl,
-      note: latest.imagePrompt,
-    };
-  }
-
-  async function buildVisionReferenceImages(text: string): Promise<ReferenceImage[]> {
-    const refs: ReferenceImage[] = [...referenceImages];
-
-    try {
-      const resolved = await resolveImageReference(text);
-      if (resolved?.imageUrl.startsWith('data:')) {
-        refs.push({
-          name: 'Image Memory',
-          role: '',
-          description: resolved.note,
-          dataUrl: resolved.imageUrl,
-          note: resolved.note,
-        });
-      } else if (resolved?.imageUrl && /^https?:\/\//.test(resolved.imageUrl)) {
-        refs.push({
-          name: 'Image Memory',
-          role: '',
-          description: resolved.note,
-          dataUrl: '',
-          sourceUrl: resolved.imageUrl,
-          note: resolved.note,
-        });
-      }
-    } catch (error) {
-      console.warn('[Lab] image memory reference load failed:', error);
-    }
-
+  function buildVisionReferenceImages(route: ImageRoute): ReferenceImage[] {
+    const refs = imagesForRoute(route);
+    logVisionInput(route, refs);
     return refs;
   }
 
   async function analyzeReferenceImagesForYaml(userText: string): Promise<string> {
-    const imageUrls = referenceImages
+    mangaContinueImages = snapshotImagesForRoute('manga_continue');
+    logVisionInput('manga_continue', mangaContinueImages);
+    const imageUrls = mangaContinueImages
       .map((ref) => ref.dataUrl || ref.sourceUrl || '')
       .filter(Boolean);
     if (imageUrls.length === 0) return visionContext;
@@ -2425,8 +2643,8 @@ async function removeReferenceImage(i: number): Promise<void> {
         ? $sessionStore.provider
         : 'gemini';
       const model = provider === $sessionStore.provider ? ($sessionStore.model || undefined) : undefined;
-      const refNames = referenceImages
-        .map((ref, i) => ref.registryName ?? ref.note ?? `N-${(i + 1).toString().padStart(2, '0')}`)
+      const refNames = mangaContinueImages
+        .map((ref, i) => referenceImageId(ref, i))
         .join(' / ');
       const prompt = [
         `対象: ${refNames}`,
@@ -2565,9 +2783,10 @@ async function removeReferenceImage(i: number): Promise<void> {
         [contextText, msg.text, sourceYaml].filter(Boolean).join('\n'),
       );
       const characterMemoryContext = formatStoryCharacterMemoryContext(storyCharacterMemories);
+      const visionImages = currentVisionImages();
 
-	      const refContext    = referenceImages.length > 0
-	        ? `\n[永続登録キャラクター]\n${referenceImages.map((r, i) => [
+	      const refContext    = visionImages.length > 0
+	        ? `\n[CURRENT IMAGE REFERENCES]\n${visionImages.map((r, i) => [
             `${r.registryName ?? `キャラクター${i + 1}`}: ${r.name}`,
             r.role ? `役割=${r.role}` : '',
             r.description ? `説明=${r.description}` : '',
@@ -2577,7 +2796,7 @@ async function removeReferenceImage(i: number): Promise<void> {
       const visionSection = effectiveVisionContext
         ? `\n[VISION解析結果]\n${effectiveVisionContext}`
         : '';
-      const refYamlRequirement = referenceImages.length > 0
+      const refYamlRequirement = visionImages.length > 0
         ? [
           '',
           '【REF画像ルール】',
@@ -2636,7 +2855,7 @@ async function removeReferenceImage(i: number): Promise<void> {
         '    "reference_source": "selected REF image",',
         '    "visual_rules": ["REF画像のキャラクターデザインを維持", "髪色、耳、しっぽ、衣装、番号マーキングを変更しない"]',
         '  },',
-        '  "refs": ["N-01", "N-02"],',
+        '  "refs": ["CURRENT-REF-01", "CURRENT-REF-02"],',
         '  "continuity": {',
         '    "seriesTitle": "シリーズタイトル",',
         '    "currentEpisodeTitle": "現在のエピソードタイトル",',
@@ -2788,17 +3007,16 @@ async function removeReferenceImage(i: number): Promise<void> {
         character.speechStyle = speechStyle || character.speechStyle;
       }
 
-	      if (referenceImages.length > 0) {
-	        parsed.refs = Array.from(new Set(referenceImages
-            .map((ref) => ref.registryName || ref.characterId)
-            .filter((id): id is string => Boolean(id))
+	      if (visionImages.length > 0) {
+	        parsed.refs = Array.from(new Set(visionImages
+            .map((ref, index) => referenceImageId(ref, index))
             .map((id) => id.toUpperCase())));
 	        console.log('[YAML_REFS]', parsed.refs);
 	      }
 	
 	      const yamlData = {
         ...parsed,
-        referenceImages: referenceImages.length > 0 ? referenceImages : undefined,
+        referenceImages: visionImages.length > 0 ? visionImages : undefined,
         sourceText: msg.text.slice(0, 60),
       };
 
@@ -2915,7 +3133,7 @@ async function removeReferenceImage(i: number): Promise<void> {
       || sourceStoryType === 'long_story'
       ? sourceStoryType
       : storyYamlFormatFromText(msg.text);
-    const yamlVisionContext = referenceImages.length > 0
+    const yamlVisionContext = currentVisionImages().length > 0
       ? await analyzeReferenceImagesForYaml(msg.text)
       : '';
     console.log('[STORY_YAML_ROUTE]', {
@@ -3723,15 +3941,19 @@ async function removeReferenceImage(i: number): Promise<void> {
       reason?: string;
       source?: string;
     },
+    routeOverride?: ImageRoute,
   ): Promise<void> {
-    const provider = labImageApiProvider;
+    const provider = labImageModelConfig.provider;
     const model = labImageModelConfig.apiModel;
     const selectedModel = labImageModel;
     const characterContext = resolveCharacterContextForImagePrompt(prompt, currentCharacter);
     const generationPrompt = characterContext.imagePrompt;
-    const refImages = labGenerationNeedsImage
-      ? referenceImages.map((ref) => ref.dataUrl).filter((url) => url.startsWith('data:'))
-      : [];
+    const imageRoute = routeOverride ?? resolveImageRoute(routerResult, prompt);
+    const routeImages = snapshotImagesForRoute(imageRoute);
+    logVisionInput(imageRoute, routeImages);
+    const refImages = routeImages
+      .map((ref) => ref.sourceUrl || ref.dataUrl)
+      .filter((url) => url.startsWith('data:'));
 
     if (routerResult?.action === 'create_character_materials') {
       console.log(
@@ -3758,17 +3980,14 @@ async function removeReferenceImage(i: number): Promise<void> {
         routerResult,
         prompt: generationPrompt,
         size: '1024x1024',
-        provider,
-        model,
         selectedModel,
         editMode: refImages.length > 0,
         refImages,
-        generationMode: labGenerationMode,
         renderMode: 'manga',
         speechBubble: true,
       };
       console.log('[lab] image generate button payload', payload);
-      console.log('[lab] fetch /api/generate provider/model', { provider: payload.provider, model: payload.model });
+      console.log('[lab] fetch /api/generate selectedModel', payload.selectedModel);
       const res = await fetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -4121,55 +4340,6 @@ async function removeReferenceImage(i: number): Promise<void> {
       .filter(Boolean);
   }
 
-  async function loadProjectCharacterRefs(yaml: string): Promise<{
-    refs: ReferenceImage[];
-    bible: CharacterBible | null;
-  }> {
-    const ids = Array.from(new Set(extractYamlRefs(yaml).map((id) => id.trim().toLowerCase()).filter(Boolean)));
-    if (ids.length === 0) return { refs: [], bible: null };
-    const loaded = await Promise.all(ids.map(async (id): Promise<{
-      ref: ReferenceImage;
-      bible: CharacterBible | null;
-    } | null> => {
-      try {
-        const [characterResponse, imageResponse] = await Promise.all([
-          fetch(`/api/characters/${encodeURIComponent(id)}`),
-          fetch(`/api/characters/${encodeURIComponent(id)}/reference`),
-        ]);
-        if (!characterResponse.ok) return null;
-        const characterData = await characterResponse.json();
-        const imageData = imageResponse.ok ? await imageResponse.json() : {};
-        const character = characterData?.character;
-        const image = typeof imageData?.referenceImageDataUrl === 'string'
-          ? imageData.referenceImageDataUrl
-          : '';
-        return {
-          ref: {
-            name: String(character?.name ?? id),
-            role: String(character?.role ?? ''),
-            description: String(character?.description ?? ''),
-            fileName: `${id}.yaml`,
-            dataUrl: image,
-            sourceUrl: image,
-            note: String(character?.description ?? character?.name ?? id),
-            characterId: id,
-            registryName: id.toUpperCase(),
-          },
-          bible: character?.characterBible ?? null,
-        };
-      } catch (error) {
-        console.warn('[PROJECT_CHARACTER_LIBRARY_LOOKUP]', { id, error });
-        return null;
-      }
-    }));
-    const found = loaded.flatMap((entry) => entry ? [entry] : []);
-    const characters = found.flatMap((entry) => entry.bible?.characters ?? []);
-    return {
-      refs: found.map((entry) => entry.ref),
-      bible: characters.length > 0 ? { unitId: ids.map((id) => id.toUpperCase()).join('+'), characters } : null,
-    };
-  }
-
   async function lookupYamlCharacters(names: string[]): Promise<string[]> {
     const found: string[] = [];
     for (const name of names) {
@@ -4264,51 +4434,33 @@ async function removeReferenceImage(i: number): Promise<void> {
       return;
     }
 
-    const story = activeStory ?? loadActiveStory() ?? undefined;
+    const story = activeStory;
     const parsedStory = parseStoryYaml(yaml);
-    let resolvedStoryReferenceImages = story?.referenceImages ?? [];
-    if (story?.id && resolvedStoryReferenceImages.length > 0) {
-      try {
-        const response = await fetch(`/api/stories/${encodeURIComponent(story.id)}/reference-images`);
-        if (response.ok) {
-          const data = await response.json();
-          if (Array.isArray(data?.referenceImages)) resolvedStoryReferenceImages = data.referenceImages;
-        }
-      } catch (error) {
-        console.warn('[STORY_REF_IMAGE_LOAD_ERROR]', error);
-      }
-    }
-    const storyReferenceImages = resolvedStoryReferenceImages
-      .filter((image) => Boolean(image.dataUrl))
-      .sort((a, b) => Number(b.active) - Number(a.active));
-    const activeStoryImage = storyReferenceImages.find((image) => image.active) ?? storyReferenceImages[0];
     console.log('[STORY_REF_IMAGE]', {
       storyId: story?.id ?? null,
-      imageCount: storyReferenceImages.length,
-      activeImage: activeStoryImage?.name ?? null,
+      imageCount: 0,
+      activeImage: null,
+      restored: false,
+      source: 'disabled_for_manga_continue',
     });
     console.log('[MANGA_GENERATION_CONTEXT]', {
       storyTitle: story?.title ?? parsedStory?.title ?? '',
       yamlLoaded: Boolean(yaml),
       referenceImages: storyReferenceImages.map((image) => image.name),
     });
-    const projectCharacters = await loadProjectCharacterRefs(yaml);
-    const activeReferenceImages = projectCharacters.refs.length > 0
-      ? projectCharacters.refs
-      : referenceImages;
-    const characterRefImages = activeReferenceImages
+    mangaContinueImages = snapshotImagesForRoute('manga_continue');
+    logVisionInput('manga_continue', mangaContinueImages);
+    const activeReferenceImages = mangaContinueImages;
+    const characterRefImages = referenceImages
       .map((ref) => ref.sourceUrl || ref.dataUrl)
       .filter((url) => url.startsWith('data:'));
-    const bible = projectCharacters.bible
-      ?? (characterRefImages.length > 0
-        ? await analyzeReferencesForCharacterBible([...activeReferenceImages])
-        : await loadCharacterBible());
+    const bible: CharacterBible | null = null;
     console.log('[MANGA_LAB_INPUT]', {
       characterRefs: activeReferenceImages,
       storyRefs: storyReferences,
       characterBible: bible,
       storyYaml: yaml,
-      source: projectCharacters.refs.length > 0 ? 'project_character_library' : 'active_reference_images',
+      source: 'current_selection',
     });
     console.log('[MANGA_LAB_INPUT_STATUS]', {
       characterRefCount: characterRefImages.length,
@@ -4316,28 +4468,16 @@ async function removeReferenceImage(i: number): Promise<void> {
       hasCharacterBible: Boolean(bible),
       hasStoryYaml: Boolean(yaml),
     });
-    logRegisteredCharacterMemory(characterRefImages.length > 0 && Boolean(yaml));
-    if (characterRefImages.length === 0) {
+    logRegisteredCharacterMemory(activeReferenceImages.length > 0 && Boolean(yaml), activeReferenceImages);
+    if (activeReferenceImages.length === 0) {
       messages = [...messages, {
         role: 'error',
-        text: bible
-          ? 'CharacterBibleはありますがREF画像が0枚のため、MANGA生成を中止しました。REF画像を登録してください。'
-          : 'MANGA生成にはREF画像が必要です。REF画像を登録してください。',
+        text: 'MANGA生成には現在選択中のREF画像が必要です。画像を選択してください。',
         time: getTime(),
       }];
       isThinking = false;
       return;
     }
-    if (characterRefImages.length > 0 && !bible) {
-      messages = [...messages, {
-        role: 'error',
-        text: 'CharacterBibleを作成できなかったため、MANGA生成を中止しました。',
-        time: getTime(),
-      }];
-      isThinking = false;
-      return;
-    }
-
     const model = labImageModelConfig.provider === 'fal'
       ? labImageModelConfig.apiModel
       : 'fal-ai/nano-banana-pro';
@@ -4359,13 +4499,15 @@ async function removeReferenceImage(i: number): Promise<void> {
           summary: parsedStory?.overview ?? '',
           characters: parsedStory?.characters ?? [],
           pages: parsedStory?.pages ?? [],
-          referenceImages: resolvedStoryReferenceImages.map(({ dataUrl: _dataUrl, ...image }) => image),
+          referenceImages: [],
         } : null,
-        storyReferenceImages: storyReferenceImages.map((image) => image.dataUrl).filter(Boolean),
+        storyReferenceImages: storyReferenceImages
+          .map((image) => image.sourceUrl || image.dataUrl)
+          .filter(Boolean),
         characterBible: bible,
         characterRefImages,
-        characterRefs: activeReferenceImages.map((ref, index) => ({
-          source: projectCharacters.refs.length > 0 ? 'project_character_library' : 'character_registry',
+        characterRefs: referenceImages.map((ref, index) => ({
+          source: 'current_selection',
           id: ref.registryName || ref.characterId || `REF-${index + 1}`,
           name: ref.name,
           role: ref.role,
@@ -4373,11 +4515,7 @@ async function removeReferenceImage(i: number): Promise<void> {
           fileName: ref.fileName || ref.name,
           image: ref.sourceUrl || ref.dataUrl,
         })),
-        characterBibleMeta: bible ? {
-          source: characterBibleSource || 'unknown',
-          id: bible.unitId,
-          fileName: 'character.yaml',
-        } : null,
+        characterBibleMeta: null,
         storyRefs: storyReferences.map((ref) => ({
           source: 'lab_story_ref',
           id: ref.name,
@@ -4571,7 +4709,7 @@ async function removeReferenceImage(i: number): Promise<void> {
         ? '以下のStory YAMLに登場するキャラクターの設定資料・キャラクターシートを作成してください。'
         : '以下のStory YAMLの世界観、場所、小物、建築、色彩設計をまとめた設定資料を作成してください。',
       rawYaml,
-    ].join('\n\n'), routerResult);
+    ].join('\n\n'), routerResult, isCharacterSheet ? 'character_sheet' : 'normal_generate');
   }
 
   function isCharacterRefStatusRequest(text: string): boolean {
@@ -5115,7 +5253,9 @@ async function removeReferenceImage(i: number): Promise<void> {
 
     console.log('[Lab] provider:', $sessionStore.provider);
     console.log('[Lab] model   :', $sessionStore.model || '(default)');
-    const visionReferenceImages = await buildVisionReferenceImages(text);
+    const imageRoute = resolveImageRoute(intent, text);
+    snapshotImagesForRoute(imageRoute);
+    const visionReferenceImages = buildVisionReferenceImages(imageRoute);
 
     console.log('[Lab] images  :', visionReferenceImages.length, visionReferenceImages.length > 0 ? visionReferenceImages.map(r => r.name).join(', ') : '(none)');
     console.log('[Lab] request start');
@@ -5562,6 +5702,7 @@ async function removeReferenceImage(i: number): Promise<void> {
   const LS_EMOTION            = 'lab-emotion';
   const LS_BOND               = 'lab-bond';
   const LS_CUSTOM_PROFILE     = 'lab-custom-profile';
+  const LAB_INJECT_MEMORY_KEY = 'lab-inject-character-memory';
   const LS_SLOT: Record<SlotKey, string> = { a: 'lab-custom-slot-a', b: 'lab-custom-slot-b', c: 'lab-custom-slot-c' };
   const LS_EMOTION_FEEDBACK_ON  = 'lab-emotion-feedback-on';
   const LS_EMOTION_FEEDBACK_LOG = (charId: string) => `lab-emotion-feedback-log-${charId}`;
@@ -6294,7 +6435,24 @@ ${recent}
   onMount(() => {
     messages[0].time = getTime();
     currentTime = getTime();
-    void loadRegisteredCharacters();
+    referenceImages = [];
+    storyReferenceImages = [];
+    characterAnalyzeImages = [];
+    mangaContinueImages = [];
+    console.log('[REF_RESTORE]', {
+      source: 'none',
+      count: 0,
+      restored: false,
+      reason: 'LAB references are session-only and require explicit user selection',
+    });
+    console.log('[IMAGE_SESSION_STATE]', {
+      referenceImages: 0,
+      storyReferenceImages: 0,
+      characterAnalyzeImages: 0,
+      mangaContinueImages: 0,
+    });
+    void useRequestedCharacter();
+    void loadRefLibrary();
     toggles.nightMode = localStorage.getItem(LS_NIGHT_MODE) === 'true';
     clockId = setInterval(() => { currentTime = getTime(); }, 1000);
     angerCooldownId = setInterval(() => {
@@ -6384,6 +6542,10 @@ ${recent}
         localStorage.setItem(LS_CUSTOM_PROFILE, JSON.stringify(customProfile));
       } catch { /* ignore */ }
     }
+
+    // Apply manual Character Memory injection AFTER restoring saved persona so
+    // the injected character wins over the previously stored custom profile.
+    injectRequestedCharacterMemory();
 
     for (const k of (['a', 'b', 'c'] as SlotKey[])) {
       const raw = localStorage.getItem(LS_SLOT[k]);
@@ -7043,30 +7205,88 @@ ${recent}
         </div>
       {/if}
 
-      <div class="character-registry-panel">
-        <div class="ref-section-label">CHARACTER REGISTRY</div>
-        <div class="character-register-fields">
-          <input class="character-register-input" bind:value={characterRegistrationName} placeholder="キャラクター名" />
-          <input class="character-register-input" bind:value={characterRegistrationRole} placeholder="役割（姉、主人公など）" />
-          <label class="ref-upload-btn character-register-button" title="画像と入力内容を永続キャラクターとして登録">
-            {characterRegistryLoading ? 'LOADING...' : '+ CHARACTER登録'}
-            <input
-              type="file"
-              accept="image/*"
-              style="display:none"
-              disabled={characterRegistryLoading}
-              onchange={handleReferenceImageUpload}
-            />
-          </label>
+      <!-- MANGA Result Panel (LAB-internal image generation) -->
+      {#if mangaResult}
+        <div class="manga-result-panel">
+          <div class="mr-hd">
+            <span class="mr-title">⬛ MANGA</span>
+            <span class="mr-sub">{mangaResult.panels.length}コマ</span>
+            <span class="mr-flex"></span>
+            <button
+              class="mr-regen-all"
+              onclick={() => generateMangaImages()}
+              disabled={mangaGenerating}
+            >{mangaGenerating ? '⏳ 生成中…' : '↻ 全コマ再生成'}</button>
+            <button class="mr-studio" onclick={openMangaInStudio} title="詳細編集はSTUDIOで">STUDIOで編集 ↗</button>
+            <button class="mr-close" onclick={() => { mangaResult = null; }} title="閉じる">✕</button>
+          </div>
+          <div class="mr-grid">
+            {#each mangaResult.panels as panel, i}
+              <div class="mr-cell">
+                <div class="mr-thumb">
+                  {#if panel.generating}
+                    <span class="mr-loading">⏳ 生成中…</span>
+                  {:else if panel.imageUrl}
+                    <img src={panel.imageUrl} alt={`panel ${i + 1}`} />
+                  {:else if panel.error}
+                    <span class="mr-error">⚠ {panel.error}</span>
+                  {:else}
+                    <span class="mr-empty">未生成</span>
+                  {/if}
+                </div>
+                <div class="mr-cap" title={panel.prompt}>#{i + 1} {panel.scene || panel.prompt}</div>
+                <button
+                  class="mr-regen"
+                  onclick={() => generateMangaPanelImage(i)}
+                  disabled={panel.generating || mangaGenerating}
+                >↻ 再生成</button>
+              </div>
+            {/each}
+          </div>
         </div>
+      {/if}
+
+      <div class="character-registry-panel">
+        <div class="ref-section-label">
+          REF LIBRARY
+          <a class="ref-library-manage" href="/ref-library" target="_blank" rel="noopener">
+            {refLibraryLoading ? 'LOADING...' : '管理 ↗'}
+          </a>
+        </div>
+        {#if refLibrary.length > 0}
+          <div class="story-ref-strip">
+            {#each refLibrary as item (item.id)}
+              <div class="story-ref-chip">
+                <span class="story-ref-kind">REF</span>
+                <span class="story-ref-name" title={item.name}>{item.name}</span>
+                <button
+                  class="story-ref-use"
+                  onclick={() => useRefLibraryImage(item, 'ref')}
+                  title="REF IMAGEに追加"
+                >
+                  USE AS REF
+                </button>
+                <button
+                  class="story-ref-use"
+                  onclick={() => useRefLibraryImage(item, 'story')}
+                  title="STORY参照に追加"
+                >
+                  STORYへ挿入
+                </button>
+              </div>
+            {/each}
+          </div>
+        {:else}
+          <div class="ref-library-empty">REF画像はまだありません。「管理 ↗」から保存してください。</div>
+        {/if}
       </div>
 
-      <!-- Character REF thumbnails -->
+      <!-- Temporary reference images -->
       {#if referenceImages.length > 0}
-        <div class="ref-section-label">REGISTERED CHARACTERS</div>
+        <div class="ref-section-label">REF IMAGE</div>
         <div class="ref-img-strip">
-          {#each referenceImages as ref, i}
-            <div class="ref-img-chip registered-character-chip">
+          {#each referenceImages as ref, i (ref.sessionId)}
+            <div class="ref-img-chip" data-ref-image-card data-ref-session-id={ref.sessionId}>
 	              {#if ref.dataUrl}
 	                <img src={ref.dataUrl} alt={ref.name} class="ref-img-thumb" />
 	              {/if}
@@ -7075,16 +7295,18 @@ ${recent}
                 class="ref-img-note"
                 placeholder="キャラクター名未設定"
                 bind:value={ref.name}
-                onblur={() => updateRegisteredCharacter(ref)}
               />
               <input
                 type="text"
                 class="ref-img-note"
                 placeholder="役割"
                 bind:value={ref.role}
-                onblur={() => updateRegisteredCharacter(ref)}
               />
-              <button class="ref-img-remove" onclick={() => removeReferenceImage(i)} title="永続登録を解除">✕</button>
+              <button
+                class="ref-img-remove"
+                onclick={() => void removeReferenceImage(ref.sessionId)}
+                title="現在のREF選択から外す"
+              >✕</button>
             </div>
           {/each}
         </div>
@@ -7114,8 +7336,21 @@ ${recent}
         </div>
       {/if}
 
+      {#if storyReferenceImages.length > 0}
+        <div class="ref-section-label story">STORY REF IMAGES</div>
+        <div class="ref-img-strip">
+          {#each storyReferenceImages as ref, i}
+            <div class="ref-img-chip">
+              <img src={ref.dataUrl || ref.sourceUrl} alt={ref.name} class="ref-img-thumb" />
+              <span class="story-ref-name" title={ref.fileName}>{ref.name}</span>
+              <button class="ref-img-remove" onclick={() => removeStoryReferenceImage(i)} title="Remove">X</button>
+            </div>
+          {/each}
+        </div>
+      {/if}
+
       {#if storyReferences.length > 0}
-        <div class="ref-section-label story">STORY REF</div>
+        <div class="ref-section-label story">STORY YAML</div>
         <div class="story-ref-strip">
           {#each storyReferences as ref, i}
             <div class="story-ref-chip" class:active={i === storyReferences.length - 1}>
@@ -7136,13 +7371,33 @@ ${recent}
 
       <!-- Input -->
       <div class="chat-input-area">
+        <label class="ref-upload-btn" title="Session-only reference image">
+          REF IMAGE
+          <input
+            type="file"
+            accept="image/*"
+            multiple
+            style="display:none"
+            onchange={handleTemporaryReferenceImageUpload}
+          />
+        </label>
+        <label class="ref-upload-btn story-ref-upload-btn" title="Source image for manga continuation">
+          STORY REF
+          <input
+            type="file"
+            accept="image/*"
+            multiple
+            style="display:none"
+            onchange={handleStoryReferenceImageUpload}
+          />
+        </label>
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
         <label class="ref-upload-btn story-ref-upload-btn" title="4コマまたはストーリー形式のYAMLをStory REFとして登録">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path d="M6 3h9l3 3v15H6z" stroke="currentColor" stroke-width="1.5"/>
             <path d="M15 3v4h4M9 12h6M9 16h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
           </svg>
-          STORY REF
+          STORY YAML
           <input
             type="file"
             accept=".yaml,.yml,application/yaml,text/yaml,text/x-yaml"
@@ -7153,13 +7408,13 @@ ${recent}
         </label>
         <button
           class="vision-btn"
-          onclick={() => analyzeReferencesForCharacterBible([...referenceImages])}
-          disabled={visionScanning || (referenceImages.length === 0 && !wantsImageMemoryReference(inputText))}
+          onclick={analyzeCurrentReferenceImages}
+          disabled={visionScanning || currentVisionImages().length === 0}
         >
           {#if visionScanning}
             SCANNING...
           {:else}
-            REANALYZE
+            ANALYZE CHARACTER
           {/if}
         </button>
         <textarea
@@ -7591,16 +7846,12 @@ ${recent}
           <div class="router-state-divider"></div>
           <div class="router-state-section-title">MODEL ROUTING</div>
           <div class="router-state-row">
-            <span class="router-state-label">MEDIA_PROVIDER</span>
-            <span class="router-state-value">{imageProviderLabel(labImageApiProvider)}</span>
-          </div>
-          <div class="router-state-row">
             <span class="router-state-label">MEDIA_MODEL</span>
-            <span class="router-state-value">{labImageModelConfig.label}</span>
+            <span class="router-state-value">{selectedLabMediaModelLabel()}</span>
           </div>
           <div class="router-state-row">
-            <span class="router-state-label">Generation Mode</span>
-            <span class="router-state-value">{labGenerationMode}</span>
+            <span class="router-state-label">Media Type</span>
+            <span class="router-state-value">{labMediaType}</span>
           </div>
           <div class="router-state-divider"></div>
           <div class="router-state-section-title">LAST ACTION</div>
@@ -7655,52 +7906,37 @@ ${recent}
       </div>
 
       <div class="av-effects ai-cfg-block">
-        <div class="section-lbl">IMAGE GENERATION</div>
+        <div class="section-lbl">MEDIA GENERATION</div>
         <div class="vc-rows">
           <div class="vc-row">
-            <span class="vc-lbl vc-lbl-wide">Generation Mode</span>
-            <select class="vc-select" bind:value={labGenerationMode} disabled title="Gemini Router結果から自動決定">
-              {#each LAB_GENERATION_MODES as mode}
-                <option value={mode.id}>{mode.label}</option>
-              {/each}
-            </select>
-          </div>
-          <div class="vc-row">
-            <span class="vc-lbl vc-lbl-wide">MEDIA_PROVIDER</span>
-            <span class="vc-note vc-current">{LAB_IMAGE_PROVIDERS.find((provider) => provider.id === labImageProvider)?.label ?? labImageProvider}</span>
-          </div>
-          <div class="vc-row">
-            <span class="vc-lbl vc-lbl-wide">MEDIA_MODEL</span>
-            <span class="vc-note vc-current">{labImageModelConfig.label}</span>
-          </div>
-          <div class="vc-row">
-            <span class="vc-lbl vc-lbl-wide">Reference Image Count</span>
-            <span class="vc-note vc-current" class:vc-warn={labGenerationNeedsImage && referenceImages.length === 0}>
-              {referenceImages.length}
-              {#if labGenerationNeedsImage && referenceImages.length === 0}
-                · required
-              {/if}
-            </span>
-          </div>
-          <div class="vc-row">
-            <span class="vc-lbl vc-lbl-wide">Provider</span>
-            <select
-              class="vc-select"
-              value={labImageProvider}
-              onchange={(e) => setLabImageProvider((e.currentTarget as HTMLSelectElement).value as LabImageProvider)}
-            >
-              {#each LAB_IMAGE_PROVIDERS as provider}
-                <option value={provider.id}>{provider.label}</option>
-              {/each}
+            <span class="vc-lbl vc-lbl-wide">Media Type</span>
+            <select class="vc-select" bind:value={labMediaType} onchange={logLabModelSelection}>
+              <option value="image">Image</option>
+              <option value="video">Video</option>
+              <option value="audio">Audio</option>
             </select>
           </div>
           <div class="vc-row">
             <span class="vc-lbl vc-lbl-wide">Model</span>
-            <select class="vc-select" bind:value={labImageModel}>
-              {#each imageModelsForProvider(labImageProvider) as model}
-                <option value={model.id}>{model.label}</option>
-              {/each}
-            </select>
+            {#if labMediaType === 'image'}
+              <select class="vc-select" bind:value={labImageModel} onchange={logLabModelSelection}>
+                {#each LAB_IMAGE_MODELS as model}
+                  <option value={model.id} disabled={model.edit && currentVisionImages().length === 0}>{model.label}</option>
+                {/each}
+              </select>
+            {:else if labMediaType === 'video'}
+              <select class="vc-select" bind:value={labVideoModel} onchange={logLabModelSelection}>
+                {#each LAB_VIDEO_MODELS as model}
+                  <option value={model.id}>{model.label}</option>
+                {/each}
+              </select>
+            {:else}
+              <select class="vc-select" bind:value={labAudioModel} onchange={logLabModelSelection}>
+                {#each LAB_AUDIO_MODELS as model}
+                  <option value={model.id}>{model.label}</option>
+                {/each}
+              </select>
+            {/if}
           </div>
         </div>
       </div>
@@ -11442,6 +11678,19 @@ ${recent}
   color: #a78bfa;
   background: rgba(167,139,250,0.03);
 }
+.ref-library-manage {
+  margin-left: 8px;
+  color: #22d3ee;
+  text-decoration: none;
+  font-size: 9px;
+  font-weight: 700;
+}
+.ref-library-manage:hover { text-decoration: underline; }
+.ref-library-empty {
+  padding: 6px 12px 8px;
+  color: #64748b;
+  font-size: 10px;
+}
 .ref-img-strip {
   display: flex;
   gap: 8px;
@@ -11718,6 +11967,87 @@ ${recent}
   flex-direction: column;
   gap: 8px;
 }
+
+/* MANGA Result Panel (LAB-internal generation) */
+.manga-result-panel {
+  flex-shrink: 0;
+  border: 1px solid rgba(34,211,238,0.3);
+  border-radius: 4px;
+  background: rgba(34,211,238,0.04);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mr-hd {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(34,211,238,0.15);
+}
+.mr-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: rgba(34,211,238,0.95);
+  text-shadow: 0 0 8px rgba(34,211,238,0.35);
+}
+.mr-sub { font-size: 9px; color: #64748b; }
+.mr-flex { flex: 1; }
+.mr-hd button {
+  padding: 5px 9px;
+  border: 1px solid rgba(34,211,238,0.35);
+  border-radius: 5px;
+  background: rgba(34,211,238,0.08);
+  color: #a5f3fc;
+  font: inherit;
+  font-size: 9px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.mr-hd button:disabled { opacity: 0.45; cursor: not-allowed; }
+.mr-studio { border-color: rgba(167,139,250,0.4) !important; color: #c4b5fd !important; background: rgba(167,139,250,0.08) !important; }
+.mr-close { border-color: rgba(148,163,184,0.3) !important; color: #94a3b8 !important; background: transparent !important; }
+.mr-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+}
+.mr-cell { display: flex; flex-direction: column; gap: 6px; }
+.mr-thumb {
+  aspect-ratio: 1 / 1;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #020617;
+  border: 1px solid rgba(34,211,238,0.18);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.mr-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.mr-loading { color: #67e8f9; font-size: 11px; font-weight: 700; }
+.mr-error { color: #fb7185; font-size: 10px; padding: 6px; text-align: center; }
+.mr-empty { color: #475569; font-size: 11px; font-weight: 700; }
+.mr-cap {
+  font-size: 9px;
+  color: #94a3b8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mr-regen {
+  padding: 5px 8px;
+  border: 1px solid rgba(34,211,238,0.3);
+  border-radius: 5px;
+  background: rgba(34,211,238,0.07);
+  color: #a5f3fc;
+  font: inherit;
+  font-size: 9px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.mr-regen:disabled { opacity: 0.45; cursor: not-allowed; }
 
 .bs-hd {
   display: flex;

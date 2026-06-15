@@ -4,6 +4,7 @@ export type ChatImageInput = {
 };
 
 export type ProviderChatInput = {
+  requestId?: string;
   systemPrompt: string;
   userMessage: string;
   model?: string;

@@ -90,6 +90,7 @@ export async function chatOpenAI(input: ProviderChatInput & { apiKey?: string })
       JSON.stringify(summarizeOpenAIPayload(payload, images), null, 2),
     );
     console.log('[OPENAI_RESPONSES_INPUT_IMAGE]', {
+      requestId: input.requestId ?? null,
       included: images.length > 0,
       count: images.length,
     });

@@ -82,3 +82,20 @@ export type MemoryCoreRecordInput = {
   sharedMemories?: LongTermMemory[];
   characterMemories?: LongTermMemory[];
 };
+
+export type InternalEventSource = 'chat' | 'vision' | 'idea' | 'yaml' | 'manga';
+
+export type InternalEvent = {
+  id: string;
+  participants: string[];
+  topic: string;
+  summary: string;
+  source: InternalEventSource;
+  emotion?: string;
+  rawPreview?: string;
+  timestamp: string;
+};
+
+export type InternalEventContext = Partial<
+  Pick<InternalEvent, 'participants' | 'topic' | 'summary' | 'source' | 'emotion' | 'rawPreview'>
+>;

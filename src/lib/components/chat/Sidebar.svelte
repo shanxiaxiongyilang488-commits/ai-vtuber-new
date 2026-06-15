@@ -35,8 +35,8 @@
   <div class="characters">
     <CharacterCard
       name={char1.name}
-      emoji={char1.avatarEmoji}
-      color={char1.color}
+      emoji={char1.avatarEmoji ?? ''}
+      color={char1.color ?? '#94a3b8'}
       aiEngine={char1.aiEngine}
       voiceEngine={char1.voiceEngine}
       avatar={char1.avatar}
@@ -51,8 +51,8 @@
 
     <CharacterCard
       name={char2.name}
-      emoji={char2.avatarEmoji}
-      color={char2.color}
+      emoji={char2.avatarEmoji ?? ''}
+      color={char2.color ?? '#94a3b8'}
       aiEngine={char2.aiEngine}
       voiceEngine={char2.voiceEngine}
       avatar={char2.avatar}
