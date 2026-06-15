@@ -121,6 +121,11 @@
   // AI Router: the engine assigned to the current character (Personality Engine).
   let routedProvider = $state<RoutedProvider>(routeProvider('AUTO'));
 
+  // 予約枠: 将来の表情変化用。今回は表情変化を実装せず 'normal' 固定で表示のみ。
+  type Emotion = 'normal';
+  const EMOTION_ICONS: Record<Emotion, string> = { normal: '🙂' };
+  let emotion = $state<Emotion>('normal');
+
   const LAB_INJECT_MEMORY_KEY = 'lab-inject-character-memory';
 
   onMount(() => {
@@ -560,15 +565,17 @@
         <div class="character-head">
           <div class="portrait">
             {#if imageDataUrl}<img src={imageDataUrl} alt={character.name} />{:else}<span>NO IMAGE</span>{/if}
+            <!-- 予約枠: 将来の表情変化用（現在は normal 固定 / 表情変化は未実装） -->
+            <span class="emotion-badge" title="EMOTION: {emotion}">{EMOTION_ICONS[emotion]}</span>
           </div>
-          <div>
+          <div class="head-info">
             <h2>{character.name}</h2>
             <div class="ai-chip" title="このキャラクターのAI（Personality Engine）">
               <span class="ai-icon">{routedProvider.icon}</span>
               <span class="ai-label">{routedProvider.label}</span>
               {#if !routedProvider.implemented}<span class="ai-pending">未実装</span>{/if}
             </div>
-            {#if character.role}<div class="role">{character.role}</div>{/if}
+            {#if character.role}<div class="role"><span class="role-tag">🏷️</span>{character.role}</div>{/if}
             {#if character.description}<p class="desc">{character.description}</p>{/if}
           </div>
         </div>
@@ -578,7 +585,7 @@
           {/if}
           {#each messages as message (message.id)}
             <article class:user={message.role === 'user'} class:assistant={message.role === 'assistant'}>
-              <span>{message.role === 'user' ? 'YOU' : character.name}</span>
+              <span class="sys-line">◢ SYSTEM · {message.role === 'user' ? 'YOU' : character.name}</span>
               {#if message.imageUrl}
                 <img class="message-image" src={message.imageUrl} alt="attached" />
               {/if}
@@ -599,7 +606,7 @@
             <textarea
               bind:value={inputText}
               rows="3"
-              placeholder={`${character.name}に話しかける`}
+              placeholder={`◢ TALK TO ${character.name.toUpperCase()}...`}
               onkeydown={(event) => {
                 if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) void sendMessage();
               }}
@@ -677,11 +684,49 @@
   .character-role { font-size: 9px; color: #fbbf24; }
   .memory-flag { margin-left: auto; font-size: 7px; font-weight: 800; color: #fde68a; letter-spacing: .1em; }
   .conversation-panel { min-height: calc(100vh - 120px); display: grid; grid-template-rows: auto 1fr auto; overflow: hidden; }
-  .character-head { display: flex; gap: 12px; padding: 14px; border-bottom: 1px solid rgba(148,163,184,.14); }
-  .character-head h2 { margin: 0 0 3px; font-size: 17px; }
-  .portrait { width: 64px; height: 64px; flex-shrink: 0; display: grid; place-items: center; overflow: hidden; border-radius: 9px; background: #020617; color: #475569; font-size: 8px; }
-  .portrait img { width: 100%; height: 100%; object-fit: cover; }
-  .role { color: #fbbf24; font-size: 11px; }
+  .character-head {
+    display: flex;
+    gap: 14px;
+    padding: 16px;
+    border-bottom: 1px solid rgba(34,211,238,.2);
+    background: linear-gradient(180deg, rgba(34,211,238,.06), transparent);
+  }
+  .character-head h2 { margin: 0 0 4px; font-size: 19px; letter-spacing: .02em; text-shadow: 0 0 10px rgba(34,211,238,.35); }
+  .head-info { min-width: 0; }
+  .portrait {
+    position: relative;
+    width: 72px;
+    height: 72px;
+    flex-shrink: 0;
+    display: grid;
+    place-items: center;
+    overflow: visible;
+    border-radius: 14px;
+    background: #020617;
+    color: #475569;
+    font-size: 8px;
+    border: 1px solid rgba(34,211,238,.45);
+    box-shadow: 0 0 16px rgba(34,211,238,.35), inset 0 0 10px rgba(34,211,238,.12);
+  }
+  .portrait img { width: 100%; height: 100%; object-fit: cover; border-radius: 13px; }
+  /* 予約枠: 将来の表情アイコン表示位置 */
+  .emotion-badge {
+    position: absolute;
+    right: -6px;
+    bottom: -6px;
+    width: 22px;
+    height: 22px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background: #0b1220;
+    border: 1px solid rgba(34,211,238,.5);
+    box-shadow: 0 0 8px rgba(34,211,238,.4);
+    font-size: 12px;
+    line-height: 1;
+  }
+  .role { display: inline-flex; align-items: center; gap: 5px; color: #fbbf24; font-size: 12px; font-weight: 700; }
+  .role-tag { font-size: 11px; }
   .desc { color: #94a3b8; font-size: 11px; line-height: 1.5; margin: 5px 0 0; }
   .ai-chip {
     display: inline-flex;
@@ -706,17 +751,56 @@
     font-weight: 800;
   }
   .messages { padding: 16px; overflow-y: auto; }
-  article { max-width: 82%; margin-bottom: 10px; padding: 9px 11px; border-radius: 9px; }
-  article span { display: block; margin-bottom: 4px; font-size: 8px; font-weight: 800; letter-spacing: .12em; }
-  article div { font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
-  article.user { margin-left: auto; background: rgba(168,85,247,.12); border: 1px solid rgba(168,85,247,.22); }
-  article.assistant { background: rgba(34,211,238,.08); border: 1px solid rgba(34,211,238,.18); }
-  article.user span { color: #c4b5fd; } article.assistant span { color: #67e8f9; }
+  article {
+    position: relative;
+    max-width: 82%;
+    margin-bottom: 14px;
+    padding: 12px 14px 11px;
+    border-radius: 18px;
+    backdrop-filter: blur(2px);
+  }
+  /* ① 左上の小さな SYSTEM ライン */
+  .sys-line {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 8px;
+    font-weight: 800;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    opacity: .85;
+  }
+  /* ② 本文 18px / 行間 1.8 */
+  article div { font-size: 18px; line-height: 1.8; white-space: pre-wrap; }
+  article.user {
+    margin-left: auto;
+    background: linear-gradient(135deg, rgba(168,85,247,.16), rgba(168,85,247,.08));
+    border: 1px solid rgba(168,85,247,.4);
+    box-shadow: 0 0 14px rgba(168,85,247,.28), inset 0 0 12px rgba(168,85,247,.08);
+  }
+  article.assistant {
+    background: linear-gradient(135deg, rgba(34,211,238,.13), rgba(34,211,238,.05));
+    border: 1px solid rgba(34,211,238,.38);
+    box-shadow: 0 0 14px rgba(34,211,238,.28), inset 0 0 12px rgba(34,211,238,.07);
+  }
+  article.user .sys-line { color: #d8b4fe; text-shadow: 0 0 8px rgba(168,85,247,.6); }
+  article.assistant .sys-line { color: #67e8f9; text-shadow: 0 0 8px rgba(34,211,238,.6); }
   .hint { color: #64748b; font-size: 11px; }
   .hint.center { text-align: center; align-self: center; padding: 30px; }
   .message-image { display: block; max-width: 100%; max-height: 320px; margin-bottom: 6px; border-radius: 8px; border: 1px solid rgba(148,163,184,.2); }
-  .composer { display: grid; gap: 8px; padding: 12px; border-top: 1px solid rgba(148,163,184,.14); }
+  .composer { display: grid; gap: 8px; padding: 12px; border-top: 1px solid rgba(34,211,238,.2); background: linear-gradient(0deg, rgba(34,211,238,.05), transparent); }
   .composer-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+  .composer textarea {
+    border-color: rgba(34,211,238,.35);
+    border-radius: 12px;
+    box-shadow: inset 0 0 10px rgba(34,211,238,.08);
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .composer textarea:focus {
+    outline: none;
+    border-color: rgba(34,211,238,.7);
+    box-shadow: 0 0 14px rgba(34,211,238,.3), inset 0 0 10px rgba(34,211,238,.12);
+  }
+  .composer textarea::placeholder { color: #5b7e8a; font-weight: 700; letter-spacing: .08em; }
   .composer-actions { display: grid; gap: 6px; align-content: start; }
   .attach-button { display: grid; place-items: center; padding: 8px 12px; border: 1px solid rgba(34,211,238,.35); border-radius: 6px; color: #67e8f9; font-size: 10px; font-weight: 800; cursor: pointer; }
   .portrait-button { border-color: rgba(168,85,247,.45); background: rgba(168,85,247,.1); color: #d8b4fe; }
