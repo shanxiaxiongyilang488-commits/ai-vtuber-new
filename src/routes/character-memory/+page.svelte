@@ -3,13 +3,15 @@
   import { page } from '$app/state';
   import { routeProvider, type RoutedProvider } from '$lib/ai/aiProviderRouter';
   import {
+    GROWTH_HISTORY_LIMIT,
     GROWTH_PARAMS,
     clampGrowth,
     evaluateGrowth,
     growthLogEntries,
+    growthMessageSnippet,
     initialGrowthValues,
+    type GrowthHistoryEntry,
     type GrowthKey,
-    type GrowthLogEntry,
     type GrowthValues,
   } from '$lib/character-memory/growthSystem';
 
@@ -131,25 +133,28 @@
   // AI Router: the engine assigned to the current character (Personality Engine).
   let routedProvider = $state<RoutedProvider>(routeProvider('AUTO'));
 
-  // 🧠 Growth System V2 — 送信時にユーザーの文章だけを見てキーワード一致で加算する。
-  // AI返答では変化させない。emotion / 表情 / 画像生成 / Memory保存 とは無関係（UI内の一時値のみ）。
-  // 値は永続化しない（character-memory.json には一切書き込まない）。
+  // 🧠 Growth System V3 — 送信時にユーザーの文章だけを見てキーワード一致で加算し、履歴を可視化する。
+  // AI返答では変化させない。emotion / 表情 / 画像生成 / Memory保存 / AIモデル切替 とは無関係。
+  // 値・履歴は永続化しない（in-memory のみ。character-memory.json には一切書き込まない）。
   let growthValues = $state<GrowthValues>(initialGrowthValues());
-  let growthLog = $state<GrowthLogEntry[]>([]);
-  let growthLogTimer: ReturnType<typeof setTimeout> | undefined;
+  let growthHistory = $state<GrowthHistoryEntry[]>([]);
 
-  // 送信ボタン押下時のみ呼ぶ。ユーザー入力テキストだけを評価して数値を変動させる。
+  // 送信ボタン押下時のみ呼ぶ。ユーザー入力テキストだけを評価して数値を変動させ、履歴へ記録する。
   function applyGrowthFromUserText(userText: string): void {
     const delta = evaluateGrowth(userText);
-    const entries = growthLogEntries(delta);
-    if (entries.length === 0) return;
+    const changes = growthLogEntries(delta);
+    if (changes.length === 0) return;
     for (const key of Object.keys(delta) as GrowthKey[]) {
       growthValues[key] = clampGrowth(growthValues[key] + (delta[key] ?? 0));
     }
-    growthLog = entries;
-    if (growthLogTimer) clearTimeout(growthLogTimer);
-    // 変動時だけ表示し、3秒後に自動消去する。
-    growthLogTimer = setTimeout(() => { growthLog = []; }, 3000);
+    const entry: GrowthHistoryEntry = {
+      id: `growth-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      time: new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }),
+      message: growthMessageSnippet(userText),
+      changes,
+    };
+    // 最新を先頭に。最新5件のみ保持（古い履歴は自動削除）。
+    growthHistory = [entry, ...growthHistory].slice(0, GROWTH_HISTORY_LIMIT);
   }
 
   // 感情システムは将来用に予約（emotion: 'normal' 相当）。今回はUI表示しない／表情変化は未実装。
@@ -193,10 +198,9 @@
     memory = emptyMemory();
     imageDataUrl = '';
     updatedAt = '';
-    // 成長パラメータはキャラ切替でセッション初期値(50)へリセット（永続化しない）。
+    // 成長パラメータ・履歴はキャラ切替でセッション初期値へリセット（永続化しない）。
     growthValues = initialGrowthValues();
-    growthLog = [];
-    if (growthLogTimer) clearTimeout(growthLogTimer);
+    growthHistory = [];
     try {
       const response = await fetch(`/api/character-memory/${encodeURIComponent(id)}`);
       const data = await response.json();
@@ -695,30 +699,17 @@
           </button>
         </div>
 
-        <!-- 🧠 Growth System V2: 送信時にユーザー文章のキーワードで自動変化（レーダー・emotionは未実装） -->
+        <!-- 🧠 Growth System V3: 成長レーダー（絵文字ラベル＋横バー＋数値）。送信時にユーザー文章で自動変化 -->
         <section class="growth-system">
           <p class="growth-title">🧠 Growth System</p>
           {#each GROWTH_PARAMS as param (param.key)}
             <div class="growth-row">
-              <span class="growth-name">{param.label}</span>
+              <span class="growth-name"><span class="growth-icon">{param.icon}</span>{param.label}</span>
               <div class="growth-bar"><div class="growth-fill" style={`width:${growthValues[param.key]}%`}></div></div>
               <span class="growth-value">{growthValues[param.key]}</span>
             </div>
           {/each}
         </section>
-
-        {#if growthLog.length > 0}
-          <!-- 変動時だけ表示。3秒後に自動消去。 -->
-          <div class="growth-log">
-            <p class="growth-log-title">📈 Growth Log</p>
-            {#each growthLog as entry (entry.label)}
-              <div class="growth-log-row">
-                <span class="growth-log-name">{entry.label}</span>
-                <span class="growth-log-delta">{entry.amount > 0 ? '+' : ''}{entry.amount}</span>
-              </div>
-            {/each}
-          </div>
-        {/if}
 
         <p class="section-divider">会話メモリ</p>
         <label><span>性格</span><textarea rows="4" value={memory.personality.join('\n')} oninput={(e) => updateMemoryList('personality', e.currentTarget.value)}></textarea></label>
@@ -733,6 +724,28 @@
         </button>
         <p class="inject-note">投入時のみ 性格・口調・好き・嫌い・外見 をコピーします（自動同期なし）。</p>
         {#if updatedAt}<small>UPDATED: {new Date(updatedAt).toLocaleString('ja-JP')}</small>{/if}
+
+        {#if growthHistory.length > 0}
+          <!-- 📈 Growth History: 最新5件のみ（in-memory／永続化なし）。最新を上に表示・スクロール可 -->
+          <section class="growth-history">
+            <p class="growth-history-title">📈 Growth History</p>
+            <div class="growth-history-list">
+              {#each growthHistory as item (item.id)}
+                <div class="growth-history-card">
+                  <div class="ghc-head">
+                    <span class="ghc-time">{item.time}</span>
+                    <span class="ghc-msg">💬 {item.message}</span>
+                  </div>
+                  <div class="ghc-deltas">
+                    {#each item.changes as change (change.label)}
+                      <span class="ghc-delta">{change.icon} {change.label} {change.amount > 0 ? '+' : ''}{change.amount}</span>
+                    {/each}
+                  </div>
+                </div>
+              {/each}
+            </div>
+          </section>
+        {/if}
       </aside>
     {:else}
       <section class="conversation-panel">
@@ -943,8 +956,9 @@
     letter-spacing: .08em;
     text-shadow: 0 0 8px rgba(34,211,238,.4);
   }
-  .growth-row { display: grid; grid-template-columns: 48px 1fr 28px; align-items: center; gap: 8px; margin-top: 8px; }
-  .growth-name { color: #cbd5e1; font-size: 11px; font-weight: 700; }
+  .growth-row { display: grid; grid-template-columns: 76px 1fr 30px; align-items: center; gap: 8px; margin-top: 8px; }
+  .growth-name { display: inline-flex; align-items: center; gap: 4px; color: #cbd5e1; font-size: 11px; font-weight: 700; }
+  .growth-icon { font-size: 12px; line-height: 1; }
   .growth-bar {
     height: 8px;
     border-radius: 999px;
@@ -960,27 +974,44 @@
   }
   .growth-value { color: #a5f3fc; font-size: 11px; font-weight: 800; text-align: right; }
 
-  /* 📈 Growth Log — 変動時だけ表示（3秒で自動消去） */
-  .growth-log {
-    margin-top: 12px;
-    padding: 10px 12px;
-    border: 1px solid rgba(74,222,128,.35);
-    border-radius: 10px;
-    background: rgba(74,222,128,.08);
-    box-shadow: 0 0 12px rgba(74,222,128,.22);
-    animation: growth-log-in .2s ease-out;
+  /* 📈 Growth History — 最新5件（in-memory）。サイバー調・ネオンシアン・カード・スクロール可 */
+  .growth-history {
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(34,211,238,.2);
   }
-  .growth-log-title {
-    margin: 0 0 8px;
-    color: #86efac;
+  .growth-history-title {
+    margin: 0 0 10px;
+    color: #67e8f9;
     font-size: 10px;
     font-weight: 800;
     letter-spacing: .08em;
+    text-shadow: 0 0 8px rgba(34,211,238,.4);
   }
-  .growth-log-row { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; }
-  .growth-log-name { color: #cbd5e1; font-size: 12px; font-weight: 700; }
-  .growth-log-delta { color: #4ade80; font-size: 12px; font-weight: 800; text-shadow: 0 0 8px rgba(74,222,128,.5); }
-  @keyframes growth-log-in {
+  .growth-history-list { display: grid; gap: 8px; max-height: 240px; overflow-y: auto; padding-right: 2px; }
+  .growth-history-card {
+    padding: 9px 11px;
+    border: 1px solid rgba(34,211,238,.28);
+    border-radius: 10px;
+    background: linear-gradient(135deg, rgba(34,211,238,.1), rgba(34,211,238,.03));
+    box-shadow: 0 0 12px rgba(34,211,238,.18), inset 0 0 10px rgba(34,211,238,.05);
+    animation: growth-history-in .2s ease-out;
+  }
+  .ghc-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+  .ghc-time { color: #22d3ee; font-size: 9px; font-weight: 800; letter-spacing: .1em; }
+  .ghc-msg { color: #e2e8f0; font-size: 11px; font-weight: 700; overflow-wrap: anywhere; }
+  .ghc-deltas { display: flex; flex-wrap: wrap; gap: 5px 8px; }
+  .ghc-delta {
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid rgba(74,222,128,.32);
+    background: rgba(74,222,128,.1);
+    color: #86efac;
+    font-size: 11px;
+    font-weight: 800;
+    text-shadow: 0 0 6px rgba(74,222,128,.4);
+  }
+  @keyframes growth-history-in {
     from { opacity: 0; transform: translateY(4px); }
     to { opacity: 1; transform: translateY(0); }
   }

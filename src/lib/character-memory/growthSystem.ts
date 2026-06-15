@@ -20,17 +20,18 @@ export type GrowthKey =
 export interface GrowthParam {
   key: GrowthKey;
   label: string;
+  icon: string;
 }
 
-/** 表示順を兼ねた7項目の定義。 */
+/** 表示順を兼ねた7項目の定義（V3: 育成ゲーム感のため絵文字アイコン付き）。 */
 export const GROWTH_PARAMS: GrowthParam[] = [
-  { key: 'attachment', label: '愛着' },
-  { key: 'analysis', label: '分析' },
-  { key: 'creativity', label: '創造性' },
-  { key: 'activity', label: '活動性' },
-  { key: 'curiosity', label: '好奇心' },
-  { key: 'protection', label: '保護欲' },
-  { key: 'independence', label: '自立性' },
+  { key: 'attachment', label: '愛着', icon: '🩷' },
+  { key: 'analysis', label: '分析', icon: '🧠' },
+  { key: 'creativity', label: '創造性', icon: '🎨' },
+  { key: 'activity', label: '活動性', icon: '⚡' },
+  { key: 'curiosity', label: '好奇心', icon: '🌱' },
+  { key: 'protection', label: '保護欲', icon: '🛡️' },
+  { key: 'independence', label: '自立性', icon: '🪽' },
 ];
 
 export const GROWTH_MIN = 0;
@@ -85,6 +86,7 @@ export function evaluateGrowth(userText: string): GrowthDelta {
 
 export interface GrowthLogEntry {
   label: string;
+  icon: string;
   amount: number;
 }
 
@@ -92,5 +94,22 @@ export interface GrowthLogEntry {
 export function growthLogEntries(delta: GrowthDelta): GrowthLogEntry[] {
   return GROWTH_PARAMS
     .filter((param) => (delta[param.key] ?? 0) !== 0)
-    .map((param) => ({ label: param.label, amount: delta[param.key] as number }));
+    .map((param) => ({ label: param.label, icon: param.icon, amount: delta[param.key] as number }));
+}
+
+/** Growth History（in-memory のみ。永続化しない）の1件。 */
+export interface GrowthHistoryEntry {
+  id: string;
+  time: string;
+  message: string;
+  changes: GrowthLogEntry[];
+}
+
+/** 履歴の最大保持件数（最新5件）。 */
+export const GROWTH_HISTORY_LIMIT = 5;
+
+/** 履歴カードに載せるユーザー発言の短縮表示。 */
+export function growthMessageSnippet(text: string, max = 24): string {
+  const trimmed = text.trim();
+  return trimmed.length > max ? `${trimmed.slice(0, max)}…` : trimmed;
 }
