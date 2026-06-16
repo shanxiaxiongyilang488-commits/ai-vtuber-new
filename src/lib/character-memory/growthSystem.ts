@@ -113,3 +113,68 @@ export function growthMessageSnippet(text: string, max = 24): string {
   const trimmed = text.trim();
   return trimmed.length > max ? `${trimmed.slice(0, max)}…` : trimmed;
 }
+
+/**
+ * V4: Personality Type — 成長値の上位項目から AI の性格タイプを判定する。
+ * 数値は一切変更しない純粋関数（in-memory の表示用のみ）。
+ */
+export interface PersonalityType {
+  id: string;
+  icon: string;
+  name: string;
+  /** 日本語の型名（例: 保護欲・愛着型）。 */
+  subtitle: string;
+  description: string;
+  /** このタイプを構成する成長項目（Guardian のみ複数）。 */
+  keys: GrowthKey[];
+}
+
+/** タイプ定義（配列順はタイブレークの優先度を兼ねる）。 */
+export const PERSONALITY_TYPES: PersonalityType[] = [
+  { id: 'guardian', icon: '🛡️', name: 'Guardian', subtitle: '保護欲・愛着型', description: '相手を守ろうとする傾向が強い。', keys: ['protection', 'attachment'] },
+  { id: 'analyst', icon: '🧠', name: 'Analyst', subtitle: '分析型', description: '物事を論理的に分析する傾向が強い。', keys: ['analysis'] },
+  { id: 'creator', icon: '🎨', name: 'Creator', subtitle: '創造型', description: '新しいものを生み出す創造性が高い。', keys: ['creativity'] },
+  { id: 'explorer', icon: '🌱', name: 'Explorer', subtitle: '好奇心型', description: '未知のものへの好奇心が旺盛。', keys: ['curiosity'] },
+  { id: 'active', icon: '⚡', name: 'Active', subtitle: '活動型', description: '活動的で行動力がある。', keys: ['activity'] },
+  { id: 'independent', icon: '🪽', name: 'Independent', subtitle: '自立型', description: '自分の力で進もうとする自立心が強い。', keys: ['independence'] },
+];
+
+/**
+ * 成長値の「上位3項目」からタイプを判定する。
+ * 上位3内での得票数 → その項目の最高値 → タイプ定義順 でタイブレーク。
+ * Guardian は protection / attachment の2項目ぶん得票しうる。
+ */
+export function determinePersonalityType(values: GrowthValues): PersonalityType {
+  const top3 = GROWTH_PARAMS
+    .map((param, index) => ({ key: param.key, value: values[param.key], index }))
+    .sort((a, b) => b.value - a.value || a.index - b.index)
+    .slice(0, 3)
+    .map((entry) => entry.key);
+
+  const keyToType = new Map<GrowthKey, PersonalityType>();
+  for (const type of PERSONALITY_TYPES) {
+    for (const key of type.keys) keyToType.set(key, type);
+  }
+
+  const scores = new Map<string, { votes: number; best: number }>();
+  for (const key of top3) {
+    const type = keyToType.get(key);
+    if (!type) continue;
+    const current = scores.get(type.id) ?? { votes: 0, best: 0 };
+    current.votes += 1;
+    current.best = Math.max(current.best, values[key]);
+    scores.set(type.id, current);
+  }
+
+  let winner = PERSONALITY_TYPES[0];
+  let winnerScore = scores.get(winner.id) ?? { votes: 0, best: 0 };
+  for (const type of PERSONALITY_TYPES) {
+    const score = scores.get(type.id) ?? { votes: 0, best: 0 };
+    if (score.votes > winnerScore.votes
+      || (score.votes === winnerScore.votes && score.best > winnerScore.best)) {
+      winner = type;
+      winnerScore = score;
+    }
+  }
+  return winner;
+}

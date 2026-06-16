@@ -6,6 +6,7 @@
     GROWTH_HISTORY_LIMIT,
     GROWTH_PARAMS,
     clampGrowth,
+    determinePersonalityType,
     evaluateGrowth,
     growthLogEntries,
     growthMessageSnippet,
@@ -138,6 +139,8 @@
   // 値・履歴は永続化しない（in-memory のみ。character-memory.json には一切書き込まない）。
   let growthValues = $state<GrowthValues>(initialGrowthValues());
   let growthHistory = $state<GrowthHistoryEntry[]>([]);
+  // V4: 成長値から導出する Personality Type（数値は変更しない・表示用のみ）。
+  const personalityType = $derived(determinePersonalityType(growthValues));
 
   // 送信ボタン押下時のみ呼ぶ。ユーザー入力テキストだけを評価して数値を変動させ、履歴へ記録する。
   function applyGrowthFromUserText(userText: string): void {
@@ -711,6 +714,17 @@
           {/each}
         </section>
 
+        <!-- V4: Personality Type（Growthの下に表示。数値変更・Memory保存なし） -->
+        <section class="ai-type">
+          <p class="ai-type-label">AI TYPE</p>
+          <div class="ai-type-main">
+            <span class="ai-type-icon">{personalityType.icon}</span>
+            <span class="ai-type-name">{personalityType.name}</span>
+            <span class="ai-type-sub">{personalityType.subtitle}</span>
+          </div>
+          <p class="ai-type-desc">説明：{personalityType.description}</p>
+        </section>
+
         <p class="section-divider">会話メモリ</p>
         <label><span>性格</span><textarea rows="4" value={memory.personality.join('\n')} oninput={(e) => updateMemoryList('personality', e.currentTarget.value)}></textarea></label>
         <label><span>口調</span><textarea rows="4" value={memory.speechStyle.join('\n')} oninput={(e) => updateMemoryList('speechStyle', e.currentTarget.value)}></textarea></label>
@@ -973,6 +987,22 @@
     box-shadow: 0 0 8px rgba(34,211,238,.5);
   }
   .growth-value { color: #a5f3fc; font-size: 11px; font-weight: 800; text-align: right; }
+
+  /* V4: AI TYPE（Personality Type）カード */
+  .ai-type {
+    margin-top: 12px;
+    padding: 12px;
+    border: 1px solid rgba(168,85,247,.32);
+    border-radius: 10px;
+    background: linear-gradient(135deg, rgba(168,85,247,.12), rgba(34,211,238,.05));
+    box-shadow: 0 0 14px rgba(168,85,247,.22), inset 0 0 12px rgba(168,85,247,.06);
+  }
+  .ai-type-label { margin: 0 0 8px; color: #c4b5fd; font-size: 8px; font-weight: 800; letter-spacing: .18em; }
+  .ai-type-main { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .ai-type-icon { font-size: 20px; line-height: 1; }
+  .ai-type-name { color: #f8fafc; font-size: 18px; font-weight: 800; letter-spacing: .02em; text-shadow: 0 0 10px rgba(168,85,247,.5); }
+  .ai-type-sub { color: #a5f3fc; font-size: 10px; font-weight: 700; }
+  .ai-type-desc { margin: 8px 0 0; color: #cbd5e1; font-size: 11px; line-height: 1.6; }
 
   /* 📈 Growth History — 最新5件（in-memory）。サイバー調・ネオンシアン・カード・スクロール可 */
   .growth-history {
