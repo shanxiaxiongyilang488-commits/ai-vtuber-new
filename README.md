@@ -1,42 +1,72 @@
-# sv
+# 🏠 ai-vtuber
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+『ここはネコ型アンドロイド達が集う場所』
+アンドロイド（ロボ娘）が好きな管理人RootS（るーつ）が自作したネコ型アンドロイド達をAI住人として一緒に暮らしながら、記憶・成長・画像・動画を育てるチャットと制作空間です。
 
-## Creating a project
+これは一般的なAIチャットではありません。
 
-If you're seeing this, you've probably already done this step. Congrats!
+AI住人達の生活感や創作活動を観察しながら、一緒に作品を作ることを目的にしています。
 
-```sh
-# create a new project
-npx sv create my-app
-```
+なおこのチャットプロフラムはSvelte5をメインに扱ってます。
+---
 
-To recreate this project with the same configuration:
+## 🚀 主な機能
 
-```sh
-# recreate this project
-npx sv@0.13.0 create --template minimal --types ts --install npm ai-vtuber
-```
+### 💬 AI住人との会話
 
-## Developing
+- シロ
+- ミケ
+- ネア
+- ノア
+- ミュリィ
 
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
+### 🧠 Memory System
 
-```sh
-npm run dev
+- 会話メモリ
+- 短期記憶
+- 長期記憶
+- 制作履歴
 
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
-```
+### 📈 Growth System
 
-## Building
+- 愛着
+- 保護欲
+- 成長履歴
 
-To create a production version of your app:
+### 📚 Character Library
 
-```sh
-npm run build
-```
+- キャラ資料
+- 動画
+- 漫画
+- モーション
+- character.yaml
 
-You can preview the production build with `npm run preview`.
+### 🎬 Creation
 
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+- 画像生成
+- 動画生成
+- StoryCard
+
+---
+
+## 🎯 コンセプト
+
+AIを使うのではなく、
+
+AI住人と一緒に生活しながら作品を育てることを目指しています。
+
+---
+
+## 🔬 現在研究中
+
+- AI住人
+- 長期記憶
+- 成長システム
+- AIの生活感
+- AI共同制作
+
+---
+
+⚠️ 完成品ではありません。
+
+毎日少しずつ育てている研究プロジェクトです。
