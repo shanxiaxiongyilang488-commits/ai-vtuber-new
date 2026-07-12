@@ -9,7 +9,10 @@
 		"preview": "vite preview",
 		"prepare": "svelte-kit sync || echo ''",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch"
+		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+		"lint": "svelte-check --tsconfig ./tsconfig.json",
+		"test:aituber": "node --experimental-strip-types --test src/lib/aituber/aituber.test.ts",
+		"test:purupuru": "node --experimental-strip-types --test src/lib/purupuru/purupuru.test.ts"
 	},
 	"devDependencies": {
 		"@sveltejs/adapter-auto": "^7.0.0",
@@ -27,7 +30,7 @@
 		"@pixiv/three-vrm": "^3.5.1",
 		"jszip": "^3.10.1",
 		"marked": "^18.0.2",
-		"openai": "^6.42.0",
+		"openai": "^6.46.0",
 		"three": "^0.183.2"
 	}
 }
