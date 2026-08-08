@@ -1,0 +1,10 @@
+{
+  "input": {
+    "task": "reflection.generate",
+    "systemPrompt": "You are a friendly Japanese character. Return only the final reply.",
+    "userMessage": "今日の予定を一緒に考えて",
+    "conversationHistory": [],
+    "maxTokens": 512,
+    "temperature": 0.75
+  }
+}
