@@ -1,0 +1,77 @@
+name: Build RunPod workers
+
+on:
+  workflow_dispatch:
+    inputs:
+      worker:
+        description: Worker image to build
+        required: true
+        default: reflection
+        type: choice
+        options:
+          - all
+          - voice
+          - video
+          - reflection
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.worker }} worker
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        worker:
+          - voice
+          - video
+          - reflection
+    steps:
+      - name: Check selection
+        id: selection
+        shell: bash
+        run: |
+          if [[ "${{ inputs.worker }}" == "all" || "${{ inputs.worker }}" == "both" || "${{ inputs.worker }}" == "${{ matrix.worker }}" ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out repository
+        if: steps.selection.outputs.enabled == 'true'
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        if: steps.selection.outputs.enabled == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        if: steps.selection.outputs.enabled == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare image name
+        if: steps.selection.outputs.enabled == 'true'
+        id: image
+        shell: bash
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/ai-vtuber-runpod-${{ matrix.worker }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        if: steps.selection.outputs.enabled == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: runpod/${{ matrix.worker }}
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.image.outputs.name }}:latest
+            ${{ steps.image.outputs.name }}:${{ github.sha }}
+          cache-from: type=gha,scope=runpod-${{ matrix.worker }}
+          cache-to: type=gha,mode=max,scope=runpod-${{ matrix.worker }}
+          provenance: false
