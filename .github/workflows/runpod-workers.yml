@@ -6,13 +6,10 @@ on:
       worker:
         description: Worker image to build
         required: true
-        default: reflection
+        default: voice
         type: choice
         options:
-          - all
           - voice
-          - video
-          - reflection
 
 permissions:
   contents: read
@@ -27,14 +24,12 @@ jobs:
       matrix:
         worker:
           - voice
-          - video
-          - reflection
     steps:
       - name: Check selection
         id: selection
         shell: bash
         run: |
-          if [[ "${{ inputs.worker }}" == "all" || "${{ inputs.worker }}" == "both" || "${{ inputs.worker }}" == "${{ matrix.worker }}" ]]; then
+          if [[ "${{ inputs.worker }}" == "${{ matrix.worker }}" ]]; then
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           else
             echo "enabled=false" >> "$GITHUB_OUTPUT"
