@@ -23,6 +23,20 @@ class VoiceWorkerValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unsupported task"):
             MODULE.handler({"input": {"task": "unknown"}})
 
+    def test_accepts_full_and_quantized_hugging_face_model_ids(self):
+        self.assertEqual(
+            MODULE._normalize_model_id("Aratako/Irodori-TTS-v4-Small"),
+            "Aratako/Irodori-TTS-v4-Small",
+        )
+        self.assertEqual(
+            MODULE._normalize_model_id("Aratako/Irodori-TTS-v4-Small-Quantized/int8-weight-only"),
+            "Aratako/Irodori-TTS-v4-Small-Quantized/int8-weight-only",
+        )
+
+    def test_rejects_unsafe_model_id(self):
+        with self.assertRaisesRegex(ValueError, "modelCheckpoint"):
+            MODULE._normalize_model_id("../../bad model")
+
 
 if __name__ == "__main__":
     unittest.main()

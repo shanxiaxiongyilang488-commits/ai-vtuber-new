@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import base64
+import gc
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -15,14 +17,16 @@ IRODORI_ROOT = Path(os.getenv("IRODORI_ROOT", "/opt/Irodori-TTS")).resolve()
 CHECKPOINT_ENV = os.getenv("IRODORI_CHECKPOINT", "").strip()
 HF_CHECKPOINT = os.getenv(
     "IRODORI_HF_CHECKPOINT",
-    "Aratako/Irodori-TTS-v4-Small-Quantized/int8-weight-only",
+    "Aratako/Irodori-TTS-v4-Small",
 ).strip()
 CODEC_REPO = os.getenv("IRODORI_CODEC_REPO", "Aratako/Semantic-DACVAE-Japanese-32dim")
 MAX_TEXT_CHARS = int(os.getenv("MAX_TEXT_CHARS", "1000"))
 MAX_REFERENCE_BYTES = 12 * 1024 * 1024
 
 _runtime: Any = None
+_runtime_model_id = ""
 _runtime_lock = threading.Lock()
+_synthesis_lock = threading.Lock()
 
 
 def _irodori_api() -> tuple[Any, Any, Any, Any, Any]:
@@ -39,41 +43,69 @@ def _irodori_api() -> tuple[Any, Any, Any, Any, Any]:
     return InferenceRuntime, RuntimeKey, SamplingRequest, download_hf_checkpoint, save_wav
 
 
-def _checkpoint_path(download_hf_checkpoint: Any) -> str:
+def _normalize_model_id(value: Any) -> str:
+    model_id = str(value or "").strip() or HF_CHECKPOINT
+    if len(model_id) > 200 or not re.fullmatch(
+        r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)?",
+        model_id,
+    ):
+        raise ValueError("modelCheckpoint must use org/repo or org/repo/subfolder format.")
+    return model_id
+
+
+def _checkpoint_path(download_hf_checkpoint: Any, model_id: str) -> str:
     if CHECKPOINT_ENV:
         checkpoint = Path(CHECKPOINT_ENV).expanduser()
         if checkpoint.is_file():
             return str(checkpoint.resolve())
         raise FileNotFoundError(f"IRODORI_CHECKPOINT not found: {checkpoint}")
-    if not HF_CHECKPOINT:
+    if not model_id:
         raise RuntimeError("Set IRODORI_CHECKPOINT or IRODORI_HF_CHECKPOINT.")
-    return str(download_hf_checkpoint(HF_CHECKPOINT))
+    return str(download_hf_checkpoint(model_id))
 
 
-def get_runtime() -> Any:
-    global _runtime
-    if _runtime is not None:
+def get_runtime(model_checkpoint: Any = "") -> Any:
+    global _runtime, _runtime_model_id
+    model_id = _normalize_model_id(model_checkpoint)
+    runtime_id = f"local:{CHECKPOINT_ENV}" if CHECKPOINT_ENV else f"hf:{model_id}"
+    if _runtime is not None and _runtime_model_id == runtime_id:
         return _runtime
     with _runtime_lock:
-        if _runtime is not None:
+        if _runtime is not None and _runtime_model_id == runtime_id:
             return _runtime
         InferenceRuntime, RuntimeKey, _, download_hf_checkpoint, _ = _irodori_api()
-        checkpoint = _checkpoint_path(download_hf_checkpoint)
-        quantized = "quantized" in checkpoint.lower() or "int8" in checkpoint.lower()
+        if _runtime is not None:
+            _runtime = None
+            _runtime_model_id = ""
+            gc.collect()
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+        checkpoint = _checkpoint_path(download_hf_checkpoint, model_id)
+        model_precision = os.getenv("IRODORI_MODEL_PRECISION", "bf16").strip().lower()
+        codec_precision = os.getenv("IRODORI_CODEC_PRECISION", "fp32").strip().lower()
+        if model_precision not in {"bf16", "fp32"}:
+            raise ValueError("IRODORI_MODEL_PRECISION must be bf16 or fp32.")
+        if codec_precision not in {"bf16", "fp32"}:
+            raise ValueError("IRODORI_CODEC_PRECISION must be bf16 or fp32.")
         _runtime = InferenceRuntime.from_key(
             RuntimeKey(
                 checkpoint=checkpoint,
                 model_device="cuda",
                 codec_repo=CODEC_REPO,
-                model_precision="bf16" if quantized else "fp32",
+                model_precision=model_precision,
                 codec_device="cuda",
-                codec_precision="fp32",
+                codec_precision=codec_precision,
                 codec_deterministic_encode=True,
                 codec_deterministic_decode=True,
                 compile_model=False,
                 compile_dynamic=False,
             )
         )
+        _runtime_model_id = runtime_id
         return _runtime
 
 
@@ -117,8 +149,9 @@ def synthesize(data: dict[str, Any]) -> dict[str, Any]:
     if not 0.5 <= speed <= 2.0:
         raise ValueError("voice.speed must be between 0.5 and 2.0.")
     reference = _decode_reference(data.get("referenceAudioBase64")) if mode == "clone" else None
+    delivery_override = data.get("deliveryOverride") is True and mode == "clone"
 
-    runtime = get_runtime()
+    runtime = get_runtime(data.get("modelCheckpoint"))
     _, _, SamplingRequest, _, save_wav = _irodori_api()
     reference_path = ""
     output_path = ""
@@ -143,8 +176,14 @@ def synthesize(data: dict[str, Any]) -> dict[str, Any]:
                 max_seconds=30.0,
                 num_steps=int(os.getenv("IRODORI_NUM_STEPS", "40")),
                 cfg_scale_text=3.0,
-                cfg_scale_caption=4.0 if situation else 3.0,
-                cfg_scale_speaker=5.0,
+                # Match Irodori's official VoiceDesign app. With no reference
+                # speaker, speaker CFG must be disabled; guiding a nonexistent
+                # speaker embedding produces groans, screams, and long gaps.
+                # A conversational style request keeps the saved speaker but
+                # needs enough caption guidance to be audible. The conservative
+                # 4.0/4.5 balance changes delivery without redesigning identity.
+                cfg_scale_caption=4.0 if mode == "design" or situation or delivery_override else 3.0,
+                cfg_scale_speaker=0.0 if mode == "design" else 4.5 if delivery_override else 5.0,
                 seed=int(data["seed"]) if data.get("seed") is not None else None,
                 trim_tail=True,
             )
@@ -180,15 +219,18 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("job.input must be an object.")
     task = data.get("task")
     if task == "voice.warmup":
-        runtime = get_runtime()
-        return {
-            "ready": True,
-            "engine": "irodori-v4",
-            "device": str(runtime.model_device),
-            "sessionId": data.get("sessionId"),
-        }
+        with _synthesis_lock:
+            runtime = get_runtime(data.get("modelCheckpoint"))
+            return {
+                "ready": True,
+                "engine": "irodori-v4",
+                "model": _runtime_model_id,
+                "device": str(runtime.model_device),
+                "sessionId": data.get("sessionId"),
+            }
     if task == "voice.speak":
-        return synthesize(data)
+        with _synthesis_lock:
+            return synthesize(data)
     raise ValueError(f"Unsupported task: {task!r}")
 
 

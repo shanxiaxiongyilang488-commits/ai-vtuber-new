@@ -30,7 +30,9 @@ ENV PYTHONUNBUFFERED=1 \
     HF_HOME=/runpod-volume/huggingface \
     HUGGINGFACE_HUB_CACHE=/runpod-volume/huggingface/hub \
     TORCH_HOME=/runpod-volume/torch \
-    IRODORI_HF_CHECKPOINT=Aratako/Irodori-TTS-v4-Small-Quantized/int8-weight-only \
+    IRODORI_HF_CHECKPOINT=Aratako/Irodori-TTS-v4-Small \
+    IRODORI_MODEL_PRECISION=bf16 \
+    IRODORI_CODEC_PRECISION=fp32 \
     PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:128
 
 CMD ["/opt/Irodori-TTS/.venv/bin/python", "-u", "handler.py"]
