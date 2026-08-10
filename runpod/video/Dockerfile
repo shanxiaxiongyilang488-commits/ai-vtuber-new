@@ -4,7 +4,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 ARG COMFYUI_REF=57500fc
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git ffmpeg libgl1 libglib2.0-0 ca-certificates \
+    git ffmpeg libgl1 libglib2.0-0 ca-certificates build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # MiniMax H3 support was merged into ComfyUI core on 2026-08-03. Models are
@@ -21,6 +21,7 @@ WORKDIR /worker
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONUTF8=1 \
+    CC=/usr/bin/gcc \
     COMFYUI_ROOT=/opt/ComfyUI \
     H3_MODEL_ROOT=/runpod-volume/comfyui-models \
     HF_HOME=/runpod-volume/huggingface \
