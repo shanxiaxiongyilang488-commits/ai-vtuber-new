@@ -15,11 +15,11 @@ RUN git clone https://github.com/Aratako/Irodori-TTS.git /opt/Irodori-TTS \
 # Irodori-TTS declares Git and CUDA package sources in [tool.uv.sources].
 # A plain `pip install -e .` ignores those sources (notably dacvae).
 RUN cd /opt/Irodori-TTS \
-    && uv sync --extra cu128 \
+    && uv sync --no-dev --extra cu128 \
     && uv pip install \
        --python /opt/Irodori-TTS/.venv/bin/python \
        "runpod>=1.7,<2" \
-    && rm -rf /root/.cache/uv
+    && rm -rf /root/.cache/uv /opt/Irodori-TTS/.git
 
 COPY handler.py /worker/handler.py
 WORKDIR /worker
@@ -27,10 +27,14 @@ WORKDIR /worker
 ENV PYTHONUNBUFFERED=1 \
     PYTHONUTF8=1 \
     IRODORI_ROOT=/opt/Irodori-TTS \
-    HF_HOME=/runpod-volume/huggingface \
-    HUGGINGFACE_HUB_CACHE=/runpod-volume/huggingface/hub \
+    HF_HOME=/runpod-volume/huggingface-cache \
+    HUGGINGFACE_HUB_CACHE=/runpod-volume/huggingface-cache/hub \
     TORCH_HOME=/runpod-volume/torch \
-    IRODORI_HF_CHECKPOINT=Aratako/Irodori-TTS-v4-Small-Quantized/int8-weight-only \
+    IRODORI_HF_CHECKPOINT=Aratako/Irodori-TTS-v4-Small \
+    IRODORI_MODEL_PRECISION=bf16 \
+    IRODORI_CODEC_PRECISION=fp32 \
+    RUNPOD_INIT_TIMEOUT=800 \
+    HF_HUB_DISABLE_TELEMETRY=1 \
     PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:128
 
 CMD ["/opt/Irodori-TTS/.venv/bin/python", "-u", "handler.py"]
