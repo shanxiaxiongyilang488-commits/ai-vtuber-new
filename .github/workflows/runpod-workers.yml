@@ -10,6 +10,7 @@ on:
         type: choice
         options:
           - voice
+          - video
 
 permissions:
   contents: read
@@ -24,6 +25,7 @@ jobs:
       matrix:
         worker:
           - voice
+          - video
     steps:
       - name: Check selection
         id: selection

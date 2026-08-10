@@ -1,7 +1,7 @@
 {
   "input": {
     "task": "video.generate",
-    "model": "hunyuan-video-1.5",
+    "model": "MiniMax-H3",
     "prompt": "A friendly cat android girl waves in a clean futuristic laboratory, fixed camera.",
     "duration": 5,
     "mode": "t2v"

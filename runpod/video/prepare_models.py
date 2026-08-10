@@ -1,62 +1,48 @@
-"""Prepare HunyuanVideo-1.5 checkpoints on a mounted RunPod Network Volume."""
+"""Download the official ComfyUI MiniMax H3 model set to a Network Volume."""
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
 
 
-MODEL_PATH = Path(os.getenv("HUNYUAN_MODEL_PATH", "/runpod-volume/models/HunyuanVideo-1.5"))
+MODEL_REPO = "Comfy-Org/MiniMax-H3"
+COMMON_FILES = (
+    "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+    "vae/minimax_h3_video_vae_fp16.safetensors",
+    "vae/minimax_h3_audio_vae_fp32.safetensors",
+)
+MODE_FILES = {
+    "fl2va": "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+    "ref2va": "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+}
 
 
-def prepare_models(include_i2v: bool = True) -> dict[str, Any]:
-    from huggingface_hub import snapshot_download
+def prepare_models(include_ref2va: bool = True) -> dict[str, object]:
+    from huggingface_hub import hf_hub_download
 
-    token = os.getenv("HF_TOKEN") or None
-    MODEL_PATH.mkdir(parents=True, exist_ok=True)
-    transformer_patterns = [
-        "*.json",
-        "vae/**",
-        "scheduler/**",
-        "transformer/480p_t2v/**",
-    ]
-    if include_i2v:
-        transformer_patterns.append("transformer/480p_i2v_step_distilled/**")
-    snapshot_download(
-        "tencent/HunyuanVideo-1.5",
-        local_dir=MODEL_PATH,
-        allow_patterns=transformer_patterns,
-        token=token,
-    )
-    snapshot_download(
-        "Qwen/Qwen2.5-VL-7B-Instruct",
-        local_dir=MODEL_PATH / "text_encoder" / "llm",
-        token=token,
-    )
-    snapshot_download(
-        "google/byt5-small",
-        local_dir=MODEL_PATH / "text_encoder" / "byt5-small",
-        token=token,
-    )
-    from modelscope.hub.snapshot_download import snapshot_download as modelscope_download
-
-    modelscope_download(
-        "AI-ModelScope/Glyph-SDXL-v2",
-        local_dir=str(MODEL_PATH / "text_encoder" / "Glyph-SDXL-v2"),
-    )
-    if include_i2v:
-        if not token:
-            raise RuntimeError(
-                "HF_TOKEN is required for the gated black-forest-labs/FLUX.1-Redux-dev vision encoder."
-            )
-        snapshot_download(
-            "black-forest-labs/FLUX.1-Redux-dev",
-            local_dir=MODEL_PATH / "vision_encoder" / "siglip",
-            token=token,
+    root = Path(os.getenv("H3_MODEL_ROOT", "/runpod-volume/comfyui-models")).resolve()
+    files = [*COMMON_FILES, MODE_FILES["fl2va"]]
+    if include_ref2va:
+        files.append(MODE_FILES["ref2va"])
+    downloaded: list[str] = []
+    for relative in files:
+        destination = root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.is_file() and destination.stat().st_size > 0:
+            downloaded.append(str(destination))
+            continue
+        cached = hf_hub_download(
+            repo_id=MODEL_REPO,
+            filename=relative,
+            local_dir=root,
+            token=os.getenv("HF_TOKEN") or None,
         )
-    return {"prepared": True, "path": str(MODEL_PATH), "includeI2v": include_i2v}
-
-
-if __name__ == "__main__":
-    print(prepare_models(include_i2v=os.getenv("INCLUDE_I2V", "1") == "1"))
+        downloaded.append(str(Path(cached)))
+    return {
+        "ready": True,
+        "model": "MiniMax-H3",
+        "root": str(root),
+        "files": downloaded,
+        "referenceMode": include_ref2va,
+    }
