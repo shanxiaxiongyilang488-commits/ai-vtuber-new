@@ -53,6 +53,40 @@ def _normalize_model_id(value: Any) -> str:
     return model_id
 
 
+def _cached_checkpoint_path(model_id: str, cache_root: Any = None) -> str:
+    """Resolve a RunPod/Hugging Face cached checkpoint without network I/O."""
+    parts = model_id.split("/")
+    repo_id = "/".join(parts[:2])
+    subfolder = parts[2] if len(parts) > 2 else ""
+    root = Path(
+        cache_root
+        or os.getenv("HUGGINGFACE_HUB_CACHE", "").strip()
+        or Path(os.getenv("HF_HOME", str(Path.home() / ".cache" / "huggingface"))) / "hub"
+    )
+    repo_root = root / f"models--{repo_id.replace('/', '--')}"
+    relative = Path(subfolder) / "model.safetensors" if subfolder else Path("model.safetensors")
+
+    candidates: list[Path] = []
+    main_ref = repo_root / "refs" / "main"
+    if main_ref.is_file():
+        revision = main_ref.read_text(encoding="utf-8").strip()
+        if revision:
+            candidates.append(repo_root / "snapshots" / revision / relative)
+    snapshots = repo_root / "snapshots"
+    if snapshots.is_dir():
+        candidates.extend(
+            sorted(
+                snapshots.glob(f"*/{relative.as_posix()}"),
+                key=lambda path: path.stat().st_mtime,
+                reverse=True,
+            )
+        )
+    for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate.resolve())
+    return ""
+
+
 def _checkpoint_path(download_hf_checkpoint: Any, model_id: str) -> str:
     if CHECKPOINT_ENV:
         checkpoint = Path(CHECKPOINT_ENV).expanduser()
@@ -61,6 +95,10 @@ def _checkpoint_path(download_hf_checkpoint: Any, model_id: str) -> str:
         raise FileNotFoundError(f"IRODORI_CHECKPOINT not found: {checkpoint}")
     if not model_id:
         raise RuntimeError("Set IRODORI_CHECKPOINT or IRODORI_HF_CHECKPOINT.")
+    cached = _cached_checkpoint_path(model_id)
+    if cached:
+        print(f"Using cached Irodori checkpoint: {cached}", flush=True)
+        return cached
     return str(download_hf_checkpoint(model_id))
 
 

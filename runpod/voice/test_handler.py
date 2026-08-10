@@ -1,5 +1,6 @@
 import base64
 import importlib.util
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -36,6 +37,41 @@ class VoiceWorkerValidationTests(unittest.TestCase):
     def test_rejects_unsafe_model_id(self):
         with self.assertRaisesRegex(ValueError, "modelCheckpoint"):
             MODULE._normalize_model_id("../../bad model")
+
+    def test_resolves_runpod_cached_model_without_network(self):
+        with tempfile.TemporaryDirectory() as cache:
+            revision = "abc123"
+            repo = Path(cache) / "models--Aratako--Irodori-TTS-v4-Small"
+            checkpoint = repo / "snapshots" / revision / "model.safetensors"
+            checkpoint.parent.mkdir(parents=True)
+            checkpoint.write_bytes(b"model")
+            (repo / "refs").mkdir()
+            (repo / "refs" / "main").write_text(revision, encoding="utf-8")
+
+            self.assertEqual(
+                MODULE._cached_checkpoint_path("Aratako/Irodori-TTS-v4-Small", cache),
+                str(checkpoint.resolve()),
+            )
+
+    def test_resolves_cached_quantized_subfolder(self):
+        with tempfile.TemporaryDirectory() as cache:
+            checkpoint = (
+                Path(cache)
+                / "models--Aratako--Irodori-TTS-v4-Small-Quantized"
+                / "snapshots"
+                / "def456"
+                / "int8-weight-only"
+                / "model.safetensors"
+            )
+            checkpoint.parent.mkdir(parents=True)
+            checkpoint.write_bytes(b"model")
+            self.assertEqual(
+                MODULE._cached_checkpoint_path(
+                    "Aratako/Irodori-TTS-v4-Small-Quantized/int8-weight-only",
+                    cache,
+                ),
+                str(checkpoint.resolve()),
+            )
 
 
 if __name__ == "__main__":
