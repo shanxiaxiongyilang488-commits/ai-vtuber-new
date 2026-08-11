@@ -8,6 +8,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { createDefaultCharacterVoice } from './characterVoiceDefaults';
 
 export interface CharacterProfile {
   id: string;
@@ -15,7 +16,41 @@ export interface CharacterProfile {
   role: string;
   description: string;
   image: string;
+  selfImages?: CharacterSelfImage[];
   characterBible?: CharacterBible;
+  voice?: CharacterVoiceConfig;
+  skillIds?: string[];
+  avatarType?: 'purupuru';
+  avatarSrc?: string;
+}
+
+/**
+ * 音声合成設定。profile.json に手動で追記する。
+ * engine "piper" → Piper Bridge (python/piper_bridge)、それ以外 → Voice Bridge (python/voice_bridge)。
+ */
+export interface CharacterVoiceConfig {
+  engine: string;
+  mode: 'lora' | 'clone' | 'design' | 'piper';
+  model: string;
+  caption?: string;
+  speed?: number;
+  /** Optional post-generation pitch shift for an ephemeral request. */
+  pitchShiftSemitones?: number;
+  /** piper用の言語コード。多言語モデルは "ja-en-zh-es-fr-pt" を指定 (既定 "ja")。 */
+  language?: string;
+  /** piper用: 声の揺らぎ (0-1, 既定0.667)。下げるとノイズ・ブレス感が減りクリーンになる。 */
+  noiseScale?: number;
+  /** piper用: 発音の揺らぎ (0-1, 既定0.8)。 */
+  noiseW?: number;
+  autoSpeak?: boolean;
+}
+
+export interface CharacterSelfImage {
+  id: string;
+  createdAt: string;
+  provider: string;
+  prompt: string;
+  imageUrl: string;
 }
 
 export interface CharacterBible {
@@ -55,6 +90,8 @@ export interface UpdateCharacterInput {
   role?: string;
   description?: string;
   characterBible?: CharacterBible;
+  avatarType?: 'purupuru';
+  avatarSrc?: string;
 }
 
 export interface CharacterChatMessage {
@@ -214,6 +251,29 @@ function pngBufferToDataUrl(buffer: Buffer): string {
   return `data:image/png;base64,${buffer.toString('base64')}`;
 }
 
+function normalizeSelfImages(value: unknown): CharacterSelfImage[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry): CharacterSelfImage[] => {
+    if (!entry || typeof entry !== 'object') return [];
+    const image = entry as Partial<CharacterSelfImage>;
+    if (
+      typeof image.id !== 'string'
+      || typeof image.createdAt !== 'string'
+      || typeof image.provider !== 'string'
+      || typeof image.prompt !== 'string'
+      || typeof image.imageUrl !== 'string'
+      || !image.imageUrl
+    ) return [];
+    return [{
+      id: image.id,
+      createdAt: image.createdAt,
+      provider: image.provider,
+      prompt: image.prompt,
+      imageUrl: image.imageUrl,
+    }];
+  });
+}
+
 function yamlValue(value: string): string {
   return JSON.stringify(value);
 }
@@ -308,7 +368,16 @@ function readProfile(id: string): CharacterProfile | null {
     image: existsSync(imagePath(normalizedId, REFERENCE_FILE))
       ? referenceAssetPath(normalizedId)
       : String(parsed.image ?? ''),
+    selfImages: normalizeSelfImages(parsed.selfImages),
     ...(characterBible ? { characterBible } : {}),
+    // readProfile は既知フィールドのみ再構築して書き戻すため、voice を明示的に通す
+    // (通さないと updateCharacter 等の再保存時に profile.json から消える)。
+    ...(parsed.voice && typeof parsed.voice === 'object' ? { voice: parsed.voice } : {}),
+    ...(Array.isArray(parsed.skillIds)
+      ? { skillIds: [...new Set(parsed.skillIds.filter((value): value is string => typeof value === 'string').map((value) => value.trim()).filter(Boolean))] }
+      : {}),
+    ...(parsed.avatarType === 'purupuru' ? { avatarType: 'purupuru' as const } : {}),
+    ...(typeof parsed.avatarSrc === 'string' && parsed.avatarSrc.trim() ? { avatarSrc: parsed.avatarSrc.trim() } : {}),
   };
 }
 
@@ -336,6 +405,7 @@ export function registerCharacter(input: RegisterCharacterInput): CharacterRegis
     role: input.role?.trim() ?? '',
     description: input.description?.trim() ?? '',
     image: input.referenceImageDataUrl ? referenceAssetPath(id) : '',
+    voice: createDefaultCharacterVoice(id),
   };
 
   writeFileSync(profilePath(id), JSON.stringify(profile, null, 2), 'utf-8');
@@ -346,18 +416,62 @@ export function registerCharacter(input: RegisterCharacterInput): CharacterRegis
 }
 
 export function saveCharacterReferenceImage(id: string, imageDataUrl: string): CharacterRegistryEntry {
-  const character = getCharacter(id);
-  if (!character) throw new Error('character not found');
-  writeFileSync(imagePath(character.id, REFERENCE_FILE), dataUrlToBuffer(imageDataUrl));
+  const profile = readProfile(id);
+  if (!profile) throw new Error('character not found');
+  writeFileSync(imagePath(profile.id, REFERENCE_FILE), dataUrlToBuffer(imageDataUrl));
   const next: CharacterProfile = {
-    id: character.id,
-    name: character.name,
-    role: character.role,
-    description: character.description,
-    image: referenceAssetPath(character.id),
+    ...profile,
+    image: referenceAssetPath(profile.id),
   };
-  writeFileSync(profilePath(character.id), JSON.stringify(next, null, 2), 'utf-8');
-  rmSync(characterYamlPath(character.id), { force: true });
+  delete next.characterBible;
+  writeFileSync(profilePath(profile.id), JSON.stringify(next, null, 2), 'utf-8');
+  rmSync(characterYamlPath(profile.id), { force: true });
+  return toEntry(next);
+}
+
+export function saveCharacterSelfImage(
+  id: string,
+  input: Omit<CharacterSelfImage, 'id' | 'createdAt'> & Partial<Pick<CharacterSelfImage, 'id' | 'createdAt'>>,
+): CharacterSelfImage[] {
+  const profile = readProfile(id);
+  if (!profile) throw new Error('character not found');
+  const imageUrl = input.imageUrl.trim();
+  if (!/^(?:data:image\/|https?:\/\/)/.test(imageUrl)) throw new Error('imageUrl is invalid');
+  const item: CharacterSelfImage = {
+    id: input.id?.trim() || `self-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    createdAt: input.createdAt?.trim() || new Date().toISOString(),
+    provider: input.provider.trim(),
+    prompt: input.prompt.trim(),
+    imageUrl,
+  };
+  const next: CharacterProfile = {
+    ...profile,
+    selfImages: [item, ...normalizeSelfImages(profile.selfImages)].slice(0, 60),
+  };
+  const profileMetadata = { ...next };
+  delete profileMetadata.characterBible;
+  writeFileSync(profilePath(profile.id), JSON.stringify(profileMetadata, null, 2), 'utf-8');
+  return next.selfImages ?? [];
+}
+
+export function getCharacterSelfImages(id: string): CharacterSelfImage[] {
+  const profile = readProfile(id);
+  if (!profile) throw new Error('character not found');
+  return normalizeSelfImages(profile.selfImages);
+}
+
+export function updateCharacterVoice(id: string, voice: CharacterVoiceConfig | null): CharacterRegistryEntry {
+  const profile = readProfile(id);
+  if (!profile) throw new Error('character not found');
+  const next: CharacterProfile = { ...profile };
+  if (voice) {
+    next.voice = voice;
+  } else {
+    delete next.voice;
+  }
+  const profileMetadata = { ...next };
+  delete profileMetadata.characterBible;
+  writeFileSync(profilePath(profile.id), JSON.stringify(profileMetadata, null, 2), 'utf-8');
   return toEntry(next);
 }
 
@@ -369,39 +483,28 @@ export function updateCharacter(id: string, input: UpdateCharacterInput): Charac
     ...(typeof input.name === 'string' ? { name: input.name.trim() || profile.name } : {}),
     ...(typeof input.role === 'string' ? { role: input.role.trim() } : {}),
     ...(typeof input.description === 'string' ? { description: input.description.trim() } : {}),
+    ...(input.avatarType === 'purupuru' ? { avatarType: input.avatarType } : {}),
+    ...(typeof input.avatarSrc === 'string' ? { avatarSrc: input.avatarSrc.trim() } : {}),
   };
   delete next.characterBible;
   if (input.characterBible) {
-    const sourceReference = imagePath(profile.id, REFERENCE_FILE);
-    for (const visual of input.characterBible.characters) {
-      const targetId = normalizeId(visual.id);
-      assertValidId(targetId);
-      const targetDir = characterDir(targetId);
-      mkdirSync(targetDir, { recursive: true });
-      const targetReference = imagePath(targetId, REFERENCE_FILE);
-      if (existsSync(sourceReference) && !existsSync(targetReference)) {
-        copyFileSync(sourceReference, targetReference);
-      }
-      const targetProfile: CharacterProfile = {
-        id: targetId,
-        name: targetId === profile.id ? next.name : visual.id,
-        role: targetId === profile.id ? next.role : '',
-        description: targetId === profile.id ? next.description : '',
-        image: existsSync(targetReference) ? referenceAssetPath(targetId) : '',
-      };
-      writeFileSync(profilePath(targetId), JSON.stringify(targetProfile, null, 2), 'utf-8');
+    // YAML生成は常に対象キャラの「既存 id」に束縛する。
+    // Vision/YAML 内の id（例: character_01, N-01）で新規キャラカードを作らない。
+    const visuals = input.characterBible.characters;
+    const matched = visuals.find((visual) => normalizeId(visual.id) === profile.id) ?? visuals[0];
+    if (matched) {
+      const targetVisual: CharacterBibleCharacter = { ...matched, id: profile.id };
+      // 対象キャラの YAML だけを更新する（他の id へは一切書き込まない）。
       writeFileSync(
-        characterYamlPath(targetId),
-        characterBibleToYaml({ unitId: input.characterBible.unitId, characters: [visual] }),
+        characterYamlPath(profile.id),
+        characterBibleToYaml({ unitId: input.characterBible.unitId, characters: [targetVisual] }),
         'utf-8',
       );
+      next.characterBible = {
+        unitId: input.characterBible.unitId,
+        characters: [targetVisual],
+      };
     }
-    next.characterBible = {
-      unitId: input.characterBible.unitId,
-      characters: input.characterBible.characters.filter(
-        (visual) => normalizeId(visual.id) === profile.id,
-      ),
-    };
   }
   const profileMetadata = { ...next };
   delete profileMetadata.characterBible;

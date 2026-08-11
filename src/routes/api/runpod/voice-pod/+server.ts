@@ -2,6 +2,7 @@ import { json } from '@sveltejs/kit';
 import { readSettings } from '$lib/server/settings';
 import {
   cancelScheduledRunpodPodStop,
+  checkRunpodH3Pod,
   checkRunpodVoicePod,
   getRunpodPodStatus,
   scheduleRunpodPodStop,
@@ -21,9 +22,10 @@ function configFrom(settings: Awaited<ReturnType<typeof readSettings>>) {
 }
 
 async function statusPayload(config: ReturnType<typeof configFrom>) {
-  const [pod, voice] = await Promise.all([
+  const [pod, voice, h3] = await Promise.all([
     getRunpodPodStatus(config),
     checkRunpodVoicePod(config),
+    checkRunpodH3Pod(config),
   ]);
   return {
     success: true,
@@ -36,6 +38,7 @@ async function statusPayload(config: ReturnType<typeof configFrom>) {
       gpu: pod.gpu?.displayName,
     },
     voice,
+    h3,
   };
 }
 

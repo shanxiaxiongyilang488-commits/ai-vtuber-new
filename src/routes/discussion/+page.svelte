@@ -47,7 +47,8 @@
       avatar: '/avatars/muryi.png',
       aiEngine: 'openai',
       modelName: '',
-      voiceEngine: 'voicevox',
+      voiceEngine: 'irodori-tts',
+      voice: 'none',
       voiceId: '',
       speakerId: 20,
       systemPrompt: ''
@@ -57,7 +58,8 @@
       avatar: '/avatars/ciel.png',
       aiEngine: 'lmstudio',
       modelName: '',
-      voiceEngine: 'elevenlabs',
+      voiceEngine: 'irodori-tts',
+      voice: 'none',
       voiceId: '',
       speakerId: 1,
       systemPrompt: ''

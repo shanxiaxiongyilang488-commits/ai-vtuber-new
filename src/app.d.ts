@@ -10,4 +10,10 @@ declare global {
 	}
 }
 
+declare module '@aituber-onair/core' {
+	export class AITuberOnAirCore {
+		constructor(...args: unknown[]);
+	}
+}
+
 export {};

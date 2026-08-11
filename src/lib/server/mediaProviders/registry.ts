@@ -1,7 +1,7 @@
 import { error } from '@sveltejs/kit';
 import { generateOpenAIImage } from '$lib/server/imageProviders/openai';
-import { generateIdeogramImage } from '$lib/server/imageProviders/ideogram';
-import { generateFalImage } from './fal';
+import { generateRunpodAnimaImage } from '$lib/server/runpodAnima';
+import { readSettings } from '$lib/server/settings';
 import { recordImageGenerationUsage } from '$lib/server/mediaUsage';
 import {
   AVAILABLE_IMAGE_MODELS as CONFIG_AVAILABLE_IMAGE_MODELS,
@@ -9,7 +9,7 @@ import {
 } from '$lib/config/mediaModels';
 import type { GeneratedImage, ImageGenerationInput } from '$lib/server/imageProviders/types';
 
-export type MediaProviderName = 'openai' | 'fal' | 'ideogram';
+export type MediaProviderName = 'openai' | 'fal' | 'ideogram' | 'runpod';
 export type MediaModelInfo = {
   id: string;
   label: string;
@@ -31,11 +31,34 @@ export const AVAILABLE_MEDIA_MODELS: MediaModelInfo[] = [
     kind: 'image',
     estimatedCost: null,
     aliases: [
+      'GPT Image',
       'openai/GPT Image 2',
       'openai/GPT Image 2 Edit',
       'openai/gpt-image-2',
       'openai/gpt-image-2/edit',
+      'fal:openai/gpt-image-2',
+      'fal:openai/gpt-image-2/edit',
+      'FAL GPT Image 2',
+      'FAL GPT Image 2 Edit',
     ],
+  },
+  {
+    id: 'comfyui/anima',
+    label: 'Anima (ComfyUI Pod)',
+    provider: 'runpod',
+    apiModel: 'Anima-Base-v1.0',
+    kind: 'image',
+    estimatedCost: null,
+    aliases: ['Anima', 'Anima Base', 'Anima Base v1.0', 'runpod/anima'],
+  },
+  {
+    id: 'nanobanana-2-lite',
+    label: 'NanoBanana 2 Lite',
+    provider: 'fal',
+    apiModel: 'google/nano-banana-2-lite',
+    kind: 'image',
+    estimatedCost: null,
+    aliases: ['nano-banana-2-lite', 'NanoBanana 2 Lite', 'Nano Banana 2 Lite', 'google/nano-banana-2-lite'],
   },
   {
     id: 'nano-banana-pro',
@@ -216,9 +239,40 @@ export function resolveMediaModel(model?: string): MediaModelInfo {
   return fallback;
 }
 
+function imageRefDigest(value: string): string {
+  let hash = 0;
+  const step = Math.max(1, Math.floor(value.length / 64));
+  for (let i = 0; i < value.length; i += step) {
+    hash = ((hash << 5) - hash + value.charCodeAt(i)) >>> 0;
+  }
+  return `${value.length}:${hash.toString(16)}`;
+}
+
+function imageRefMeta(value: string, index: number, source = 'unknown') {
+  return {
+    index,
+    source,
+    kind: value.startsWith('data:') ? 'data-url' : (value.startsWith('http') ? 'url' : 'unknown'),
+    mime: value.match(/^data:([^;]+);/)?.[1] ?? null,
+    length: value.length,
+    approxKB: Math.round(value.length / 1024),
+    digest: imageRefDigest(value),
+  };
+}
+
 export async function generateMediaImage(
   input: Omit<ImageGenerationInput, 'model'> & { selectedModelId: string; flowId?: string },
-): Promise<{ images: GeneratedImage[]; model: MediaModelInfo }> {
+): Promise<{
+  images: GeneratedImage[];
+  model: MediaModelInfo;
+  costLog?: {
+    provider: string;
+    model: string;
+    estimatedCostUsd: number | null;
+    cumulativeGenerations: number;
+    estimatedCostTotalUsd: number;
+  };
+}> {
   const { selectedModelId, flowId, ...generationInput } = input;
   const model = resolveMediaModel(selectedModelId);
   console.log('[EDIT FLOW][generateMediaImage ENTER]', {
@@ -242,29 +296,45 @@ export async function generateMediaImage(
     model: model.apiModel,
     editMode: input.editMode,
   });
+  console.log('[IMAGE_REFS_MEDIA_PROVIDER_INPUT]', {
+    flowId: flowId ?? null,
+    provider: model.provider,
+    model: model.endpoint ?? model.apiModel,
+    refs: generationInput.refImages.map((ref, index) => imageRefMeta(ref, index, 'mediaProviders/registry')),
+  });
 
-  if (model.provider === 'fal') {
-    return {
-      images: await generateFalImage({
-        ...generationInput,
-        requestId: flowId,
-        model: model.endpoint ?? model.apiModel,
-      }),
-      model,
-    };
+  let images: GeneratedImage[];
+  if (model.provider === 'runpod') {
+    if (generationInput.editMode || generationInput.refImages.length > 0) {
+      console.warn('[RunPod Anima] Reference images are ignored because Anima Base currently runs text-to-image only.');
+    }
+    const settings = await readSettings();
+    const generated = await generateRunpodAnimaImage(settings.runpod, {
+      prompt: generationInput.prompt,
+      size: generationInput.size,
+    });
+    images = [{ url: generated.url }];
+  } else if (model.provider === 'openai') {
+    const providerInput = { ...generationInput, model: model.endpoint ?? model.apiModel };
+    images = await generateOpenAIImage(providerInput);
+  } else {
+    throw error(410, `Image provider ${model.provider} is disabled. Use OpenAI Images API or RunPod Anima.`);
   }
 
-  const providerInput = { ...generationInput, model: model.endpoint ?? model.apiModel };
-  const images = model.provider === 'openai'
-    ? await generateOpenAIImage(providerInput)
-    : model.provider === 'ideogram'
-      ? await generateIdeogramImage(providerInput)
-      : (() => { throw error(400, `Unsupported media provider: ${model.provider}`); })();
-
-  await recordImageGenerationUsage({
+  const usage = await recordImageGenerationUsage({
     provider: model.provider,
     model: model.id,
     estimatedCost: model.estimatedCost,
   });
-  return { images, model };
+  return {
+    images,
+    model,
+    costLog: {
+      provider: model.provider,
+      model: model.id,
+      estimatedCostUsd: model.estimatedCost,
+      cumulativeGenerations: usage.imageGenerationCount,
+      estimatedCostTotalUsd: usage.estimatedImageCostTotal,
+    },
+  };
 }

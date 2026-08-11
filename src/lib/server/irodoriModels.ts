@@ -8,6 +8,7 @@ export type VoiceModelOption = {
   label: string;
   source: 'default' | 'env' | 'local';
   path?: string;
+  note?: string;
 };
 
 export type VoiceModelGroup = {
@@ -17,13 +18,39 @@ export type VoiceModelGroup = {
 };
 
 const DEFAULT_IRODORI_ROOT = 'E:\\Irodori-TTS\\Irodori-TTS';
-const DEFAULT_TTS_MODEL = 'Aratako/Irodori-TTS-500M-v3';
-const DEFAULT_VOICE_DESIGN_MODEL = 'Aratako/Irodori-TTS-600M-v3-VoiceDesign';
+const DEFAULT_LOCAL_V4_INT8 =
+  'E:\\AI-Local-Models\\Irodori-v4-int8\\model.safetensors';
+const DEFAULT_TTS_MODEL = 'Aratako/Irodori-TTS-v4-Small';
+const DEFAULT_VOICE_DESIGN_MODEL = 'Aratako/Irodori-TTS-v4-Small';
+const V4_INT4_VOICE_DESIGN_MODEL =
+  'Aratako/Irodori-TTS-v4-Small-Quantized/int4-weight-only';
 
 const KNOWN_TTS_MODELS = [DEFAULT_TTS_MODEL];
-const KNOWN_VOICE_DESIGN_MODELS = [
-  DEFAULT_VOICE_DESIGN_MODEL,
-  'Aratako/Irodori-TTS-500M-v2-VoiceDesign',
+const KNOWN_VOICE_DESIGN_MODELS: VoiceModelOption[] = [
+  {
+    id: DEFAULT_VOICE_DESIGN_MODEL,
+    label: 'Irodori-TTS-v4-Small (Latest)',
+    source: 'default',
+    note: 'Latest unified VoiceDesign model. Works on CPU or GPU and predicts duration automatically.',
+  },
+  {
+    id: V4_INT4_VOICE_DESIGN_MODEL,
+    label: 'Irodori-TTS-v4-Small INT4 (Lightest / RTX)',
+    source: 'default',
+    note: 'Smallest official checkpoint (813 MiB). Requires NVIDIA Ampere or newer; RTX 5070 is supported.',
+  },
+  {
+    id: 'Aratako/Irodori-TTS-600M-v3-VoiceDesign',
+    label: 'Irodori-TTS-600M-v3-VoiceDesign (Legacy stable)',
+    source: 'default',
+    note: 'Previous VoiceDesign model. Smaller than v4, but with weaker text and caption understanding.',
+  },
+  {
+    id: 'Aratako/Irodori-TTS-500M-v2-VoiceDesign',
+    label: 'Irodori-TTS-500M-v2-VoiceDesign (Legacy smallest CPU)',
+    source: 'default',
+    note: 'Older caption-only model. Lowest parameter count among the CPU-compatible choices.',
+  },
 ];
 
 const MODEL_FILE_EXTENSIONS = new Set(['.safetensors', '.pt', '.pth', '.ckpt']);
@@ -102,12 +129,27 @@ export function getVoiceModelGroups(env: Record<string, string | undefined>): Vo
   const ttsModels: VoiceModelOption[] = [];
   const designerModels: VoiceModelOption[] = [];
 
+  // Prefer the verified local INT8 checkpoint even when the app was launched
+  // via `npm run dev` instead of start-ai-vtuber.cmd.  This keeps downloads,
+  // weights and inference caches off C: in every supported launch path.
+  if (existsSync(DEFAULT_LOCAL_V4_INT8)) {
+    const localV4: VoiceModelOption = {
+      id: DEFAULT_LOCAL_V4_INT8,
+      label: 'Irodori-TTS-v4-Small INT8 (Local E:)',
+      source: 'local',
+      path: DEFAULT_LOCAL_V4_INT8,
+      note: 'Verified local CPU checkpoint. No model download is required.',
+    };
+    addModel(ttsModels, localV4);
+    addModel(designerModels, localV4);
+  }
+
   for (const id of KNOWN_TTS_MODELS) {
     addModel(ttsModels, { id, label: modelLabel(id), source: 'default' });
   }
 
-  for (const id of KNOWN_VOICE_DESIGN_MODELS) {
-    addModel(designerModels, { id, label: modelLabel(id), source: 'default' });
+  for (const model of KNOWN_VOICE_DESIGN_MODELS) {
+    addModel(designerModels, model);
   }
 
   const envTtsModel = cleanModelId(env.IRODORI_TTS_CHECKPOINT || env.IRODORI_TTS_MODEL);
@@ -145,7 +187,7 @@ export function resolveVoiceModel(
     throw new Error(`unknown model for ${group?.label ?? engineId}: ${requested}`);
   }
 
-  const fallback = models[0]?.id;
+  const fallback = models.find((item) => item.source === 'env')?.id ?? models[0]?.id;
   if (!fallback) throw new Error(`no models detected for ${group?.label ?? engineId}`);
   return fallback;
 }

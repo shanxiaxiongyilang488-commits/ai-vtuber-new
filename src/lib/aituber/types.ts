@@ -46,6 +46,9 @@ export type AITuberEventType =
   | 'speech_started'
   | 'speech_finished'
   | 'speech_failed'
+  | 'comment_received'
+  | 'comment_delivered'
+  | 'comment_dropped'
   | 'runtime_state_changed';
 
 export interface ProactiveSettings {
@@ -80,17 +83,37 @@ export interface SpeechRequest {
   characterId: string;
   messageId: string;
   text: string;
+  /** VoiceLab caption override for this message only. */
+  voiceCaption?: string;
+  /** Original user direction, retained for diagnostics and accessible UI. */
+  voiceInstruction?: string;
+  /** One-shot playback speed; does not mutate the saved character voice. */
+  voiceSpeed?: number;
+  /** One-shot post-generation pitch shift in semitones. */
+  voicePitchShiftSemitones?: number;
+  /** Keep the saved clone/LoRA identity and vary only delivery. */
+  preserveBaseVoice?: boolean;
   origin: ConversationOrigin;
   createdAt: number;
 }
 
 export interface VoiceAudioSource {
   url: string;
+  /** Actual RunPod route used for this synthesis, when available. */
+  backend?: 'runpod-pod' | 'runpod-serverless';
   revoke?: () => void;
 }
 
 export interface VoiceAdapter {
-  synthesize(characterId: string, text: string, signal?: AbortSignal): Promise<VoiceAudioSource>;
+  synthesize(
+    characterId: string,
+    text: string,
+    signal?: AbortSignal,
+    voiceCaption?: string,
+    voiceSpeed?: number,
+    preserveBaseVoice?: boolean,
+    voicePitchShiftSemitones?: number,
+  ): Promise<VoiceAudioSource>;
 }
 
 export interface ProactiveChatContext {

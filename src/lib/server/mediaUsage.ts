@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-type MediaUsageState = {
+export type MediaUsageState = {
   imageGenerationCount: number;
   estimatedImageCostTotal: number;
 };

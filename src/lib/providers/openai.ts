@@ -1,6 +1,21 @@
 import type { ChatImageInput, ProviderChatInput } from './types';
 
 export const OPENAI_DEFAULT_MODEL = 'gpt-5.4-mini';
+export const OPENAI_ORCHESTRATION_MODEL = 'gpt-5.5';
+export const OPENAI_FALLBACK_MODEL = 'gpt-5.5';
+
+export type OpenAIChatResult = { text: string; model: string; fallbackFrom?: string };
+
+function shouldFallbackFromGPT56(model: string, error: unknown): boolean {
+  if (!model.startsWith('gpt-5.6-')) return false;
+  const candidate = error as { status?: unknown; code?: unknown; message?: unknown };
+  const status = typeof candidate?.status === 'number' ? candidate.status : undefined;
+  const code = typeof candidate?.code === 'string' ? candidate.code.toLowerCase() : '';
+  const message = String(candidate?.message ?? error).toLowerCase();
+  return status === 403 || status === 404
+    || code === 'model_not_found'
+    || /model.*(?:not found|does not exist|not available|access|permission)|(?:access|permission).*model/.test(message);
+}
 
 function openAIUserContent(userMessage: string, images: ChatImageInput[]) {
   if (images.length === 0) return userMessage;
@@ -23,6 +38,7 @@ function summarizeOpenAIPayload(payload: {
   }>;
   max_output_tokens: number;
   store: boolean;
+  reasoning?: { effort: 'low' | 'high' };
 }, images: ChatImageInput[]) {
   return {
     ...payload,
@@ -63,7 +79,7 @@ function summarizeOpenAIPayload(payload: {
   };
 }
 
-export async function chatOpenAI(input: ProviderChatInput & { apiKey?: string }): Promise<string> {
+export async function chatOpenAIWithModel(input: ProviderChatInput & { apiKey?: string }): Promise<OpenAIChatResult> {
   if (!input.apiKey) throw new Error('OpenAI API key is not set');
 
   const images = input.images ?? [];
@@ -74,9 +90,10 @@ export async function chatOpenAI(input: ProviderChatInput & { apiKey?: string })
   console.log('[OPENAI MODEL]', model);
   const { default: OpenAI } = await import('openai');
   const client = new OpenAI({ apiKey });
-  try {
+  const createResponse = async (requestModel: string) => {
+    const supportsReasoningEffort = /^gpt-5(?:[.-]|$)/i.test(requestModel);
     const payload = {
-      model,
+      model: requestModel,
       instructions: input.systemPrompt,
       input: [{
         role: 'user' as const,
@@ -84,6 +101,9 @@ export async function chatOpenAI(input: ProviderChatInput & { apiKey?: string })
       }],
       max_output_tokens: input.maxTokens ?? 2048,
       store: false as const,
+      ...(supportsReasoningEffort && input.reasoningEffort
+        ? { reasoning: { effort: input.reasoningEffort } }
+        : {}),
     };
     console.log(
       '[OPENAI_RESPONSES_PAYLOAD]',
@@ -94,7 +114,21 @@ export async function chatOpenAI(input: ProviderChatInput & { apiKey?: string })
       included: images.length > 0,
       count: images.length,
     });
-    const response = await client.responses.create(payload);
+    return client.responses.create(payload);
+  };
+  try {
+    let response;
+    let actualModel = model;
+    let fallbackFrom: string | undefined;
+    try {
+      response = await createResponse(model);
+    } catch (error) {
+      if (!shouldFallbackFromGPT56(model, error)) throw error;
+      fallbackFrom = model;
+      actualModel = OPENAI_FALLBACK_MODEL;
+      console.warn('[OPENAI_MODEL_FALLBACK]', { from: model, to: actualModel });
+      response = await createResponse(actualModel);
+    }
 
     const text = response.output_text ?? '';
     console.log('[MODEL_FINISH]', {
@@ -103,10 +137,14 @@ export async function chatOpenAI(input: ProviderChatInput & { apiKey?: string })
       status: response.status ?? null,
       visibleLength: text.length,
     });
-    return text;
+    return { text, model: actualModel, ...(fallbackFrom ? { fallbackFrom } : {}) };
   } catch (caughtError) {
     const message = caughtError instanceof Error ? caughtError.message : String(caughtError);
     console.error('[OPENAI_RESPONSES_ERROR]', { provider: 'openai', model, message });
     throw new Error(`provider=openai model=${model} message=${message}`);
   }
+}
+
+export async function chatOpenAI(input: ProviderChatInput & { apiKey?: string }): Promise<string> {
+  return (await chatOpenAIWithModel(input)).text;
 }

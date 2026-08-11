@@ -1,6 +1,8 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { generateFalVideo, resolveFalMediaModel } from '$lib/server/mediaProviders/fal';
+import { estimateVideoCostUsd } from '$lib/videoCost';
+import { recordVideoUsage } from '$lib/server/videoUsage';
 
 interface VideoRequest {
   prompt: string;
@@ -33,6 +35,7 @@ export const POST: RequestHandler = async ({ request }) => {
   }
 
   const mediaProvider = 'fal';
+  console.log('[VIDEO_GENERATION_PROVIDER]', mediaProvider);
 
   const requestModel = body.model?.trim();
   const mediaModel = resolveFalMediaModel(
@@ -50,6 +53,8 @@ export const POST: RequestHandler = async ({ request }) => {
     referenceImage,
     task,
   });
+  const estimatedCostUsd = estimateVideoCostUsd({ falModel: mediaModel }, duration);
+  const usage = await recordVideoUsage(estimatedCostUsd);
 
-  return json({ url: result.url, model: result.model });
+  return json({ url: result.url, model: result.model, estimatedCostUsd, usage });
 };

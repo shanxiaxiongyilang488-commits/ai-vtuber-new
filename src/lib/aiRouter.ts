@@ -1,8 +1,9 @@
 import type { Character } from "$lib/types/character";
-import { getProviderKey } from "$lib/server/settings";
+import { getProviderKey, readSettings } from "$lib/server/settings";
+import { buildCharacterTimeTonePrompt, buildEnergyPrompt, buildTimeCorePrompt, getTimeCore } from "../core/timeCore";
 
-type Engine = "openai" | "gemini" | "claude" | "ollama" | "lmstudio" | "colab-ollama";
-type Provider = "openai" | "gemini" | "anthropic";
+type Engine = "openai" | "grok" | "gemini" | "claude" | "ollama" | "lmstudio" | "colab-ollama";
+type Provider = "openai" | "grok" | "gemini" | "anthropic";
 type Message = {
   role: "system" | "user" | "assistant";
   content: string;
@@ -24,6 +25,10 @@ function detectProvider(model: string): Provider {
 
   if (lowerModel.includes("gpt") || lowerModel.includes("o4")) {
     return "openai";
+  }
+
+  if (lowerModel.includes("grok")) {
+    return "grok";
   }
 
   if (lowerModel.includes("gemini")) {
@@ -119,6 +124,26 @@ async function callGemini(apiKey: string, model: string, messages: Message[]): P
   return data?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
 }
 
+async function callGrok(apiKey: string, model: string, messages: Message[]): Promise<string> {
+  const settings = await readSettings();
+  const baseUrl = (settings.grok.baseUrl || "https://api.x.ai/v1").replace(/\/+$/, "");
+  const res = await fetch(`${baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      model,
+      messages,
+      stream: false
+    })
+  });
+
+  const data = await parseJsonResponse(res, "grok");
+  return data?.choices?.[0]?.message?.content ?? "";
+}
+
 async function callAnthropic(apiKey: string, model: string, messages: Message[]): Promise<string> {
   const systemPrompt = messages.find((message) => message.role === "system")?.content ?? "";
   const claudeMessages = messages
@@ -156,6 +181,10 @@ export async function generateText({ model = "gpt-5.4-mini", messages }: Generat
       return await callGemini(apiKey, model, messages);
     }
 
+    if (provider === "grok") {
+      return await callGrok(apiKey, model, messages);
+    }
+
     if (provider === "anthropic") {
       return await callAnthropic(apiKey, model, messages);
     }
@@ -186,6 +215,10 @@ function buildCharacterSystemPrompt(character: Character): string {
 
 
 ${character.systemPrompt || ""}
+
+${buildTimeCorePrompt(getTimeCore())}
+${buildEnergyPrompt(getTimeCore(), `${character.name}\n${character.systemPrompt || ''}`)}
+${buildCharacterTimeTonePrompt(getTimeCore(), `${character.name}\n${character.systemPrompt || ''}`)}
 `;
 }
 
@@ -215,7 +248,24 @@ async function geminiHandler({ prompt, character, model }: HandlerParams): Promi
   console.log("🔥 Gemini 呼び出し開始");
 
   return await generateText({
-    model: model || character.ollamaModel || "gemini-2.5-flash",
+    model: model || character.ollamaModel || "gemini-3.5-flash",
+    messages: [
+      { role: "system", content: buildCharacterSystemPrompt(character) },
+      { role: "user", content: prompt }
+    ]
+  });
+}
+
+//
+// ==============================
+// Grok
+// ==============================
+//
+async function grokHandler({ prompt, character, model }: HandlerParams): Promise<string> {
+  console.log("Grok 呼び出し開始");
+
+  return await generateText({
+    model: model || character.ollamaModel || "grok-4.5",
     messages: [
       { role: "system", content: buildCharacterSystemPrompt(character) },
       { role: "user", content: prompt }
@@ -347,6 +397,7 @@ async function colabOllamaHandler({ prompt, character, model }: HandlerParams): 
 //
 const handlers: Record<Engine, (p: HandlerParams) => Promise<string>> = {
   openai: openaiHandler,
+  grok: grokHandler,
   gemini: geminiHandler,
   claude: claudeHandler,
   ollama: ollamaHandler,

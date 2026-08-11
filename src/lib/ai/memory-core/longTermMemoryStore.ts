@@ -1,4 +1,4 @@
-import type { LongTermMemory, MemoryScope, MemorySource } from './types';
+import type { LongTermMemory, MemoryLayer, MemoryScope, MemorySource } from './types';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -38,11 +38,14 @@ function canUseLocalStorage(): boolean {
 }
 
 function normalizeMemory(memory: LongTermMemory): LongTermMemory {
+  // Legacy data used a 1-5 scale. New records and all recall decisions use 0-1.
+  const rawImportance = Number(memory.importance) || 0;
   return {
     ...memory,
     tags: Array.isArray(memory.tags) ? memory.tags.filter(Boolean) : [],
-    importance: Math.min(5, Math.max(1, Number(memory.importance) || 1)),
+    importance: Math.min(1, Math.max(0, rawImportance > 1 ? rawImportance / 5 : rawImportance)),
     timestamp: memory.timestamp || new Date().toISOString(),
+    layer: memory.layer ?? (memory.scope === 'character' ? 'characterMemory' : 'longMemory'),
   };
 }
 
@@ -71,6 +74,7 @@ export function createLongTermMemory(input: {
   importance?: number;
   characterId?: string;
   source?: MemorySource;
+  layer?: MemoryLayer;
 }): LongTermMemory {
   const now = new Date().toISOString();
   return normalizeMemory({
@@ -79,10 +83,11 @@ export function createLongTermMemory(input: {
     title: input.title.trim(),
     content: input.content.trim(),
     tags: input.tags ?? [],
-    importance: input.importance ?? 3,
+    importance: input.importance ?? 0.4,
     timestamp: now,
     characterId: input.scope === 'character' ? input.characterId : undefined,
     source: input.source ?? 'manual',
+    layer: input.layer ?? (input.scope === 'character' ? 'characterMemory' : 'longMemory'),
   });
 }
 
@@ -112,9 +117,15 @@ export function saveSharedMemories(memories: LongTermMemory[]): void {
 
 export function loadCharacterMemories(characterId: string): LongTermMemory[] {
   const safeCharacterId = safeFilePart(characterId);
-  const fileMemories = readMemoryFile(`character-${safeCharacterId}.json`)
+  const fileMemories = readMemoryFile(`characters/${safeCharacterId}/memory.json`)
     .filter((memory) => memory.scope === 'character' && memory.characterId === characterId);
   if (fileMemories.length > 0 || !canUseLocalStorage()) return fileMemories;
+
+  // One-way compatibility read for the former flat filename. New writes always
+  // use the isolated characters/<characterId>/memory.json layout.
+  const legacyFileMemories = readMemoryFile(`character-${safeCharacterId}.json`)
+    .filter((memory) => memory.scope === 'character' && memory.characterId === characterId);
+  if (legacyFileMemories.length > 0) return legacyFileMemories;
 
   return loadFromKey(`${CHARACTER_STORAGE_PREFIX}${characterId}`)
     .filter((memory) => memory.scope === 'character' && memory.characterId === characterId);
@@ -123,7 +134,7 @@ export function loadCharacterMemories(characterId: string): LongTermMemory[] {
 export function saveCharacterMemories(characterId: string, memories: LongTermMemory[]): void {
   const safeCharacterId = safeFilePart(characterId);
   const normalized = memories.map((memory) => ({ ...memory, scope: 'character' as const, characterId }));
-  writeMemoryFile(`character-${safeCharacterId}.json`, normalized);
+  writeMemoryFile(`characters/${safeCharacterId}/memory.json`, normalized);
   saveToKey(
     `${CHARACTER_STORAGE_PREFIX}${characterId}`,
     normalized

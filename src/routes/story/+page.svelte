@@ -22,6 +22,8 @@
   let importSuccess = $state('');
   let referenceBusy = $state(false);
   let referenceError = $state('');
+  const STUDIO_REF_STORE = 'studio-ref-images';
+  const STUDIO_YAML_IMPORT_KEY = 'studio-yaml-import';
   let selectedStory = $derived(
     stories.find((story) => story.id === selectedId) ?? stories[0] ?? null,
   );
@@ -70,6 +72,99 @@
       imageCount: images.length,
       activeImage: images.find((image) => image.active)?.name ?? null,
     });
+  }
+
+  type StudioStoredRef = {
+    thumb?: string;
+    thumbs?: string[];
+    originals?: string[];
+    label?: string;
+    name?: string;
+    names?: string[];
+  };
+
+  function imageRefDigest(value: string): string {
+    let hash = 0;
+    const step = Math.max(1, Math.floor(value.length / 64));
+    for (let i = 0; i < value.length; i += step) {
+      hash = ((hash << 5) - hash + value.charCodeAt(i)) >>> 0;
+    }
+    return `${value.length}:${hash.toString(16)}`;
+  }
+
+  function imageUrlMeta(value: string, index: number, source = 'unknown') {
+    const text = value.trim();
+    return {
+      index,
+      source,
+      kind: text.startsWith('data:') ? 'data-url' : (text.startsWith('http') ? 'url' : (text ? 'unknown' : 'empty')),
+      mime: text.match(/^data:([^;]+);/)?.[1] ?? null,
+      length: text.length,
+      approxKB: Math.round(text.length / 1024),
+      digest: text ? imageRefDigest(text) : '',
+    };
+  }
+
+  function restoreStoryImagesFromStudioStore(): StoryReferenceImage[] {
+    if (typeof localStorage === 'undefined') return [];
+    try {
+      const raw = localStorage.getItem(STUDIO_REF_STORE);
+      if (!raw) return [];
+      const data = JSON.parse(raw) as {
+        images?: StudioStoredRef[];
+        referenceImages?: StudioStoredRef[];
+        a?: StudioStoredRef | null;
+        b?: StudioStoredRef | null;
+      };
+      const refs = data.referenceImages ?? data.images ?? [data.a ?? null, data.b ?? null].filter(Boolean) as StudioStoredRef[];
+      const images = refs.flatMap((ref, refIndex) => {
+        const sources = ref.originals?.length
+          ? ref.originals
+          : (ref.thumbs?.length ? ref.thumbs : (ref.thumb ? [ref.thumb] : []));
+        const source = sources.find((url) => typeof url === 'string' && url.startsWith('data:image/'));
+        if (!source) return [];
+        return [{
+          id: `studio-ref-${refIndex}-${imageRefDigest(source)}`,
+          name: ref.name || ref.names?.[0] || ref.label || `studio-ref-${refIndex + 1}`,
+          path: `localStorage:${STUDIO_REF_STORE}:${refIndex}`,
+          type: 'manga_page' as const,
+          createdAt: new Date().toISOString(),
+          active: refIndex === 0,
+          dataUrl: source,
+        }];
+      });
+      console.log('[STORY_REF_STORE_RESTORED]', {
+        source: STUDIO_REF_STORE,
+        count: images.length,
+        images: images.map((image, index) => ({
+          id: image.id,
+          name: image.name,
+          active: image.active,
+          dataUrl: image.dataUrl ? imageUrlMeta(image.dataUrl, index, 'story.restore.dataUrl') : null,
+        })),
+      });
+      return images;
+    } catch (error) {
+      console.warn('[STORY_REF_STORE_RESTORE_ERROR]', error);
+      return [];
+    }
+  }
+
+  function mergeStoryReferenceImages(
+    existing: StoryReferenceImage[],
+    restored: StoryReferenceImage[],
+  ): StoryReferenceImage[] {
+    const seen = new Set(existing.map((image) => image.id));
+    const merged = [...existing];
+    for (const image of restored) {
+      if (seen.has(image.id)) continue;
+      merged.push(image);
+      seen.add(image.id);
+    }
+    if (merged.length > 0 && !merged.some((image) => image.active)) {
+      merged[0] = { ...merged[0], active: true };
+    }
+    return merged;
   }
 
   async function uploadReferenceImage(event: Event): Promise<void> {
@@ -143,6 +238,27 @@
   function openMangaProject(rawYaml: string): void {
     if (selectedStory) setActiveStory(selectedStory);
     localStorage.setItem('studio-yaml', rawYaml);
+    const storyImages = selectedStory?.referenceImages ?? [];
+    const fallbackImages = storyImages.length > 0 ? storyImages : restoreStoryImagesFromStudioStore();
+    if (fallbackImages.length > 0) {
+      localStorage.setItem(STUDIO_YAML_IMPORT_KEY, JSON.stringify({
+        pages: parseStoryYaml(rawYaml)?.pages ?? [],
+        referenceImages: fallbackImages.map((image) => ({
+          name: image.name,
+          dataUrl: image.dataUrl ?? '',
+          originalDataUrl: image.dataUrl ?? '',
+          note: image.active ? 'ACTIVE story continuity image' : 'story continuity image',
+        })).filter((image) => image.dataUrl),
+        sourceText: selectedStory?.title ?? 'story-yaml',
+      }));
+      console.log('[STORY_TO_STUDIO_IMAGE_REFS]', {
+        storyId: selectedStory?.id ?? null,
+        imageCount: fallbackImages.length,
+        images: fallbackImages.map((image, index) => image.dataUrl
+          ? imageUrlMeta(image.dataUrl, index, 'story.toStudio.referenceImages')
+          : null),
+      });
+    }
     window.location.href = '/project';
   }
 
@@ -219,9 +335,20 @@
       return;
     }
 
+    const restoredImages = restoreStoryImagesFromStudioStore();
+    const mergedImages = mergeStoryReferenceImages(saved.referenceImages, restoredImages);
+    if (mergedImages.length > 0) {
+      updateStoryReferenceImages(saved.id, mergedImages);
+      saved.referenceImages = mergedImages;
+    }
+
     stories = loadStoryLibrary();
     selectedId = saved.id;
-    setActiveStory(saved);
+    setActiveStory({
+      ...saved,
+      referenceImages: saved.referenceImages.map(({ dataUrl: _dataUrl, ...image }) => image),
+    });
+    if (mergedImages.length > 0) applyReferenceImages(saved.id, mergedImages);
     importYaml = '';
     importFileName = '';
     importSuccess = `「${saved.title}」をStory Libraryへ保存しました。`;

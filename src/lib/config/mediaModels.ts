@@ -1,4 +1,4 @@
-export type MediaProviderName = 'openai' | 'fal' | 'ideogram';
+export type MediaProviderName = 'openai' | 'fal' | 'ideogram' | 'runpod';
 
 export type MediaModelInfo = {
   id: string;
@@ -15,7 +15,44 @@ export type MediaModelInfo = {
   enabled?: boolean;
 };
 
+export type ImageModelCapabilities = {
+  supportsDesignSkill: boolean;
+  supportsStructuralTransformation: boolean;
+  supportsReferencePreservation: boolean;
+  supportsCharacterConsistency: boolean;
+};
+
+const DEFAULT_IMAGE_MODEL_CAPABILITIES: ImageModelCapabilities = {
+  supportsDesignSkill: false,
+  supportsStructuralTransformation: false,
+  supportsReferencePreservation: false,
+  supportsCharacterConsistency: false,
+};
+
+/** Explicit per-model capability policy. Unlisted models safely default to false. */
+export const IMAGE_MODEL_CAPABILITIES: Record<string, ImageModelCapabilities> = {
+  'openai/gpt-image-2': {
+    ...DEFAULT_IMAGE_MODEL_CAPABILITIES,
+    supportsDesignSkill: true,
+  },
+  'openai/gpt-image-2/edit': {
+    ...DEFAULT_IMAGE_MODEL_CAPABILITIES,
+    supportsDesignSkill: true,
+  },
+};
+
 export const BUILTIN_MEDIA_MODELS: MediaModelInfo[] = [
+  {
+    id: 'nanobanana-2-lite',
+    label: 'NanoBanana 2 Lite',
+    provider: 'fal',
+    apiModel: 'google/nano-banana-2-lite',
+    kind: 'image',
+    edit: false,
+    estimatedCost: null,
+    aliases: ['nano-banana-2-lite', 'NanoBanana 2 Lite', 'Nano Banana 2 Lite', 'google/nano-banana-2-lite'],
+    source: 'builtin',
+  },
   {
     id: 'fal-ai/nano-banana-2',
     label: 'Nano Banana 2',
@@ -60,26 +97,28 @@ export const BUILTIN_MEDIA_MODELS: MediaModelInfo[] = [
     aliases: ['nano-banana-pro-edit', 'Nano Banana Pro Edit'],
     source: 'builtin',
   },
+  // Seedream 5 系は fal-ai/bytedance/seedream/v5/{tier}/{task} の階層で増える。
+  // Pro を追加する場合は tier 部分を pro にした同形のエントリを足すだけでよい。
   {
-    id: 'fal:openai/gpt-image-2',
-    label: 'GPT Image 2',
+    id: 'fal-ai/bytedance/seedream/v5/lite/text-to-image',
+    label: 'Seedream 5 Lite',
     provider: 'fal',
-    apiModel: 'openai/gpt-image-2',
+    apiModel: 'fal-ai/bytedance/seedream/v5/lite/text-to-image',
     kind: 'image',
     edit: false,
-    estimatedCost: null,
-    aliases: ['FAL GPT Image 2', 'openai/gpt-image-2'],
+    estimatedCost: 0.035,
+    aliases: ['seedream-5-lite', 'Seedream 5 Lite', 'seedream-v5-lite'],
     source: 'builtin',
   },
   {
-    id: 'fal:openai/gpt-image-2/edit',
-    label: 'GPT Image 2 Edit',
+    id: 'fal-ai/bytedance/seedream/v5/lite/edit',
+    label: 'Seedream 5 Lite Edit',
     provider: 'fal',
-    apiModel: 'openai/gpt-image-2/edit',
+    apiModel: 'fal-ai/bytedance/seedream/v5/lite/edit',
     kind: 'image',
     edit: true,
-    estimatedCost: null,
-    aliases: ['FAL GPT Image 2 Edit', 'openai/gpt-image-2/edit'],
+    estimatedCost: 0.035,
+    aliases: ['seedream-5-lite-edit', 'Seedream 5 Lite Edit'],
     source: 'builtin',
   },
   {
@@ -90,7 +129,7 @@ export const BUILTIN_MEDIA_MODELS: MediaModelInfo[] = [
     kind: 'image',
     edit: false,
     estimatedCost: null,
-    aliases: ['gpt-image-2', 'OpenAI GPT Image 2', 'openai/GPT Image 2'],
+    aliases: ['gpt-image-2', 'GPT Image', 'OpenAI GPT Image 2', 'openai/GPT Image 2', 'fal:openai/gpt-image-2', 'FAL GPT Image 2'],
     source: 'builtin',
   },
   {
@@ -101,7 +140,18 @@ export const BUILTIN_MEDIA_MODELS: MediaModelInfo[] = [
     kind: 'image',
     edit: true,
     estimatedCost: null,
-    aliases: ['gpt-image-2-edit', 'OpenAI GPT Image 2 Edit', 'openai/GPT Image 2 Edit'],
+    aliases: ['gpt-image-2-edit', 'OpenAI GPT Image 2 Edit', 'openai/GPT Image 2 Edit', 'fal:openai/gpt-image-2/edit', 'FAL GPT Image 2 Edit'],
+    source: 'builtin',
+  },
+  {
+    id: 'comfyui/anima',
+    label: 'Anima (ComfyUI Pod)',
+    provider: 'runpod',
+    apiModel: 'Anima-Base-v1.0',
+    kind: 'image',
+    edit: false,
+    estimatedCost: null,
+    aliases: ['Anima', 'Anima Base', 'Anima Base v1.0', 'runpod/anima'],
     source: 'builtin',
   },
   {
@@ -201,7 +251,7 @@ export const AVAILABLE_MEDIA_MODELS = BUILTIN_MEDIA_MODELS.map((model): MediaMod
 }));
 
 export const AVAILABLE_IMAGE_MODELS = AVAILABLE_MEDIA_MODELS.filter((model) =>
-  model.kind === 'image' && !model.hidden && model.enabled !== false
+  model.kind === 'image' && (model.provider === 'openai' || model.provider === 'runpod') && !model.hidden && model.enabled !== false
 );
 
 export const OPENAI_IMAGE_MODELS = AVAILABLE_IMAGE_MODELS.filter((model) =>
@@ -212,12 +262,14 @@ export const mediaModelsByProvider: Record<MediaProviderName, MediaModelInfo[]> 
   openai: OPENAI_IMAGE_MODELS,
   fal: AVAILABLE_IMAGE_MODELS.filter((model) => model.provider === 'fal'),
   ideogram: AVAILABLE_IMAGE_MODELS.filter((model) => model.provider === 'ideogram'),
+  runpod: AVAILABLE_IMAGE_MODELS.filter((model) => model.provider === 'runpod'),
 };
 
 export const MEDIA_PROVIDER_LABELS: Record<MediaProviderName, string> = {
   openai: 'OpenAI',
   fal: 'FAL',
   ideogram: 'Ideogram',
+  runpod: 'RunPod / ComfyUI',
 };
 
 export const AVAILABLE_MEDIA_PROVIDERS = (Object.keys(mediaModelsByProvider) as MediaProviderName[])
@@ -298,4 +350,9 @@ export function normalizeMediaModelId(model?: string): string {
     return (AVAILABLE_IMAGE_MODELS[0] ?? AVAILABLE_MEDIA_MODELS[0]).id;
   }
   return resolveMediaModelInfo(model).id;
+}
+
+export function imageModelCapabilities(model?: string): ImageModelCapabilities {
+  const resolvedId = resolveMediaModelInfo(model).id;
+  return IMAGE_MODEL_CAPABILITIES[resolvedId] ?? DEFAULT_IMAGE_MODEL_CAPABILITIES;
 }

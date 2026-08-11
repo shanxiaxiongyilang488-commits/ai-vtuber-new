@@ -28,8 +28,8 @@ function isSelectableProvider(value: string | null): value is Exclude<AIProvider
 
 function createSessionStore() {
   const { subscribe, set, update } = writable({
-    provider: 'gemini' as AIProvider,
-    model:    DEFAULT_MODELS.gemini,
+    provider: 'openai' as AIProvider,
+    model:    DEFAULT_MODELS.openai,
   });
 
   return {
@@ -42,12 +42,12 @@ function createSessionStore() {
     init() {
       if (typeof localStorage === 'undefined') return;
 
-      // claude → gemini 移行（一度だけ実行）
+      // Legacy Claude selection migrates to the fixed Conversation AI.
       // フラグ設置後に開発者が明示的に claude を再選択した場合は尊重する
       const MIGRATION_KEY = 'session_migration_v1';
       if (!localStorage.getItem(MIGRATION_KEY)) {
         if (localStorage.getItem(KEY_PROVIDER) === 'claude') {
-          localStorage.setItem(KEY_PROVIDER, 'gemini');
+          localStorage.setItem(KEY_PROVIDER, 'openai');
           localStorage.removeItem(KEY_MODEL); // claude モデル名を残さない
         }
         localStorage.setItem(MIGRATION_KEY, '1');
@@ -55,7 +55,7 @@ function createSessionStore() {
 
       const savedProvider = localStorage.getItem(KEY_PROVIDER);
       const savedModel    = localStorage.getItem(KEY_MODEL);
-      const provider      = isSelectableProvider(savedProvider) ? savedProvider : 'gemini';
+      const provider      = isSelectableProvider(savedProvider) ? savedProvider : 'openai';
       const model         = savedProvider === provider && savedModel ? savedModel : settingsModel(provider);
       if (savedProvider && savedProvider !== provider) {
         localStorage.setItem(KEY_PROVIDER, provider);

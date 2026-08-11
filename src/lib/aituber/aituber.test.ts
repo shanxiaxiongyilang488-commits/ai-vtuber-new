@@ -10,8 +10,44 @@ import { evaluateProactiveEligibility } from './proactiveConversation.ts';
 import { DEFAULT_PROACTIVE_SETTINGS, hasStoredProactiveSettings, loadProactiveSettings } from './settings.ts';
 import { orderSpeechRequests, SpeechQueue, type AudioLike } from './speechQueue.ts';
 import type { SpeechRequest, VoiceAdapter } from './types.ts';
+import {
+  getVoiceOutputEffectPreset,
+  nextVoiceOutputEffectMode,
+  parseVoiceOutputEffectMode,
+} from './voiceOutputEffect.ts';
+import { loadVoiceCandidates, replaceVoiceCandidates, saveVoiceCandidate } from './voiceCandidateStore.ts';
 
 const NOW = 2_000_000_000_000;
+
+test('android output effect cycles through off, soft, and clear safely', () => {
+  assert.equal(nextVoiceOutputEffectMode('off'), 'android-soft');
+  assert.equal(nextVoiceOutputEffectMode('android-soft'), 'android-clear');
+  assert.equal(nextVoiceOutputEffectMode('android-clear'), 'off');
+  assert.equal(parseVoiceOutputEffectMode('android-soft'), 'android-soft');
+  assert.equal(parseVoiceOutputEffectMode('unknown'), 'off');
+  assert.equal(getVoiceOutputEffectPreset('android-soft').wetGain < 0.1, true);
+  assert.equal(getVoiceOutputEffectPreset('android-clear').delaySeconds < 0.02, true);
+});
+
+test('voice candidates survive reload and invalid external URLs are discarded', () => {
+  const values = new Map<string, string>();
+  const storage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value); },
+  };
+  saveVoiceCandidate('shiro', 'm1', '/voice-output/shiro/one.wav', storage, 10);
+  saveVoiceCandidate('shiro', 'm2', '/voice-output/shiro/two.wav', storage, 20);
+  saveVoiceCandidate('shiro', 'm1', '/voice-output/shiro/new-one.wav', storage, 30);
+  replaceVoiceCandidates('shiro', [
+    ...loadVoiceCandidates('shiro', storage),
+    { messageId: 'bad', audioUrl: 'https://example.com/not-local.wav', createdAt: 40 },
+  ], storage);
+
+  assert.deepEqual(loadVoiceCandidates('shiro', storage), [
+    { messageId: 'm2', audioUrl: '/voice-output/shiro/two.wav', createdAt: 20 },
+    { messageId: 'm1', audioUrl: '/voice-output/shiro/new-one.wav', createdAt: 30 },
+  ]);
+});
 
 function runtimeAtIdle(): CharacterRuntime {
   const runtime = new CharacterRuntime('shiro', undefined, NOW - 20 * 60_000);
@@ -87,6 +123,48 @@ test('speech queue serializes playback and preserves pending priority', async ()
   queue.dispose();
 });
 
+test('speech queue forwards a per-message VoiceLab caption to the adapter', async () => {
+  let receivedCaption = '';
+  let receivedSpeed: number | undefined;
+  let receivedPreserveBaseVoice = false;
+  let resolvedUrl = '';
+  const voice: VoiceAdapter = {
+    async synthesize(_characterId, text, _signal, voiceCaption, voiceSpeed, preserveBaseVoice) {
+      receivedCaption = voiceCaption ?? '';
+      receivedSpeed = voiceSpeed;
+      receivedPreserveBaseVoice = preserveBaseVoice ?? false;
+      return { url: text };
+    },
+  };
+  class FakeAudio implements AudioLike {
+    currentTime = 0;
+    listeners = new Map<string, () => void>();
+    addEventListener(type: string, listener: () => void): void { this.listeners.set(type, listener); }
+    removeEventListener(type: string): void { this.listeners.delete(type); }
+    async play(): Promise<void> { queueMicrotask(() => this.listeners.get('ended')?.()); }
+    pause(): void {}
+  }
+  const queue = new SpeechQueue(voice, {
+    resolved: (_request, source) => { resolvedUrl = source.url; },
+  }, (url) => new FakeAudio());
+  queue.enqueue({
+    id: 'styled',
+    origin: 'user_reply',
+    createdAt: 1,
+    characterId: 'shiro',
+    messageId: 'styled',
+    text: 'こんにちは',
+    voiceCaption: '優しいお姉さんのような声',
+    voiceSpeed: 1.12,
+    preserveBaseVoice: true,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(receivedCaption, '優しいお姉さんのような声');
+  assert.equal(receivedSpeed, 1.12);
+  assert.equal(receivedPreserveBaseVoice, true);
+  assert.equal(resolvedUrl, 'こんにちは');
+});
+
 test('speech queue stop clears pending playback', async () => {
   let release: (() => void) | undefined;
   const voice: VoiceAdapter = {
@@ -130,6 +208,29 @@ test('audio analyser is SSR safe and does not initialize Web Audio on constructi
   assert.deepEqual(levels, []);
   await analyser.dispose();
   assert.deepEqual(levels, [0]);
+});
+
+test('audio analyser unlocks a suspended context during user interaction', async () => {
+  let contextCreations = 0;
+  let resumeCalls = 0;
+  const fakeContext = {
+    state: 'suspended',
+    resume: async () => { resumeCalls += 1; fakeContext.state = 'running'; },
+    close: async () => { fakeContext.state = 'closed'; },
+  };
+  const environment: AudioAnalyserEnvironment = {
+    isAvailable: () => true,
+    createContext: () => { contextCreations += 1; return fakeContext as unknown as AudioContext; },
+    requestFrame: () => 1,
+    cancelFrame: () => undefined,
+  };
+  const analyser = new AudioLevelAnalyser(() => undefined, {}, environment);
+
+  assert.equal(await analyser.unlock(), true);
+  assert.equal(await analyser.unlock(), true);
+  assert.equal(contextCreations, 1);
+  assert.equal(resumeCalls, 1);
+  await analyser.dispose();
 });
 
 test('bridge terminal callbacks reset speaking through the runtime boundary', async () => {
@@ -220,4 +321,93 @@ test('audio analyser reuses one context, disconnects old sources, and closes on 
   assert.equal(sourceDisconnects, 2);
   assert.equal(analyserDisconnects, 2);
   assert.equal(contextClosed, 1);
+});
+
+test('android effect builds a quiet parallel wet path without a noise source or feedback loop', async () => {
+  class FakeAudio {
+    addEventListener(): void {}
+    removeEventListener(): void {}
+  }
+
+  const gainValues: number[] = [];
+  const filterValues: Array<{ type: string; frequency: number; q: number }> = [];
+  const delayValues: number[] = [];
+  let sourceConnects = 0;
+  const node = () => ({ connect: () => undefined, disconnect: () => undefined });
+  const fakeContext = {
+    state: 'running',
+    destination: {},
+    createAnalyser: () => ({
+      ...node(),
+      fftSize: 1024,
+      smoothingTimeConstant: 0,
+      getByteTimeDomainData: () => undefined,
+    }),
+    createMediaElementSource: () => ({
+      connect: () => { sourceConnects += 1; },
+      disconnect: () => undefined,
+    }),
+    createGain: () => {
+      const gain = { value: 0 };
+      gainValues.push(0);
+      return {
+        ...node(),
+        gain: {
+          get value() { return gain.value; },
+          set value(value: number) {
+            gain.value = value;
+            gainValues[gainValues.length - 1] = value;
+          },
+        },
+      };
+    },
+    createBiquadFilter: () => {
+      const record = { type: '', frequency: 0, q: 0 };
+      filterValues.push(record);
+      return {
+        ...node(),
+        get type() { return record.type; },
+        set type(value: string) { record.type = value; },
+        frequency: {
+          get value() { return record.frequency; },
+          set value(value: number) { record.frequency = value; },
+        },
+        Q: {
+          get value() { return record.q; },
+          set value(value: number) { record.q = value; },
+        },
+      };
+    },
+    createDelay: () => {
+      const delay = { value: 0 };
+      delayValues.push(0);
+      return {
+        ...node(),
+        delayTime: {
+          get value() { return delay.value; },
+          set value(value: number) {
+            delay.value = value;
+            delayValues[delayValues.length - 1] = value;
+          },
+        },
+      };
+    },
+    resume: async () => undefined,
+    close: async () => undefined,
+  };
+  const environment: AudioAnalyserEnvironment = {
+    isAvailable: () => true,
+    createContext: () => fakeContext as unknown as AudioContext,
+    requestFrame: () => 1,
+    cancelFrame: () => undefined,
+  };
+  const analyser = new AudioLevelAnalyser(() => undefined, {}, environment);
+
+  assert.equal(analyser.attach(new FakeAudio() as unknown as HTMLAudioElement, 'android-soft'), true);
+  assert.equal(sourceConnects, 2);
+  assert.deepEqual(gainValues, [0.96, 0.07]);
+  assert.deepEqual(filterValues, [{ type: 'bandpass', frequency: 2_600, q: 0.72 }]);
+  assert.deepEqual(delayValues, [0.011]);
+  assert.equal('createOscillator' in fakeContext, false);
+  await analyser.dispose();
 });

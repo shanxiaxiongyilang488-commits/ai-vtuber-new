@@ -1,6 +1,6 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { getProviderKey } from '$lib/server/settings';
+import { getProviderKey, readSettings } from '$lib/server/settings';
 
 type StatusResult =
   | 'OK'
@@ -36,6 +36,24 @@ async function checkGemini(): Promise<StatusResult> {
       `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`
     );
     if (res.status === 400 || res.status === 403) return 'Unauthorized';
+    if (res.status === 429) return 'Quota';
+    if (res.ok) return 'OK';
+    return 'Error';
+  } catch {
+    return 'Error';
+  }
+}
+
+async function checkGrok(): Promise<StatusResult> {
+  const settings = await readSettings();
+  const apiKey = settings.grok.apiKey || await getProviderKey('grok');
+  if (!apiKey) return 'Missing API Key';
+  try {
+    const baseUrl = (settings.grok.baseUrl || 'https://api.x.ai/v1').replace(/\/+$/, '');
+    const res = await fetch(`${baseUrl}/models`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+    if (res.status === 401 || res.status === 403) return 'Unauthorized';
     if (res.status === 429) return 'Quota';
     if (res.ok) return 'OK';
     return 'Error';
@@ -100,13 +118,14 @@ async function checkOllama(): Promise<StatusResult> {
 }
 
 export const GET: RequestHandler = async () => {
-  const [openai, gemini, claude, elevenlabs, lmstudio, ollama] = await Promise.all([
+  const [openai, grok, gemini, claude, elevenlabs, lmstudio, ollama] = await Promise.all([
     checkOpenAI(),
+    checkGrok(),
     checkGemini(),
     checkClaude(),
     checkElevenLabs(),
     checkLMStudio(),
     checkOllama(),
   ]);
-  return json({ openai, gemini, claude, anthropic: claude, elevenlabs, lmstudio, ollama });
+  return json({ openai, grok, gemini, claude, anthropic: claude, elevenlabs, lmstudio, ollama });
 };

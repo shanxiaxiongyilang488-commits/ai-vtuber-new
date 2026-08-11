@@ -7,15 +7,26 @@ const DEFAULT_FAL_IMAGE_MODEL = 'fal-ai/nano-banana';
 const DEFAULT_FAL_VIDEO_MODEL = 'fal-ai/kling-video/v3/pro/image-to-video';
 
 export const FAL_MEDIA_MODELS = [
+  { id: 'google/nano-banana-2-lite', label: 'NanoBanana 2 Lite', kind: 'image' },
   { id: 'fal-ai/nano-banana', label: 'Nano Banana', kind: 'image' },
   { id: 'fal-ai/nano-banana-pro', label: 'Nano Banana Pro', kind: 'image' },
   { id: 'fal-ai/nano-banana-2', label: 'Nano Banana 2', kind: 'image' },
   { id: 'fal-ai/flux-pro/kontext', label: 'Flux Kontext', kind: 'image' },
   { id: 'fal-ai/flux-pro/v1.1', label: 'Flux Pro', kind: 'image' },
+  { id: 'fal-ai/bytedance/seedream/v5/lite/text-to-image', label: 'Seedream 5 Lite', kind: 'image' },
+  { id: 'fal-ai/bytedance/seedream/v5/lite/edit', label: 'Seedream 5 Lite Edit', kind: 'image' },
   { id: 'fal-ai/kling-video/v3/pro/image-to-video', label: 'Kling 3.0 Pro', kind: 'video' },
+  { id: 'fal-ai/sora-2/text-to-video', label: 'Sora 2 Text to Video', kind: 'video' },
+  { id: 'fal-ai/sora-2/image-to-video', label: 'Sora 2 Image to Video', kind: 'video' },
 ] as const;
 
 const FAL_MODEL_MAP: Record<string, string> = {
+  'nanobanana-2-lite': 'google/nano-banana-2-lite',
+  'nano-banana-2-lite': 'google/nano-banana-2-lite',
+  'NanoBanana 2 Lite': 'google/nano-banana-2-lite',
+  'Nano Banana 2 Lite': 'google/nano-banana-2-lite',
+  'google/nano-banana-2-lite': 'google/nano-banana-2-lite',
+  'google/nano-banana-lite/edit': 'google/nano-banana-lite/edit',
   'nano-banana': 'fal-ai/nano-banana',
   'Nano Banana': 'fal-ai/nano-banana',
   'fal-ai/nano-banana': 'fal-ai/nano-banana',
@@ -36,9 +47,19 @@ const FAL_MODEL_MAP: Record<string, string> = {
   'fal-ai/flux-pro/v1.1': 'fal-ai/flux-pro/v1.1',
   'openai/gpt-image-2/edit': 'openai/gpt-image-2/edit',
   'fal-ai/gpt-image-2/edit': 'openai/gpt-image-2/edit',
+  'seedream-5-lite': 'fal-ai/bytedance/seedream/v5/lite/text-to-image',
+  'Seedream 5 Lite': 'fal-ai/bytedance/seedream/v5/lite/text-to-image',
+  'fal-ai/bytedance/seedream/v5/lite/text-to-image': 'fal-ai/bytedance/seedream/v5/lite/text-to-image',
+  'seedream-5-lite-edit': 'fal-ai/bytedance/seedream/v5/lite/edit',
+  'Seedream 5 Lite Edit': 'fal-ai/bytedance/seedream/v5/lite/edit',
+  'fal-ai/bytedance/seedream/v5/lite/edit': 'fal-ai/bytedance/seedream/v5/lite/edit',
   kling: DEFAULT_FAL_VIDEO_MODEL,
   'kling-3-pro': DEFAULT_FAL_VIDEO_MODEL,
   'fal-ai/kling-video/v3/pro/image-to-video': DEFAULT_FAL_VIDEO_MODEL,
+  sora: 'fal-ai/sora-2/text-to-video',
+  'sora-2': 'fal-ai/sora-2/text-to-video',
+  'fal-ai/sora-2/text-to-video': 'fal-ai/sora-2/text-to-video',
+  'fal-ai/sora-2/image-to-video': 'fal-ai/sora-2/image-to-video',
 };
 
 const IMAGE_COST_ESTIMATES_USD: Record<string, number> = {
@@ -51,6 +72,8 @@ const IMAGE_COST_ESTIMATES_USD: Record<string, number> = {
   'fal-ai/flux-pro/kontext': 0.05,
   'fal-ai/flux-pro/kontext/text-to-image': 0.05,
   'fal-ai/flux-pro/v1.1': 0.04,
+  'fal-ai/bytedance/seedream/v5/lite/text-to-image': 0.035,
+  'fal-ai/bytedance/seedream/v5/lite/edit': 0.035,
 };
 
 const VIDEO_MODEL_CONFIG = {
@@ -64,10 +87,42 @@ const VIDEO_MODEL_CONFIG = {
       start_image_url: referenceImage,
     }),
   },
+  'fal-ai/sora-2/text-to-video': {
+    endpoint: 'fal-ai/sora-2/text-to-video',
+    resultPath: ['video', 'url'] as string[],
+    buildBody: (prompt: string, duration: number) => ({
+      prompt,
+      duration: nearestSoraDuration(duration),
+      resolution: '720p',
+      aspect_ratio: '16:9',
+      model: 'sora-2',
+      delete_video: true,
+    }),
+  },
+  'fal-ai/sora-2/image-to-video': {
+    endpoint: 'fal-ai/sora-2/image-to-video',
+    resultPath: ['video', 'url'] as string[],
+    buildBody: (prompt: string, duration: number, _audio: boolean, referenceImage: string) => ({
+      prompt,
+      duration: nearestSoraDuration(duration),
+      resolution: 'auto',
+      aspect_ratio: 'auto',
+      model: 'sora-2',
+      delete_video: true,
+      image_url: referenceImage,
+    }),
+  },
 } as const;
 
 export function resolveFalMediaModel(selectedModel?: string, fallback = DEFAULT_FAL_IMAGE_MODEL): string {
   return FAL_MODEL_MAP[selectedModel ?? ''] ?? selectedModel ?? fallback;
+}
+
+function nearestSoraDuration(duration: number): 4 | 8 | 12 | 16 | 20 {
+  const allowed = [4, 8, 12, 16, 20] as const;
+  return allowed.reduce((nearest, candidate) =>
+    Math.abs(candidate - duration) < Math.abs(nearest - duration) ? candidate : nearest,
+  );
 }
 
 function estimateFalImageCost(model: string, endpointModel: string): number {
@@ -80,6 +135,14 @@ function sizeToAspectRatio(size: ImageSize): string {
   if (size === '1536x1024') return '3:2';
   if (size === '1024x1536') return '2:3';
   return '1:1';
+}
+
+function sizeToSeedreamImageSize(size: ImageSize): string {
+  if (size === '1792x1024') return 'landscape_16_9';
+  if (size === '1536x1024') return 'landscape_4_3';
+  if (size === '1024x1792') return 'portrait_16_9';
+  if (size === '1024x1536') return 'portrait_4_3';
+  return 'square_hd';
 }
 
 function sizeToFluxImageSize(size: ImageSize): string {
@@ -97,6 +160,48 @@ function getNestedValue(obj: unknown, path: string[]): string | undefined {
   return typeof cur === 'string' ? cur : undefined;
 }
 
+function imageRefDigest(value: string): string {
+  let hash = 0;
+  const step = Math.max(1, Math.floor(value.length / 64));
+  for (let i = 0; i < value.length; i += step) {
+    hash = ((hash << 5) - hash + value.charCodeAt(i)) >>> 0;
+  }
+  return `${value.length}:${hash.toString(16)}`;
+}
+
+function imageRefMeta(value: string, index: number, source = 'unknown') {
+  return {
+    index,
+    source,
+    kind: value.startsWith('data:') ? 'data-url' : (value.startsWith('http') ? 'url' : 'unknown'),
+    mime: value.match(/^data:([^;]+);/)?.[1] ?? null,
+    length: value.length,
+    approxKB: Math.round(value.length / 1024),
+    digest: imageRefDigest(value),
+  };
+}
+
+function imageFieldMeta(value: unknown, source: string) {
+  if (typeof value === 'string') return imageRefMeta(value, 0, source);
+  if (Array.isArray(value)) {
+    return value.map((item, index) =>
+      typeof item === 'string' ? imageRefMeta(item, index, source) : { index, source, kind: typeof item },
+    );
+  }
+  return value ?? null;
+}
+
+function sanitizeFalBody(body: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...body,
+    image_urls: imageFieldMeta(body.image_urls, 'falBody.image_urls'),
+    image_url: imageFieldMeta(body.image_url, 'falBody.image_url'),
+    image: imageFieldMeta(body.image, 'falBody.image'),
+    reference_image_urls: imageFieldMeta(body.reference_image_urls, 'falBody.reference_image_urls'),
+    files: Array.isArray(body.files) ? `[${body.files.length} files]` : body.files ?? null,
+  };
+}
+
 export async function generateFalImage(input: ImageGenerationInput): Promise<GeneratedImage[]> {
   const falKey = await getProviderKey('fal');
   if (!falKey) throw error(500, 'FAL API key is not configured');
@@ -108,12 +213,23 @@ export async function generateFalImage(input: ImageGenerationInput): Promise<Gen
     requestId,
     count: input.refImages.length,
   });
-  const isNanoBananaEdit = /^fal-ai\/nano-banana(?:-pro|-2)?\/edit$/.test(falModel);
-  const nanoBananaBaseModel = falModel.replace(/\/edit$/, '');
-  const isNanoBanana = /^fal-ai\/nano-banana(?:-pro|-2)?$/.test(nanoBananaBaseModel);
+  const isNanoBananaLite = falModel === 'google/nano-banana-2-lite'
+    || falModel === 'google/nano-banana-lite/edit';
+  const isNanoBananaEdit = /^fal-ai\/nano-banana(?:-pro|-2)?\/edit$/.test(falModel)
+    || falModel === 'google/nano-banana-lite/edit';
+  const nanoBananaBaseModel = isNanoBananaLite
+    ? 'google/nano-banana-2-lite'
+    : falModel.replace(/\/edit$/, '');
+  const isNanoBanana = isNanoBananaLite
+    || /^fal-ai\/nano-banana(?:-pro|-2)?$/.test(nanoBananaBaseModel);
   const isFluxKontext = falModel === 'fal-ai/flux-pro/kontext';
   const isGptImage2 = falModel === 'openai/gpt-image-2';
   const isGptImage2Edit = falModel === 'openai/gpt-image-2/edit' || (isGptImage2 && hasRefs);
+  // Seedream は fal-ai/bytedance/seedream/v5/{lite|pro}/{text-to-image|edit} の階層。
+  // tier 非依存で判定しておくことで、Pro 追加時はモデル定義の追加だけで済む。
+  const isSeedream = /^fal-ai\/bytedance\/seedream\/v\d+\/[^/]+\/(?:text-to-image|edit)$/.test(falModel);
+  const isSeedreamEdit = isSeedream && (falModel.endsWith('/edit') || input.editMode || hasRefs);
+  const seedreamBaseModel = isSeedream ? falModel.replace(/\/(?:text-to-image|edit)$/, '') : '';
   const isIdeogramV3Remix = falModel === 'fal-ai/ideogram/v3' && hasRefs;
   const isIdeogramCharacter = falModel === 'fal-ai/ideogram/character';
   const isIdeogramCharacterEdit = falModel === 'fal-ai/ideogram/character/edit';
@@ -129,10 +245,17 @@ export async function generateFalImage(input: ImageGenerationInput): Promise<Gen
   if (isNanoBananaEdit && !hasRefs) {
     throw error(400, 'Nano Banana Edit requires at least one reference image in image_urls');
   }
+  if (isSeedreamEdit && !hasRefs) {
+    throw error(400, 'Seedream Edit requires at least one reference image in image_urls');
+  }
   const endpointModel = isNanoBanana && (isNanoBananaEdit || input.editMode || hasRefs)
-    ? `${nanoBananaBaseModel}/edit`
+    ? isNanoBananaLite
+      ? 'google/nano-banana-lite/edit'
+      : `${nanoBananaBaseModel}/edit`
     : isGptImage2Edit
       ? 'openai/gpt-image-2/edit'
+    : isSeedream
+      ? `${seedreamBaseModel}/${isSeedreamEdit ? 'edit' : 'text-to-image'}`
     : isIdeogramV3Remix
       ? 'fal-ai/ideogram/v3/remix'
     : isFluxKontext && !hasRefs
@@ -163,6 +286,14 @@ export async function generateFalImage(input: ImageGenerationInput): Promise<Gen
     falBody.image_urls = input.refImages;
     falBody.image_size = 'auto';
     falBody.quality = 'high';
+  } else if (isSeedream) {
+    // Seedream の入力スキーマに output_format は無いため送らない（image_size 既定は auto_2K）。
+    delete falBody.output_format;
+    if (isSeedreamEdit) {
+      falBody.image_urls = input.refImages;
+    } else {
+      falBody.image_size = sizeToSeedreamImageSize(input.size);
+    }
   } else if (isIdeogramV3Remix) {
     falBody.image_url = input.refImages[0];
   } else if (isIdeogramCharacter) {
@@ -220,14 +351,33 @@ export async function generateFalImage(input: ImageGenerationInput): Promise<Gen
     endpointModel,
   });
   if (isGptImage2Edit) {
+    const gptImage2Payload = {
+      images: Array.isArray(falBody.image_urls) ? falBody.image_urls : [],
+    };
+    console.log('[FAL_GPT_IMAGE_2_PAYLOAD_IMAGES_LENGTH]', {
+      'payload.images.length': gptImage2Payload.images.length,
+      image_urls_length: Array.isArray(falBody.image_urls) ? falBody.image_urls.length : 0,
+      inputRefImagesLength: input.refImages.length,
+    });
+    console.log('[GPT-IMAGE-2 EDIT INPUT]', {
+      provider: 'fal',
+      endpointModel,
+      prompt: input.prompt,
+      imageUrls: input.refImages.map((ref, index) => imageRefMeta(ref, index, 'fal.gpt-image-2.edit.image_urls')),
+      image_size: falBody.image_size,
+      quality: falBody.quality,
+    });
     console.log('[FAL GPT IMAGE 2 EDIT PAYLOAD FIELDS]', JSON.stringify({
-      image_urls: falBody.image_urls ?? null,
-      image_url: falBody.image_url ?? null,
-      image: falBody.image ?? null,
-      files: falBody.files ?? null,
+      image_urls: imageFieldMeta(falBody.image_urls, 'falBody.image_urls'),
+      image_url: imageFieldMeta(falBody.image_url, 'falBody.image_url'),
+      image: imageFieldMeta(falBody.image, 'falBody.image'),
+      files: Array.isArray(falBody.files) ? `[${falBody.files.length} files]` : falBody.files ?? null,
     }, null, 2));
-    console.log('[FAL GPT IMAGE 2 EDIT PAYLOAD]', JSON.stringify(falBody, null, 2));
+    console.log('[FAL GPT IMAGE 2 EDIT PAYLOAD]', JSON.stringify(sanitizeFalBody(falBody), null, 2));
   }
+
+  // 実際に FAL へ送信される JSON（エンドポイント＋ボディ全文）。
+  console.log('[FAL_REQUEST_JSON]', JSON.stringify({ endpoint, body: sanitizeFalBody(falBody) }, null, 2));
 
   const falRes = await fetch(endpoint, {
     method: 'POST',
@@ -378,12 +528,15 @@ export async function generateFalVideo(input: {
     throw error(500, `${model} result error: ${msg.slice(0, 300)}`);
   }
   const falData = await resultRes.json();
-  const videoUrl = knownConfig
-    ? getNestedValue(falData, knownConfig.resultPath)
-    : getNestedValue(falData, ['video', 'url'])
-      ?? getNestedValue(falData, ['videos', '0', 'url'])
-      ?? getNestedValue(falData, ['output', 'video', 'url'])
-      ?? getNestedValue(falData, ['url']);
-  if (!videoUrl) throw error(500, `No video URL in response from ${model}`);
+  const videoUrl = getNestedValue(falData, ['video', 'url'])
+    ?? (knownConfig ? getNestedValue(falData, knownConfig.resultPath) : undefined)
+    ?? getNestedValue(falData, ['videos', '0', 'url'])
+    ?? getNestedValue(falData, ['output', 'video', 'url'])
+    ?? getNestedValue(falData, ['url']);
+  if (!videoUrl) {
+    console.error('[VIDEO_COMPLETED_MISSING_URL]', { model, requestId: queued.request_id, result: falData });
+    throw error(500, `No video URL in completed response from ${model}`);
+  }
+  console.log('VIDEO_COMPLETED', { model, requestId: queued.request_id, result: { video: { url: videoUrl } } });
   return { url: videoUrl, model };
 }
