@@ -4,7 +4,7 @@
   "mediaProvider": "fal",
   "chatConfig": {
     "provider": "gemini",
-    "model": "gemini-2.5-flash"
+    "model": "gemini-3.5-flash"
   },
   "imageConfig": {
     "provider": "openai",
@@ -18,9 +18,15 @@
     "key": "",
     "model": "gpt-5.4-mini"
   },
+  "grok": {
+    "apiKey": "",
+    "baseUrl": "https://api.x.ai/v1",
+    "model": "grok-4.5",
+    "enabled": false
+  },
   "gemini": {
     "key": "",
-    "model": "gemini-2.5-flash"
+    "model": "gemini-3.5-flash"
   },
   "anthropic": {
     "key": "",
@@ -28,6 +34,23 @@
   },
   "fal": {
     "key": ""
+  },
+  "minimax": {
+    "key": ""
+  },
+  "runpod": {
+    "apiKey": "",
+    "voiceEndpointId": "",
+    "videoEndpointId": "",
+    "voiceModel": "Aratako/Irodori-TTS-v4-Small",
+    "sessionIdleSeconds": 90,
+    "maxActiveSessions": 1,
+    "voiceWarmIntervalSeconds": 45,
+    "voicePodEnabled": false,
+    "voicePodId": "",
+    "voicePodUrl": "",
+    "voicePodToken": "",
+    "voicePodIdleMinutes": 30
   },
   "ideogram": {
     "key": ""
@@ -41,8 +64,13 @@
   },
   "voice": {
     "backend": "local",
+    "ttsBackend": "local",
     "localUrl": "http://127.0.0.1:7860",
     "colabUrl": ""
+  },
+  "video": {
+    "backend": "fal",
+    "localUrl": "http://127.0.0.1:8793"
   },
   "local": {
     "baseUrl": "http://localhost:1234",
