@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import importlib.metadata
 import json
 import mimetypes
 import os
@@ -36,6 +37,58 @@ MODEL_NAMES = {
 _comfy_process: subprocess.Popen[Any] | None = None
 _comfy_lock = threading.Lock()
 _comfy_log: Any = None
+
+
+def _runtime_diagnostics() -> dict[str, Any]:
+    """Return compact runtime details that are useful in remote worker errors."""
+    details: dict[str, Any] = {}
+    for package in ("torch", "comfy-kitchen", "comfy-aimdo"):
+        try:
+            details[package] = importlib.metadata.version(package)
+        except importlib.metadata.PackageNotFoundError:
+            details[package] = "not-installed"
+    try:
+        import torch
+
+        details["cuda_runtime"] = torch.version.cuda or "none"
+        details["cuda_available"] = torch.cuda.is_available()
+        if torch.cuda.is_available():
+            details["gpu"] = torch.cuda.get_device_name(0)
+            details["compute_capability"] = ".".join(map(str, torch.cuda.get_device_capability(0)))
+            free, total = torch.cuda.mem_get_info(0)
+            details["vram_free_gib"] = round(free / (1024 ** 3), 2)
+            details["vram_total_gib"] = round(total / (1024 ** 3), 2)
+    except Exception as error:
+        details["torch_diagnostics_error"] = f"{type(error).__name__}: {error}"
+    return details
+
+
+def _format_comfy_error(messages: Any) -> str:
+    """Keep ComfyUI's actual exception and omit huge tensor/input dumps."""
+    if isinstance(messages, list):
+        for entry in reversed(messages):
+            if not isinstance(entry, (list, tuple)) or len(entry) < 2:
+                continue
+            kind, payload = entry[0], entry[1]
+            if kind != "execution_error" or not isinstance(payload, dict):
+                continue
+            summary = {
+                "node_id": payload.get("node_id"),
+                "node_type": payload.get("node_type"),
+                "exception_type": payload.get("exception_type"),
+                "exception_message": payload.get("exception_message"),
+                "traceback": (payload.get("traceback") or [])[-12:],
+            }
+            return json.dumps(summary, ensure_ascii=False)
+    encoded = json.dumps(messages, ensure_ascii=False)
+    return encoded[:3000] + ("..." if len(encoded) > 3000 else "")
+
+
+def _comfy_log_tail(limit: int = 12000) -> str:
+    path = Path("/tmp/comfyui.log")
+    if not path.is_file():
+        return ""
+    return path.read_text("utf-8", errors="replace")[-limit:]
 
 
 def duration_to_frames(duration: float) -> int:
@@ -232,7 +285,16 @@ def _wait_for_output(prompt_id: str, prefix: str) -> Path:
             status = item.get("status") or {}
             if status.get("status_str") == "error":
                 messages = status.get("messages") or []
-                raise RuntimeError(f"ComfyUI H3 generation failed: {json.dumps(messages, ensure_ascii=False)[-6000:]}")
+                error_detail = _format_comfy_error(messages)
+                runtime = json.dumps(_runtime_diagnostics(), ensure_ascii=False)
+                log_tail = _comfy_log_tail()
+                print(f"[H3 execution error] {error_detail}", flush=True)
+                print(f"[H3 runtime] {runtime}", flush=True)
+                if log_tail:
+                    print(f"[H3 ComfyUI log tail]\n{log_tail}", flush=True)
+                raise RuntimeError(
+                    f"ComfyUI H3 generation failed: {error_detail}; runtime={runtime}"
+                )
             candidates = sorted(
                 (path for path in COMFY_OUTPUT.rglob(f"{prefix.split('/')[-1]}*") if path.suffix.lower() in {".mp4", ".webm", ".mkv"}),
                 key=lambda path: path.stat().st_mtime,
@@ -312,7 +374,12 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
         mode = "r2v" if data.get("mode") == "r2v" else "i2v"
         _validate_model_files(mode)
         _ensure_comfy()
-        return {"ready": True, "model": "MiniMax-H3", "mode": mode}
+        return {
+            "ready": True, "model": "MiniMax-H3", "mode": mode,
+            "runtime": _runtime_diagnostics(),
+        }
+    if task == "video.diagnostics":
+        return {"ready": True, "runtime": _runtime_diagnostics()}
     raise ValueError(f"Unsupported task: {task!r}")
 
 
