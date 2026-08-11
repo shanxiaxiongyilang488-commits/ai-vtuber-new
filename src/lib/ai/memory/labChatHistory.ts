@@ -2,11 +2,22 @@ const DB_NAME = 'ai-vtuber-lab-chat';
 const DB_VERSION = 1;
 const HISTORY_STORE = 'chatHistory';
 const HISTORY_ID = 'default';
+export const MAX_HISTORY = 8;
+export const MAX_MESSAGE_LENGTH = 500;
+export const BLOCK_BASE64 = true;
+export const BLOCK_DEBUG_LOG = true;
+
+function isUnsafeHistoryText(text: string): boolean {
+  return /data\//iu.test(text) || /(?:^|\n)\s*(?:\[?debug|console\.|video_debug|fal_video_status)/iu.test(text);
+}
 
 export type LabChatHistoryMessage = {
   role: string;
   text: string;
   time: string;
+  /** ISO 8601 creation timestamp used by the chat UI. */
+  timestamp?: string;
+  createdAt?: string;
   avatar?: string;
   speakerName?: string;
   internalDiscussion?: Array<{
@@ -57,15 +68,25 @@ function normalizeMessages(value: unknown): LabChatHistoryMessage[] {
       && typeof candidate.time === 'string')) {
       return [];
     }
+    if (isUnsafeHistoryText(candidate.text)) return [];
 
+    // Legacy entries only had a short display time. Assign a one-time ISO value
+    // when they are next saved so every persisted message has a timestamp.
+    const timestamp = typeof candidate.timestamp === 'string'
+      ? candidate.timestamp
+      : typeof candidate.createdAt === 'string'
+        ? candidate.createdAt
+        : new Date().toISOString();
     return [{
       role: candidate.role,
-      text: candidate.text,
+      text: candidate.text.slice(0, MAX_MESSAGE_LENGTH),
       time: candidate.time,
-      ...(typeof candidate.avatar === 'string' ? { avatar: candidate.avatar } : {}),
+      timestamp,
+      createdAt: typeof candidate.createdAt === 'string' ? candidate.createdAt : timestamp,
+      ...(typeof candidate.avatar === 'string' && !/data\//iu.test(candidate.avatar) ? { avatar: candidate.avatar } : {}),
       ...(typeof candidate.speakerName === 'string' ? { speakerName: candidate.speakerName } : {}),
-      ...(Array.isArray(candidate.internalDiscussion) ? {
-        internalDiscussion: candidate.internalDiscussion.flatMap((entry) =>
+      ...(Array.isArray(candidate.internalDiscussion) && false ? {
+        internalDiscussion: candidate.internalDiscussion?.flatMap((entry) =>
           entry
           && (
             entry.speaker === 'ミュリィ'
@@ -79,13 +100,12 @@ function normalizeMessages(value: unknown): LabChatHistoryMessage[] {
           && entry.text.trim()
             ? [{ speaker: entry.speaker, text: entry.text.trim() }]
             : []
-        ),
+        ) ?? [],
       } : {}),
-      ...(typeof candidate.imageUrl === 'string' ? { imageUrl: candidate.imageUrl } : {}),
-      ...(typeof candidate.imagePrompt === 'string' ? { imagePrompt: candidate.imagePrompt } : {}),
+      ...(typeof candidate.imageUrl === 'string' && !/data\//iu.test(candidate.imageUrl) ? { imageUrl: candidate.imageUrl } : {}),
       ...(candidate.isGreeting === true ? { isGreeting: true } : {}),
     }];
-  });
+  }).slice(-MAX_HISTORY);
 }
 
 export async function loadLabChatHistory(): Promise<LabChatHistoryMessage[]> {

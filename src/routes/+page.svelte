@@ -12,6 +12,22 @@
 
   const modules: LabModule[] = [
     {
+      id: 'avatar-live',
+      label: 'AVATAR LIVE',
+      href: '/avatar-live',
+      status: '5 AVATAR SYSTEMS',
+      description: 'PNGTuber / VRM / Live2D / PuruPuru / Inochi2D を選んでAI配信',
+      tone: 'purple',
+    },
+    {
+      id: 'aituber',
+      label: 'AITUBER STUDIO',
+      href: '/aituber',
+      status: 'LIVE CHARACTER',
+      description: 'キャラクターを選び、音声・自発会話・配信アバターをまとめてセットアップ',
+      tone: 'cyan',
+    },
+    {
       id: 'memory',
       label: 'CHAT',
       href: '/chat',
@@ -52,12 +68,44 @@
       tone: 'purple',
     },
     {
+      id: 'character-memory',
+      label: 'CHARACTER MEMORY',
+      href: '/character-memory',
+      status: 'MEMORY CHAT',
+      description: 'キャラと会話して性格・口調・好き嫌いを記憶',
+      tone: 'cyan',
+    },
+    {
       id: 'settings',
       label: 'SETTINGS',
       href: '/settings/api',
       status: 'SYSTEM CONFIG',
       description: 'API・モデル・接続状態の管理端末',
       tone: 'cyan',
+    },
+    {
+      id: 'video-analysis',
+      label: '🔎 CHARACTER SCANNER',
+      href: '/video-analysis',
+      status: 'VISUAL MEMORY EXTRACTION',
+      description: 'MP4から1秒ごとに最大20枚を抽出し、顔・全身・耳・尻尾のキャラクター資料JSONを生成',
+      tone: 'cyan',
+    },
+    {
+      id: 'mouth-picker',
+      label: '🎭 MOUTH PICKER',
+      href: '/mouth-picker',
+      status: 'AVATAR ASSETS',
+      description: '動画から口パク・瞬き差分をタグ付けし、.purupuru アバターを書き出す',
+      tone: 'purple',
+    },
+    {
+      id: 'lab',
+      label: 'AI PERSONALITY LAB',
+      href: '/lab',
+      status: 'DEVELOPER TOOLS',
+      description: '動画エンジン、デバッグ、実験のための開発ツール。',
+      tone: 'purple',
     },
   ];
 
@@ -117,6 +165,12 @@
     </header>
 
     <section class="core-zone" aria-label="Main route">
+      <a href="/character-memory" class="core-link primary-memory-link" aria-label="CHARACTER MEMORY CHAT">
+        <span class="core-ready">[ MAIN EXPERIENCE ]</span>
+        <span class="core-title">CHARACTER MEMORY CHAT</span>
+        <span class="core-description">キャラクターと暮らし、会話から物語と映像を育てる場所</span>
+        <span class="core-enter">START LIVING</span>
+      </a>
       <div class="side-readout left">
         <span>CORE ROUTE</span>
         <b>CHAT SYSTEM</b>
@@ -476,6 +530,8 @@
     color: #67e8f9;
     letter-spacing: 0.18em;
   }
+  .core-link[href="/lab"] { display: none; }
+  .primary-memory-link { grid-column: 2; display: grid; place-items: center; gap: 12px; text-align: center; }
 
   .core-enter {
     color: rgba(192, 132, 252, 0.9);

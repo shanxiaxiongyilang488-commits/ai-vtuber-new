@@ -10,7 +10,8 @@ class AppStore {
       prompt:
         'あなたは明るく好奇心旺盛な女の子です。短めのフレンドリーな文体で話してください。',
       aiEngine: 'dummy',
-      voiceEngine: 'none',
+      voiceEngine: 'irodori-tts',
+      voice: 'none',
       color: '#e91e8c',
       avatarEmoji: '🌸',
       ollamaModel: 'qwen:0.5b',
@@ -21,7 +22,8 @@ class AppStore {
       prompt:
         'あなたは落ち着いた知的な男の子です。論理的で丁寧な文体で話してください。',
       aiEngine: 'dummy',
-      voiceEngine: 'none',
+      voiceEngine: 'irodori-tts',
+      voice: 'none',
       color: '#1e90ff',
       avatarEmoji: '⭐',
       ollamaModel: 'qwen:0.5b',

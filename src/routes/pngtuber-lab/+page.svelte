@@ -55,11 +55,13 @@
   // JSON再生時はフレームのmouthShapeを直接stateにセット（reactive chain依存を排除）
   let motionMouthShape   = $state<MouthShape | undefined>(undefined);
 
-  const motionProgress = $derived(
-    clip && clip.meta.duration > 0
-      ? (motionTime / clip.meta.duration) * 100
-      : 0
-  );
+  function calculateMotionProgress(activeClip: MotionClip | null, time: number): number {
+    return activeClip && activeClip.meta.duration > 0
+      ? (time / activeClip.meta.duration) * 100
+      : 0;
+  }
+
+  const motionProgress = $derived(calculateMotionProgress(clip, motionTime));
 
   // ─── JSON パース ──────────────────────────────────
   function isMotionClip(v: unknown): v is MotionClip {

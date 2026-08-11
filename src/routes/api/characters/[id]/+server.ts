@@ -57,11 +57,18 @@ export const PUT: RequestHandler = async ({ params, request }) => {
     )) {
       return json({ message: 'characterBible is invalid' }, { status: 400 });
     }
+    const updatesAvatar = body?.avatarType !== undefined || body?.avatarSrc !== undefined;
+    const expectedAvatarSrc = `/purupuru/${id}.purupuru`;
+    if (updatesAvatar && (body.avatarType !== 'purupuru' || body.avatarSrc !== expectedAvatarSrc)) {
+      return json({ message: `avatar settings must target ${expectedAvatarSrc}` }, { status: 400 });
+    }
     const character = updateCharacter(id, {
       ...(typeof body?.name === 'string' ? { name: body.name } : {}),
       ...(typeof body?.role === 'string' ? { role: body.role } : {}),
       ...(typeof body?.description === 'string' ? { description: body.description } : {}),
       ...(characterBible ? { characterBible } : {}),
+      ...(body?.avatarType === 'purupuru' ? { avatarType: 'purupuru' as const } : {}),
+      ...(typeof body?.avatarSrc === 'string' ? { avatarSrc: body.avatarSrc } : {}),
     });
     return json({ character });
   } catch (error) {

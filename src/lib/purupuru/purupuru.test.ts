@@ -134,3 +134,40 @@ test('blink step durations stay in the official normal-blink ranges', () => {
     assert.ok(step.openMs >= 122 && step.openMs <= 178);
   }
 });
+
+test('face sources resolve to themselves when all six diffs exist', async () => {
+  const { PURUPURU_FACE_KEYS, resolveFaceSources } = await import('./packer.ts');
+  const resolved = resolveFaceSources(PURUPURU_FACE_KEYS);
+  for (const key of PURUPURU_FACE_KEYS) assert.equal(resolved[key], key);
+});
+
+test('missing diffs fall back preferring mouth shape over eye state', async () => {
+  const { resolveFaceSources } = await import('./packer.ts');
+  const resolved = resolveFaceSources(['eyesOpenMouthClosed', 'eyesOpenMouthHalf', 'eyesOpenMouthOpen']);
+  assert.equal(resolved.eyesClosedMouthClosed, 'eyesOpenMouthClosed');
+  assert.equal(resolved.eyesClosedMouthHalf, 'eyesOpenMouthHalf');
+  assert.equal(resolved.eyesClosedMouthOpen, 'eyesOpenMouthOpen');
+});
+
+test('minimum viable package is a single base image', async () => {
+  const { PURUPURU_FACE_KEYS, resolveFaceSources } = await import('./packer.ts');
+  const resolved = resolveFaceSources(['eyesOpenMouthClosed']);
+  for (const key of PURUPURU_FACE_KEYS) assert.equal(resolved[key], 'eyesOpenMouthClosed');
+});
+
+test('base image is required to resolve face sources', async () => {
+  const { resolveFaceSources } = await import('./packer.ts');
+  assert.throws(() => resolveFaceSources(['eyesOpenMouthHalf', 'eyesClosedMouthClosed']));
+});
+
+test('pack manifest and settings match the loader contract', async () => {
+  const { buildPackManifest, buildPackSettings } = await import('./packer.ts');
+  const manifest = buildPackManifest() as { format: string; formatVersion: number; settings: string; avatar: Record<string, string> };
+  assert.equal(manifest.format, 'purupuru-avatar-package');
+  assert.equal(manifest.formatVersion, 1);
+  assert.equal(manifest.settings, 'settings.json');
+  assert.equal(manifest.avatar.eyesOpenMouthClosed, 'avatar/eyes-open-mouth-closed.png');
+  assert.equal(Object.keys(manifest.avatar).length, 8);
+  const settings = buildPackSettings(1024, 1536) as { avatarImageSize: { width: number; height: number } };
+  assert.deepEqual(settings.avatarImageSize, { width: 1024, height: 1536 });
+});

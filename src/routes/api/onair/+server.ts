@@ -14,7 +14,8 @@ export const POST: RequestHandler = async ({ request }) => {
     }
 
     console.log('[onair] dynamic import start');
-    const mod = await import('@aituber-onair/core');
+    const packageName = '@aituber-onair/core';
+    const mod = await import(/* @vite-ignore */ packageName);
     console.log('[onair] mod keys:', Object.keys(mod));
     const { AITuberOnAirCore, AITuberOnAirCoreEvent } = mod;
     console.log('[onair] AITuberOnAirCore:', typeof AITuberOnAirCore, 'Event:', AITuberOnAirCoreEvent);

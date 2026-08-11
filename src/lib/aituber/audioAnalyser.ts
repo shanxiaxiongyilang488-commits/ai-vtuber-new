@@ -1,4 +1,5 @@
 import type { AudioAnalyserOptions } from './types.ts';
+import { getVoiceOutputEffectPreset, type VoiceOutputEffectMode } from './voiceOutputEffect.ts';
 
 export type MouthLevelListener = (level: number) => void;
 
@@ -31,6 +32,7 @@ export class AudioLevelAnalyser {
   private context: AudioContext | null = null;
   private source: MediaElementAudioSourceNode | null = null;
   private analyser: AnalyserNode | null = null;
+  private effectNodes: AudioNode[] = [];
   private samples: Uint8Array<ArrayBuffer> | null = null;
   private frameId: number | null = null;
   private level = 0;
@@ -49,7 +51,24 @@ export class AudioLevelAnalyser {
     this.environment = environment;
   }
 
-  attach(audio: HTMLAudioElement): boolean {
+  /**
+   * Create and resume Web Audio while a real user gesture is still active.
+   * Voice synthesis finishes asynchronously, too late for browsers that only
+   * allow AudioContext.resume() from the original click/keydown handler.
+   */
+  async unlock(): Promise<boolean> {
+    if (!this.environment.isAvailable()) return false;
+    try {
+      this.context ??= this.environment.createContext();
+      if (this.context.state === 'closed') return false;
+      if (this.context.state !== 'running') await this.context.resume();
+      return this.context.state === 'running';
+    } catch {
+      return false;
+    }
+  }
+
+  attach(audio: HTMLAudioElement, effectMode: VoiceOutputEffectMode = 'off'): boolean {
     if (!this.environment.isAvailable()) return false;
     this.detach();
     try {
@@ -58,7 +77,31 @@ export class AudioLevelAnalyser {
       analyser.fftSize = this.options.fftSize;
       analyser.smoothingTimeConstant = this.options.smoothing;
       const source = this.context.createMediaElementSource(audio);
-      source.connect(analyser);
+      const effect = getVoiceOutputEffectPreset(effectMode);
+      if (effect.mode === 'off') {
+        source.connect(analyser);
+      } else {
+        // 原音を主体にし、帯域を絞ったごく短い反射音だけを並列で混ぜる。
+        // 白色ノイズやフィードバックは使わないため、原音にない雑音は生成しない。
+        const dry = this.context.createGain();
+        dry.gain.value = effect.dryGain;
+        const bandpass = this.context.createBiquadFilter();
+        bandpass.type = 'bandpass';
+        bandpass.frequency.value = effect.bandpassHz;
+        bandpass.Q.value = effect.bandpassQ;
+        const delay = this.context.createDelay(0.05);
+        delay.delayTime.value = effect.delaySeconds;
+        const wet = this.context.createGain();
+        wet.gain.value = effect.wetGain;
+
+        source.connect(dry);
+        dry.connect(analyser);
+        source.connect(bandpass);
+        bandpass.connect(delay);
+        delay.connect(wet);
+        wet.connect(analyser);
+        this.effectNodes = [dry, bandpass, delay, wet];
+      }
       analyser.connect(this.context.destination);
       this.source = source;
       this.analyser = analyser;
@@ -85,8 +128,10 @@ export class AudioLevelAnalyser {
       this.attachedAudio.removeEventListener('error', this.handleStop);
     }
     this.source?.disconnect();
+    for (const node of this.effectNodes) node.disconnect();
     this.analyser?.disconnect();
     this.source = null;
+    this.effectNodes = [];
     this.analyser = null;
     this.samples = null;
     this.attachedAudio = null;

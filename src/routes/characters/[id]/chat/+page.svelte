@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { page } from '$app/state';
+  import { PROVIDER_MODELS, modelLabel } from '$lib/config/models';
 
   type Character = {
     id: string;
@@ -9,6 +10,15 @@
     description: string;
     image: string;
     hasReference?: boolean;
+    selfImages?: SelfImage[];
+  };
+
+  type SelfImage = {
+    id: string;
+    createdAt: string;
+    provider: string;
+    prompt: string;
+    imageUrl: string;
   };
 
   type ChatMessage = {
@@ -16,6 +26,11 @@
     role: 'user' | 'assistant';
     text: string;
     createdAt: string;
+  };
+
+  type ImageIntentResult = {
+    imageRequestCandidate: boolean;
+    prompt: string;
   };
 
   type CharacterMemory = {
@@ -44,10 +59,48 @@
   let analyzing = $state(false);
   let savingMemory = $state(false);
   let errorMessage = $state('');
+  let selfImageModalOpen = $state(false);
+  let selfImagePrompt = $state('');
+  let selfImageProvider = $state<'gpt-image-2'>('gpt-image-2');
+  let selfImageBusy = $state(false);
+  let selfImageStatus = $state('');
+  let generatedSelfImage = $state<SelfImage | null>(null);
+  let selfImages = $state<SelfImage[]>([]);
+  let imageRequestCandidate = $state(false);
+  let suggestedSelfImagePrompt = $state('');
+  let selectedModel = $state('gpt-5.5');
+
+  const selfImageProviders = [
+    { id: 'gpt-image-2', label: 'GPT Image 2' },
+  ] as const;
+
+  const selfImageTriggerPatterns = [
+    /描いて/,
+    /描き/,
+    /イラストにして/,
+    /イラスト化/,
+    /絵にして/,
+    /画像にして/,
+    /自画像/,
+    /少しお色気/,
+    /お色気/,
+    /セクシー/,
+    /別衣装/,
+    /衣装.*描/,
+    /self\s*image/i,
+    /draw/i,
+    /illustrat/i,
+  ];
 
   onMount(() => {
+    selectedModel = localStorage.getItem('character-chat:openai-model') || 'gpt-5.5';
     void loadCharacterChat();
   });
+
+  function selectModel(model: string): void {
+    selectedModel = model;
+    localStorage.setItem('character-chat:openai-model', model);
+  }
 
   async function loadCharacterChat(): Promise<void> {
     loading = true;
@@ -73,6 +126,7 @@
       character = characterData.character;
       messages = Array.isArray(chatData.messages) ? chatData.messages : [];
       memory = memoryData.memory ?? emptyMemory();
+      selfImages = Array.isArray(character?.selfImages) ? character.selfImages : [];
 
       if (character?.hasReference) {
         const imageResponse = await fetch(`/api/characters/${encodeURIComponent(id)}/reference`);
@@ -121,6 +175,36 @@
     messages = data.messages;
   }
 
+  function ImageIntentDetector(text: string, hasAttachedImage: boolean): ImageIntentResult {
+    const normalized = text.normalize('NFKC').toLowerCase();
+    const japaneseTriggers = [
+      '\u63cf\u3044\u3066',
+      '\u63cf\u304d',
+      '\u30a4\u30e9\u30b9\u30c8\u306b\u3057\u3066',
+      '\u30a4\u30e9\u30b9\u30c8\u5316',
+      '\u7d75\u306b\u3057\u3066',
+      '\u753b\u50cf\u306b\u3057\u3066',
+      '\u753b\u50cf\u751f\u6210',
+      '\u753b\u50cf\u4f5c\u3063\u3066',
+      '\u753b\u50cf\u3092\u4f5c\u3063\u3066',
+      '\u30a4\u30e1\u30fc\u30b8\u4f5c\u3063\u3066',
+      '\u81ea\u753b\u50cf',
+      '\u81ea\u753b\u50cf\u4f5c\u3063\u3066',
+      '\u5c11\u3057\u304a\u8272\u6c17',
+      '\u304a\u8272\u6c17',
+      '\u30bb\u30af\u30b7\u30fc',
+      '\u5225\u8863\u88c5',
+      '\u30a2\u30f3\u30c9\u30ed\u30a4\u30c9\u5316',
+      '\u30a2\u30f3\u30c9\u30ed\u30a4\u30c9\u306b\u3057\u3066',
+    ];
+    const hasImageKeyword = japaneseTriggers.some((trigger) => normalized.includes(trigger))
+      || selfImageTriggerPatterns.some((pattern) => pattern.test(normalized));
+    return {
+      imageRequestCandidate: hasAttachedImage && hasImageKeyword,
+      prompt: text,
+    };
+  }
+
   async function sendMessage(): Promise<void> {
     const text = inputText.trim();
     if (!text || sending || !character) return;
@@ -128,12 +212,23 @@
     sending = true;
     errorMessage = '';
     try {
+      const imageIntent = ImageIntentDetector(text, Boolean(imageDataUrl));
       await appendMessage('user', text);
+      if (imageIntent.imageRequestCandidate) {
+        imageRequestCandidate = true;
+        suggestedSelfImagePrompt = imageIntent.prompt;
+        selfImagePrompt = imageIntent.prompt;
+        selfImageStatus = '';
+        return;
+      }
       const response = await fetch('/api/lab-chat', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           route: 'chat',
+          provider: 'openai',
+          model: selectedModel,
+          characterId: character.id,
           systemPrompt: systemPrompt(),
           userMessage: text,
           conversationHistory: messages.slice(-12).map((message) => ({
@@ -241,6 +336,119 @@
     });
     if (response.ok) messages = [];
   }
+
+  function openSelfImageModal(): void {
+    selfImagePrompt = inputText.trim();
+    selfImageStatus = '';
+    selfImageModalOpen = true;
+  }
+
+  async function confirmImageSuggestion(): Promise<void> {
+    const prompt = suggestedSelfImagePrompt.trim();
+    if (!prompt || selfImageBusy) return;
+    if (!imageDataUrl) {
+      selfImageStatus = 'Reference image is required for SELF IMAGE';
+      return;
+    }
+    selfImagePrompt = prompt;
+    generatedSelfImage = null;
+    await runSelfImageGeneration(prompt);
+    if (generatedSelfImage) {
+      imageRequestCandidate = false;
+      suggestedSelfImagePrompt = '';
+    }
+  }
+
+  function cancelImageSuggestion(): void {
+    imageRequestCandidate = false;
+    suggestedSelfImagePrompt = '';
+    selfImageStatus = '';
+  }
+
+  function reviseImageSuggestion(): void {
+    selfImagePrompt = suggestedSelfImagePrompt.trim();
+    selfImageStatus = '';
+    selfImageModalOpen = true;
+  }
+
+  async function runSelfImageGeneration(userPrompt: string): Promise<void> {
+    if (!character || selfImageBusy) return;
+    const prompt = userPrompt.trim();
+    if (!prompt) {
+      selfImageStatus = '画像化したい内容を入力してください。';
+      return;
+    }
+    selfImageBusy = true;
+    selfImageStatus = 'Generating...';
+    errorMessage = '';
+    try {
+      const response = await fetch(`/api/characters/${encodeURIComponent(character.id)}/self-image`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          action: 'generate',
+          provider: selfImageProvider,
+          userPrompt: prompt,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.message ?? 'Self image generation failed');
+      generatedSelfImage = data.image;
+      selfImageModalOpen = false;
+      selfImageStatus = 'Generated';
+    } catch (error) {
+      selfImageStatus = error instanceof Error ? error.message : String(error);
+    } finally {
+      selfImageBusy = false;
+    }
+  }
+
+  async function generateSelfImage(): Promise<void> {
+    await runSelfImageGeneration(selfImagePrompt.trim() || inputText.trim());
+  }
+
+  async function saveGeneratedSelfImage(): Promise<void> {
+    if (!character || !generatedSelfImage || selfImageBusy) return;
+    selfImageBusy = true;
+    selfImageStatus = 'Saving...';
+    try {
+      const response = await fetch(`/api/characters/${encodeURIComponent(character.id)}/self-image`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'save', image: generatedSelfImage }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.message ?? 'Self image save failed');
+      selfImages = Array.isArray(data.selfImages) ? data.selfImages : selfImages;
+      selfImageStatus = 'Saved';
+    } catch (error) {
+      selfImageStatus = error instanceof Error ? error.message : String(error);
+    } finally {
+      selfImageBusy = false;
+    }
+  }
+
+  async function applyGeneratedSelfImage(): Promise<void> {
+    if (!character || !generatedSelfImage || selfImageBusy) return;
+    selfImageBusy = true;
+    selfImageStatus = 'Applying...';
+    try {
+      const response = await fetch(`/api/characters/${encodeURIComponent(character.id)}/self-image`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'apply', imageUrl: generatedSelfImage.imageUrl }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.message ?? 'Apply failed');
+      character = data.character;
+      imageDataUrl = generatedSelfImage.imageUrl;
+      selfImageStatus = 'Applied';
+    } catch (error) {
+      selfImageStatus = error instanceof Error ? error.message : String(error);
+    } finally {
+      selfImageBusy = false;
+    }
+  }
 </script>
 
 <svelte:head>
@@ -254,7 +462,10 @@
       <p>CHARACTER SHEET / CHARACTER MEMORY</p>
       <h1>{character?.name ?? 'CHARACTER CHAT'}</h1>
     </div>
-    <button onclick={clearChat} disabled={!character || messages.length === 0}>ログ削除</button>
+    <div class="header-actions">
+      <button onclick={openSelfImageModal} disabled={!character || !imageDataUrl}>🖼 SELF IMAGE</button>
+      <button onclick={clearChat} disabled={!character || messages.length === 0}>繝ｭ繧ｰ蜑企勁</button>
+    </div>
   </header>
 
   {#if errorMessage}<div class="error-message">{errorMessage}</div>{/if}
@@ -284,8 +495,52 @@
             </article>
           {/each}
           {#if sending}<div class="thinking">{character.name} is thinking...</div>{/if}
+          {#if imageRequestCandidate}
+            <section class="self-image-suggestion">
+              <div>
+                <span>SELF IMAGE SUGGESTION</span>
+                <strong>{character.name}からの提案</strong>
+                <p>ご主人様、この姿なら描けそうです♪</p>
+                <p class="self-image-request">{suggestedSelfImagePrompt}</p>
+                {#if selfImageStatus}<em>{selfImageStatus}</em>{/if}
+              </div>
+              <div class="self-image-suggestion-actions">
+                <button onclick={confirmImageSuggestion} disabled={selfImageBusy || !imageDataUrl}>
+                  {selfImageBusy ? 'Generating...' : '🖼️この姿で描く'}
+                </button>
+                <button onclick={reviseImageSuggestion} disabled={selfImageBusy}>🔧別案を考える</button>
+                <button onclick={cancelImageSuggestion} disabled={selfImageBusy}>❌キャンセル</button>
+              </div>
+            </section>
+          {/if}
+          {#if generatedSelfImage}
+            <section class="self-image-result">
+              <div class="self-image-head">
+                <div>
+                  <span>SELF IMAGE</span>
+                  <strong>{generatedSelfImage.provider}</strong>
+                </div>
+                {#if selfImageStatus}<em>{selfImageStatus}</em>{/if}
+              </div>
+              <img src={generatedSelfImage.imageUrl} alt={`${character.name} self generated`} />
+              <p>{generatedSelfImage.prompt}</p>
+              <div class="self-image-actions">
+                <button onclick={generateSelfImage} disabled={selfImageBusy}>🔄 再生成</button>
+                <button onclick={saveGeneratedSelfImage} disabled={selfImageBusy}>💾 保存</button>
+                <button onclick={applyGeneratedSelfImage} disabled={selfImageBusy}>📌 キャラ画像に反映</button>
+              </div>
+            </section>
+          {/if}
         </div>
         <div class="composer">
+          <label class="model-select">
+            <span>OpenAI model</span>
+            <select value={selectedModel} onchange={(event) => selectModel(event.currentTarget.value)} disabled={sending}>
+              {#each PROVIDER_MODELS.openai as model}
+                <option value={model}>{modelLabel(model)}</option>
+              {/each}
+            </select>
+          </label>
           <textarea
             bind:value={inputText}
             rows="3"
@@ -322,6 +577,60 @@
   {/if}
 </div>
 
+{#if selfImageModalOpen && character}
+  <div
+    class="self-image-modal-backdrop"
+    role="button"
+    tabindex="-1"
+    onclick={() => !selfImageBusy && (selfImageModalOpen = false)}
+    onkeydown={() => {}}
+  >
+    <div
+      class="self-image-modal"
+      role="dialog"
+      tabindex="-1"
+      aria-modal="true"
+      aria-label="Character Self Image"
+      onclick={(event) => event.stopPropagation()}
+      onkeydown={() => {}}
+    >
+      <header>
+        <p>CHARACTER IMAGE GENERATION</p>
+        <h2>🖼 SELF IMAGE</h2>
+      </header>
+      <div class="self-image-reference">
+        {#if imageDataUrl}<img src={imageDataUrl} alt={character.name} />{/if}
+        <div>
+          <strong>{character.name}</strong>
+          <span>Reference image will be used automatically.</span>
+        </div>
+      </div>
+      <label class="self-image-prompt">
+        <span>Prompt Request</span>
+        <textarea bind:value={selfImagePrompt} rows="4" placeholder="少しお色気なアンドロイドにして"></textarea>
+      </label>
+      <div class="self-image-provider-grid">
+        {#each selfImageProviders as provider}
+          <button
+            type="button"
+            class:selected={selfImageProvider === provider.id}
+            onclick={() => (selfImageProvider = provider.id)}
+          >
+            {provider.label}
+          </button>
+        {/each}
+      </div>
+      {#if selfImageStatus}<div class="self-image-status">{selfImageStatus}</div>{/if}
+      <footer>
+        <button type="button" onclick={() => (selfImageModalOpen = false)} disabled={selfImageBusy}>Cancel</button>
+        <button type="button" class="primary" onclick={generateSelfImage} disabled={selfImageBusy}>
+          {selfImageBusy ? 'Generating...' : 'Generate'}
+        </button>
+      </footer>
+    </div>
+  </div>
+{/if}
+
 <style>
   :global(body) { margin: 0; background: #030712; color: #e2e8f0; font-family: 'Segoe UI', sans-serif; }
   .chat-page { min-height: 100vh; padding: 22px; background: radial-gradient(circle at 50% 0%, rgba(34,211,238,.1), transparent 36%), #030712; }
@@ -332,6 +641,7 @@
   header p { color: #22d3ee; font-size: 9px; letter-spacing: .18em; }
   header h1 { margin-top: 3px; color: #f8fafc; font-size: 30px; }
   header button { justify-self: end; }
+  .header-actions { justify-self: end; display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
   main { max-width: 1500px; margin: 0 auto; display: grid; grid-template-columns: 240px minmax(360px, 1fr) 320px; gap: 14px; }
   .character-panel, .conversation-panel, .memory-panel, .loading, .error-message {
     border: 1px solid rgba(148,163,184,.16); border-radius: 12px; background: rgba(8,15,32,.86);
@@ -351,8 +661,38 @@
   article.assistant { background: rgba(34,211,238,.08); border: 1px solid rgba(34,211,238,.18); }
   article.user span { color: #c4b5fd; } article.assistant span { color: #67e8f9; }
   .empty-chat, .thinking { color: #64748b; font-size: 11px; text-align: center; }
-  .composer { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 12px; border-top: 1px solid rgba(148,163,184,.14); }
-  textarea, button { border: 1px solid rgba(148,163,184,.22); border-radius: 6px; background: #020617; color: #e2e8f0; font: inherit; }
+  .self-image-suggestion {
+    margin: 14px 0 2px;
+    padding: 12px;
+    border: 1px solid rgba(251,191,36,.24);
+    border-radius: 12px;
+    background: rgba(15,23,42,.82);
+  }
+  .self-image-suggestion span { display: block; color: #fbbf24; font-size: 8px; font-weight: 900; letter-spacing: .16em; }
+  .self-image-suggestion strong { display: block; margin-top: 3px; color: #f8fafc; font-size: 13px; }
+  .self-image-suggestion p { margin: 8px 0 0; color: #cbd5e1; font-size: 11px; line-height: 1.55; white-space: pre-wrap; }
+  .self-image-suggestion .self-image-request { color: #94a3b8; }
+  .self-image-suggestion em { display: block; margin-top: 8px; color: #fb7185; font-size: 10px; font-style: normal; }
+  .self-image-suggestion-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 11px; }
+  .self-image-suggestion-actions button:first-child { border-color: rgba(251,191,36,.45); color: #fde68a; background: rgba(251,191,36,.12); }
+  .self-image-result {
+    margin: 14px 0 2px;
+    padding: 12px;
+    border: 1px solid rgba(251,191,36,.28);
+    border-radius: 12px;
+    background: rgba(15,23,42,.84);
+  }
+  .self-image-head { display: flex; justify-content: space-between; gap: 10px; align-items: center; margin-bottom: 10px; }
+  .self-image-head span { display: block; color: #fbbf24; font-size: 8px; font-weight: 900; letter-spacing: .16em; }
+  .self-image-head strong { color: #f8fafc; font-size: 13px; }
+  .self-image-head em { color: #94a3b8; font-size: 10px; font-style: normal; }
+  .self-image-result img { width: min(100%, 520px); display: block; border-radius: 10px; border: 1px solid rgba(148,163,184,.18); background: #020617; }
+  .self-image-result p { color: #cbd5e1; font-size: 11px; line-height: 1.55; white-space: pre-wrap; }
+  .self-image-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .composer { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; padding: 12px; border-top: 1px solid rgba(148,163,184,.14); align-items: end; }
+  textarea, select, button { border: 1px solid rgba(148,163,184,.22); border-radius: 6px; background: #020617; color: #e2e8f0; font: inherit; }
+  .model-select { margin: 0; min-width: 145px; }
+  .model-select select { padding: 8px; width: 100%; }
   textarea { width: 100%; padding: 8px; resize: vertical; box-sizing: border-box; }
   button { padding: 8px 12px; color: #a5f3fc; font-size: 10px; font-weight: 800; cursor: pointer; }
   button:disabled { cursor: not-allowed; opacity: .4; }
@@ -366,6 +706,37 @@
   small { display: block; margin-top: 8px; color: #64748b; font-size: 8px; text-align: right; }
   .loading, .error-message { max-width: 900px; margin: 40px auto; padding: 30px; text-align: center; color: #94a3b8; }
   .error-message { padding: 10px; color: #fb7185; }
+  .self-image-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    display: grid;
+    place-items: center;
+    padding: 18px;
+    background: rgba(2,6,23,.78);
+    backdrop-filter: blur(4px);
+  }
+  .self-image-modal {
+    width: min(520px, 100%);
+    border: 1px solid rgba(251,191,36,.28);
+    border-radius: 14px;
+    background: rgba(8,15,32,.98);
+    padding: 18px;
+    box-shadow: 0 24px 70px rgba(0,0,0,.55);
+  }
+  .self-image-modal header { display: block; margin: 0 0 14px; }
+  .self-image-modal header p { color: #fbbf24; font-size: 9px; letter-spacing: .16em; }
+  .self-image-modal header h2 { margin: 3px 0 0; font-size: 22px; }
+  .self-image-reference { display: grid; grid-template-columns: 72px 1fr; gap: 12px; align-items: center; padding: 10px; border: 1px solid rgba(148,163,184,.14); border-radius: 10px; background: rgba(2,6,23,.5); }
+  .self-image-reference img { width: 72px; height: 72px; object-fit: cover; border-radius: 8px; }
+  .self-image-reference strong { display: block; }
+  .self-image-reference span { color: #94a3b8; font-size: 11px; }
+  .self-image-prompt { margin-top: 12px; }
+  .self-image-provider-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+  .self-image-provider-grid button.selected { border-color: #fbbf24; color: #fde68a; background: rgba(251,191,36,.12); }
+  .self-image-status { margin-top: 10px; color: #fbbf24; font-size: 11px; }
+  .self-image-modal footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+  .self-image-modal footer .primary { border-color: rgba(251,191,36,.45); color: #fde68a; background: rgba(251,191,36,.12); }
   @media (max-width: 1050px) { main { grid-template-columns: 210px 1fr; } .memory-panel { grid-column: 1 / -1; } }
-  @media (max-width: 700px) { .chat-page { padding: 14px; } header { grid-template-columns: 1fr; align-items: start; } header div { text-align: left; } header button { justify-self: start; } main { grid-template-columns: 1fr; } .memory-panel { grid-column: auto; } .conversation-panel { min-height: 65vh; } }
+  @media (max-width: 700px) { .chat-page { padding: 14px; } header { grid-template-columns: 1fr; align-items: start; } header div { text-align: left; } header button, .header-actions { justify-self: start; justify-content: flex-start; } main { grid-template-columns: 1fr; } .memory-panel { grid-column: auto; } .conversation-panel { min-height: 65vh; } .composer { grid-template-columns: 1fr auto; } .model-select { grid-column: 1 / -1; } .self-image-provider-grid { grid-template-columns: 1fr; } }
 </style>

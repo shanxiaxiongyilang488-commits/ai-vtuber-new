@@ -1,11 +1,18 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { resolveRunpodVoicePodUrl, startRunpodPod } from './runpodPod.ts';
+import { resolveRunpodH3PodUrl, resolveRunpodVoicePodUrl, startRunpodPod } from './runpodPod.ts';
 
 test('builds the default voice proxy URL from a Pod ID', () => {
   assert.equal(
     resolveRunpodVoicePodUrl('voicepod1234'),
     'https://voicepod1234-8791.proxy.runpod.net',
+  );
+});
+
+test('builds the H3 proxy URL from the same shared Pod ID', () => {
+  assert.equal(
+    resolveRunpodH3PodUrl('voicepod1234'),
+    'https://voicepod1234-8792.proxy.runpod.net',
   );
 });
 

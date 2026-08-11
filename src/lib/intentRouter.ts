@@ -26,7 +26,7 @@ export interface IntentResult {
   subtype?: string;
   confidence: number;
   reason?: string;
-  source?: 'rules' | 'gemini';
+  source?: 'rules' | 'openai';
   matched_rule?: string;
   matched_keywords?: string[];
   negative_keywords?: string[];
@@ -217,7 +217,7 @@ function buildFinalImageTrace(message: string, result: IntentResult) {
   return {
     source: result.source ?? 'unknown',
     final_intent: result.intent,
-    matched_rule: result.matched_rule || result.action || 'gemini_semantic_classification',
+    matched_rule: result.matched_rule || result.action || 'openai_semantic_classification',
     matched_keywords: result.matched_keywords ?? [],
     negative_keywords: result.negative_keywords ?? [],
     score_breakdown: {
@@ -353,17 +353,17 @@ export async function classifyIntent(
   console.log('[RULE_ROUTER_RESULT]', ruleResult);
 
   try {
-    const geminiResult = applyGenerationNegationGuard(message, await classifyIntentAI(message));
-    console.log('[GEMINI_ROUTER_RESULT]', geminiResult);
-    console.log('[FINAL_ROUTER_RESULT]', geminiResult);
-    if (geminiResult.intent === 'image') {
-      console.log('[INTENT_TRACE]', buildFinalImageTrace(message, geminiResult));
+    const openAIResult = applyGenerationNegationGuard(message, await classifyIntentAI(message));
+    console.log('[OPENAI_ROUTER_RESULT]', openAIResult);
+    console.log('[FINAL_ROUTER_RESULT]', openAIResult);
+    if (openAIResult.intent === 'image') {
+      console.log('[INTENT_TRACE]', buildFinalImageTrace(message, openAIResult));
     }
-    routerStateStore.set(geminiResult);
-    return geminiResult;
+    routerStateStore.set(openAIResult);
+    return openAIResult;
   } catch (error) {
-    console.warn('[GEMINI_ROUTER_FALLBACK_TO_RULES]', error);
-    console.log('[GEMINI_ROUTER_RESULT]', {
+    console.warn('[OPENAI_ROUTER_FALLBACK_TO_RULES]', error);
+    console.log('[OPENAI_ROUTER_RESULT]', {
       result: null,
       error: error instanceof Error ? error.message : String(error),
     });

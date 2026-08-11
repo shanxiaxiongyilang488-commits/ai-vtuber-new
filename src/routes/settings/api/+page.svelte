@@ -93,6 +93,7 @@
   let runpodVoiceStatus = $state<ConnectionStatus>('not_tested');
   let runpodVoiceMessage = $state('');
   let runpodVoiceAudioUrl = $state('');
+  let runpodVoiceResolvedBackend = $state<'runpod-pod' | 'runpod-serverless' | null>(null);
   let runpodVideoStatus = $state<ConnectionStatus>('not_tested');
   let runpodVideoMessage = $state('');
   let voiceBackend = $state<VoiceBackend>('local');
@@ -380,6 +381,7 @@
 
   async function testRunpodVoice() {
     runpodVoiceStatus = 'testing';
+    runpodVoiceResolvedBackend = null;
     runpodVoiceMessage = 'RunPodでテスト音声を生成しています。初回は少し時間がかかります。';
     try {
       voiceTtsBackend = 'runpod';
@@ -398,6 +400,7 @@
       runpodVoiceAudioUrl = URL.createObjectURL(audioBlob);
       runpodVoiceStatus = 'connected';
       const backend = response.headers.get('x-voice-backend');
+      runpodVoiceResolvedBackend = backend === 'runpod-pod' || backend === 'runpod-serverless' ? backend : null;
       runpodVoiceMessage = `${backend === 'runpod-pod' ? 'Pod' : 'Serverless'}でテスト音声を生成しました。再生を開始します。`;
       try {
         await new Audio(runpodVoiceAudioUrl).play();
@@ -435,11 +438,12 @@
         runpodVoicePodMessage = 'Voice Podの停止要求を送りました。GPU料金は停止後に止まります。';
       } else {
         const desired = data.pod?.desiredStatus || 'UNKNOWN';
-        const ready = data.voice?.ready === true;
-        runpodVoicePodMessage = ready
-          ? `Voice Podは利用可能です（${desired}）。次の音声からPodを優先します。`
-          : `Pod状態: ${desired}。Irodoriサービスはまだ準備中です。`;
-        runpodVoicePodStatus = ready ? 'connected' : 'failed';
+        const voiceReady = data.voice?.ready === true;
+        const h3Ready = data.h3?.ready === true;
+        runpodVoicePodMessage = (voiceReady || h3Ready)
+          ? `共有Pod: ${desired} / 音声 ${voiceReady ? 'Pod直結OK' : '準備中'} / H3 ${h3Ready ? 'Pod直結OK' : '準備中'}`
+          : `Pod状態: ${desired}。IrodoriとH3ブリッジはまだ準備中です。`;
+        runpodVoicePodStatus = voiceReady || h3Ready ? 'connected' : 'failed';
       }
     } catch (error) {
       runpodVoicePodStatus = 'failed';
@@ -779,10 +783,10 @@
           <input type="password" class="input" bind:value={runpodKey} placeholder="RunPod API key" />
         </label>
         <label class="field wide pod-toggle-field">
-          <span class="field-label">Voice Pod Priority</span>
+          <span class="field-label">Shared Pod Priority</span>
           <span class="pod-toggle">
             <input type="checkbox" bind:checked={runpodVoicePodEnabled} />
-            4090 Podを優先し、利用不可のときだけ既存Serverlessへ退避する
+            音声とH3は4090 Podを優先し、利用不可のときだけ既存Serverlessへ退避する
           </span>
         </label>
         <label class="field">
@@ -795,7 +799,7 @@
           <small>空欄ならPod IDから8791番ポートのURLを自動生成します。</small>
         </label>
         <label class="field">
-          <span class="field-label">Voice Pod Token</span>
+          <span class="field-label">Voice / H3 Shared Pod Token</span>
           <input type="password" class="input" bind:value={runpodVoicePodToken} placeholder="Pod側のtokenファイルの値" />
           <small>公開Proxyの不正利用を防ぐ共有トークンです。</small>
         </label>
@@ -867,6 +871,11 @@
       {/if}
       {#if runpodVoiceMessage}
         <p class="runpod-test-message" class:failed={runpodVoiceStatus === 'failed'}>{runpodVoiceMessage}</p>
+      {/if}
+      {#if runpodVoiceResolvedBackend}
+        <p class="runpod-route-result" class:pod={runpodVoiceResolvedBackend === 'runpod-pod'}>
+          実際の生成先: {runpodVoiceResolvedBackend === 'runpod-pod' ? 'Pod直結' : 'Serverless退避'}
+        </p>
       {/if}
       {#if runpodVoiceAudioUrl}
         <audio
@@ -1394,6 +1403,22 @@
   .btn-test:hover:not(:disabled) { border-color: #6366f1; color: #818cf8; }
   .runpod-test-message { margin: 0.85rem 0 0; color: #86efac; font-size: 0.82rem; }
   .runpod-test-message.failed { color: #fca5a5; }
+  .runpod-route-result {
+    display: inline-flex;
+    margin: 0.6rem 0 0;
+    padding: 0.3rem 0.65rem;
+    border: 1px solid rgba(251, 191, 36, 0.5);
+    border-radius: 999px;
+    background: rgba(120, 53, 15, 0.24);
+    color: #fde68a;
+    font-size: 0.78rem;
+    font-weight: 800;
+  }
+  .runpod-route-result.pod {
+    border-color: rgba(74, 222, 128, 0.5);
+    background: rgba(6, 78, 59, 0.26);
+    color: #a7f3d0;
+  }
   .runpod-test-audio { display: block; width: min(100%, 520px); margin-top: 0.75rem; }
   .pod-toggle-field { gap: 0.6rem; }
   .pod-toggle { display: flex; align-items: center; gap: 0.7rem; color: #cbd5e1; font-size: 0.88rem; }

@@ -10,6 +10,7 @@ export type ProviderChatInput = {
   model?: string;
   temperature?: number;
   maxTokens?: number;
+  reasoningEffort?: 'low' | 'high';
   images?: ChatImageInput[];
 };
 

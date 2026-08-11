@@ -38,12 +38,12 @@ export const IRODORI_TTS_VOICE_OPTIONS = [
 export const COLAB_TTS_VOICE_OPTIONS = IRODORI_TTS_VOICE_OPTIONS;
 
 export const VOICE_ENGINE_OPTIONS = [
+  { value: 'irodori-tts', label: 'Irodori TTS (Recommended)' },
   { value: 'none', label: 'None' },
   { value: 'voicevox', label: 'VOICEVOX' },
-  { value: 'irodori-tts', label: 'Irodori TTS' },
   { value: 'colab-tts', label: 'Colab TTS' },
   { value: 'elevenlabs', label: 'ElevenLabs' },
-  { value: 'piper', label: 'Piper' },
+  { value: 'piper', label: 'Piper Plus (Advanced / manual setup)' },
 ] as const;
 
 export const OLLAMA_MODEL_PRESETS = [

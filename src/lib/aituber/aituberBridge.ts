@@ -2,6 +2,7 @@ import type { AudioLike } from './speechQueue.ts';
 import type { AvatarStatePort } from './types.ts';
 import { AudioLevelAnalyser } from './audioAnalyser.ts';
 import { mapExistingEmotion } from './emotionMapper.ts';
+import type { VoiceOutputEffectMode } from './voiceOutputEffect.ts';
 
 /** 既存の音声再生イベントをAvatarStateへ渡すだけのPhase 1 Bridge。 */
 export class AITuberBridge {
@@ -14,7 +15,11 @@ export class AITuberBridge {
     this.analyser = new AudioLevelAnalyser((level) => this.avatar.setMouthLevel(level));
   }
 
-  createAudio(url: string): AudioLike {
+  unlockAudio(): void {
+    void this.analyser.unlock();
+  }
+
+  createAudio(url: string, effectMode: VoiceOutputEffectMode = 'off'): AudioLike {
     if (typeof window === 'undefined' || typeof Audio === 'undefined') {
       throw new Error('Audio playback is only available in the browser');
     }
@@ -25,7 +30,7 @@ export class AITuberBridge {
     audio.addEventListener('pause', this.handleAudioStop);
     audio.addEventListener('ended', this.handleAudioStop);
     audio.addEventListener('error', this.handleAudioStop);
-    this.analyser.attach(audio);
+    this.analyser.attach(audio, effectMode);
     return audio;
   }
 

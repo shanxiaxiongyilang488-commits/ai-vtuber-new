@@ -18,7 +18,8 @@
   // ===== ローカル state =====
   let name = $state('');
   let aiEngine = $state<AIEngine>('openai');
-  let voiceEngine = $state<VoiceEngine>('none');
+  let voiceEngine = $state<VoiceEngine>('irodori-tts');
+  let showAdvancedVoiceEngines = $state(false);
   let voice = $state('none');
   let voiceId = $state('');
   let speakerId = $state(1);
@@ -35,6 +36,7 @@
       name = character.name;
       aiEngine = character.aiEngine;
       voiceEngine = character.voiceEngine;
+      showAdvancedVoiceEngines = character.voiceEngine === 'piper';
       voice = character.voice ?? character.voiceId ?? 'none';
       voiceId = character.voiceId != null? String(character.voiceId): '4';
       speakerId = character.speakerId ?? 1;
@@ -177,13 +179,25 @@
       <section class="section">
         <div class="section-title">04 ボイス設定</div>
         <select class="cyber-select" bind:value={voiceEngine}>
+          <option value="irodori-tts">Irodori TTS（推奨）</option>
           <option value="none">なし</option>
           <option value="voicevox">VOICEVOX</option>
-          <option value="irodori-tts">Irodori TTS</option>
           <option value="colab-tts">Colab TTS</option>
           <option value="elevenlabs">ElevenLabs</option>
-          <option value="piper">Piper</option>
+          {#if showAdvancedVoiceEngines || voiceEngine === 'piper'}
+            <option value="piper">Piper Plus（上級者向け）</option>
+          {/if}
         </select>
+        <label class="advanced-voice-toggle">
+          <input type="checkbox" bind:checked={showAdvancedVoiceEngines} />
+          上級者向けTTSを表示
+        </label>
+
+        {#if voiceEngine === 'piper'}
+          <p class="advanced-voice-note">
+            Piper Plus はBridge・モデル・辞書・音声アセットの手動セットアップが必要です。
+          </p>
+        {/if}
 
         {#if voiceEngine === 'elevenlabs'}
           <input class="cyber-input" bind:value={voiceId} placeholder="Voice ID" />
@@ -197,7 +211,7 @@
           <input class="cyber-input" type="number" bind:value={speakerId} placeholder="Speaker ID (例: 1)" />
         {/if}
 
-        {#if voiceEngine !== 'none'}
+        {#if voiceEngine !== 'none' && voiceEngine !== 'piper'}
           <button class="btn-test" onclick={testVoice}>▶ テスト音声</button>
         {/if}
       </section>
@@ -409,6 +423,26 @@
   .cyber-select:focus {
     border-color: var(--accent);
     box-shadow: 0 0 0 2px var(--glow);
+  }
+
+  .advanced-voice-toggle {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    color: rgba(255, 255, 255, 0.55);
+    font-size: 11px;
+    cursor: pointer;
+  }
+
+  .advanced-voice-note {
+    margin: 0;
+    padding: 9px 10px;
+    border: 1px solid rgba(251, 191, 36, 0.3);
+    border-radius: 7px;
+    background: rgba(251, 191, 36, 0.06);
+    color: rgba(254, 243, 199, 0.8);
+    font-size: 11px;
+    line-height: 1.55;
   }
 
   .cyber-textarea {

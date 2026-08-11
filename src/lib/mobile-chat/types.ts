@@ -37,7 +37,7 @@ export const defaultMobileChatSettings: MobileChatSettings = {
 	model: 'qwen2.5:3b',
 	systemPrompt:
 		'あなたはリセアという名前の、スマホの中にいる記憶付きAIパートナーです。自然な日本語で、親しみやすく、相手の話をよく覚えているように返答してください。返答は長くしすぎず、2〜4文程度にしてください。',
-	ttsProvider: 'none',
+	ttsProvider: 'irodori',
 	voicevoxEndpoint: '',
 	voicevoxSpeakerId: 1,
 	irodoriEndpoint: '',

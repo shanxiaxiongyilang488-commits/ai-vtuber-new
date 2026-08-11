@@ -6,6 +6,7 @@ import { buildCharacterPrompt } from '$lib/ai/prompts/buildCharacterPrompt'
 import { buildMemoryContext, recordMemoryCoreTurn, type BuiltMemoryPrompt, type MemoryCoreRequest } from '$lib/ai/memory-core/memoryCore';
 import { generateText } from '$lib/aiRouter';
 import { readSettings } from '$lib/server/settings';
+import { buildCharacterTimeTonePrompt, buildEnergyPrompt, buildTimeCorePrompt, getTimeCore } from '../../../core/timeCore';
 
 // =========================
 // 型定義
@@ -16,7 +17,7 @@ export interface ChatRequest {
   speakerName: string;
   listenerName: string;
   topic: string;
-  engine?: 'openai' | 'gemini' | 'claude' | 'ollama' | 'lmstudio' | 'colab-ollama';
+  engine?: 'openai' | 'grok' | 'gemini' | 'claude' | 'ollama' | 'lmstudio' | 'colab-ollama';
   model?: string;
   memory?: MemoryCoreRequest;
 }
@@ -87,10 +88,17 @@ export const POST: RequestHandler = async ({ request }) => {
   // =========================
   // UIの設定を優先
   // =========================
-  const finalSystemPrompt =
+  const configuredSystemPrompt =
     systemPrompt && systemPrompt.trim().length > 0
       ? systemPrompt
       : defaultPrompt;
+  const timeCore = getTimeCore();
+  const finalSystemPrompt = [
+    configuredSystemPrompt,
+    buildTimeCorePrompt(timeCore),
+    buildEnergyPrompt(timeCore, `${speakerName}\n${configuredSystemPrompt}`),
+    buildCharacterTimeTonePrompt(timeCore, `${speakerName}\n${configuredSystemPrompt}`),
+  ].filter(Boolean).join('\n\n');
 
   const memoryContext = buildMemoryContext({
     baseSystemPrompt: finalSystemPrompt,
@@ -192,8 +200,10 @@ export const POST: RequestHandler = async ({ request }) => {
   }
 
   const defaultModel =
-    actualEngine === 'gemini'
-      ? settings.gemini.model || 'gemini-2.5-flash'
+    actualEngine === 'grok'
+      ? settings.grok.model || 'grok-4.5'
+        : actualEngine === 'gemini'
+        ? settings.gemini.model || 'gemini-3.5-flash'
       : actualEngine === 'claude'
         ? settings.anthropic.model || 'claude-haiku-4-5-20251001'
         : settings.openai.model || 'gpt-5.4-mini';

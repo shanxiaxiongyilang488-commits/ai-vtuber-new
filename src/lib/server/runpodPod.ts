@@ -1,5 +1,6 @@
 const RUNPOD_REST_BASE = 'https://rest.runpod.io/v1';
 const DEFAULT_VOICE_PORT = 8791;
+const DEFAULT_H3_PORT = 8792;
 
 export type RunpodPodStatus = {
   id: string;
@@ -30,9 +31,10 @@ function safePodId(value: string): string {
   return podId;
 }
 
-export function resolveRunpodVoicePodUrl(podId: string, configuredUrl = ''): string {
+export function resolveRunpodPodServiceUrl(podId: string, port: number, configuredUrl = ''): string {
   const id = safePodId(podId);
-  const raw = configuredUrl.trim() || `https://${id}-${DEFAULT_VOICE_PORT}.proxy.runpod.net`;
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('RunPod Pod service port is invalid.');
+  const raw = configuredUrl.trim() || `https://${id}-${port}.proxy.runpod.net`;
   const url = new URL(raw);
   if (url.protocol !== 'https:') throw new Error('RunPod Voice Pod URL must use HTTPS.');
   const expectedSuffix = '.proxy.runpod.net';
@@ -43,6 +45,14 @@ export function resolveRunpodVoicePodUrl(podId: string, configuredUrl = ''): str
     throw new Error('RunPod Voice Pod URL does not match the configured Pod ID.');
   }
   return url.toString().replace(/\/+$/, '');
+}
+
+export function resolveRunpodVoicePodUrl(podId: string, configuredUrl = ''): string {
+  return resolveRunpodPodServiceUrl(podId, DEFAULT_VOICE_PORT, configuredUrl);
+}
+
+export function resolveRunpodH3PodUrl(podId: string): string {
+  return resolveRunpodPodServiceUrl(podId, DEFAULT_H3_PORT);
 }
 
 async function restRequest(
@@ -90,6 +100,26 @@ export async function checkRunpodVoicePod(config: RunpodVoicePodConfig): Promise
   health?: Record<string, unknown>;
 }> {
   const baseUrl = resolveRunpodVoicePodUrl(config.podId, config.baseUrl);
+  try {
+    const response = await fetch(`${baseUrl}/health`, {
+      headers: config.token?.trim() ? { authorization: `Bearer ${config.token.trim()}` } : {},
+      cache: 'no-store',
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!response.ok) return { ready: false, baseUrl };
+    const health = await response.json().catch(() => ({})) as Record<string, unknown>;
+    return { ready: health.status === 'ok', baseUrl, health };
+  } catch {
+    return { ready: false, baseUrl };
+  }
+}
+
+export async function checkRunpodH3Pod(config: RunpodVoicePodConfig): Promise<{
+  ready: boolean;
+  baseUrl: string;
+  health?: Record<string, unknown>;
+}> {
+  const baseUrl = resolveRunpodH3PodUrl(config.podId);
   try {
     const response = await fetch(`${baseUrl}/health`, {
       headers: config.token?.trim() ? { authorization: `Bearer ${config.token.trim()}` } : {},

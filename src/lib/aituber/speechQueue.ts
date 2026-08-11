@@ -10,6 +10,7 @@ export interface AudioLike {
 
 export interface SpeechQueueEvents {
   queued?(request: SpeechRequest): void;
+  resolved?(request: SpeechRequest, source: VoiceAudioSource): void;
   started?(request: SpeechRequest): void;
   finished?(request: SpeechRequest): void;
   failed?(request: SpeechRequest, error: unknown): void;
@@ -89,8 +90,17 @@ export class SpeechQueue {
     const controller = new AbortController();
     this.current = { request, controller };
     try {
-      const source = await this.voice.synthesize(request.characterId, request.text, controller.signal);
+      const source = await this.voice.synthesize(
+        request.characterId,
+        request.text,
+        controller.signal,
+        request.voiceCaption,
+        request.voiceSpeed,
+        request.preserveBaseVoice,
+        request.voicePitchShiftSemitones,
+      );
       if (controller.signal.aborted) return;
+      this.events.resolved?.(request, source);
       const audio = this.createAudio(source.url);
       this.current.source = source;
       this.current.audio = audio;
