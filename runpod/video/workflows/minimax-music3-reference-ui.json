@@ -1,0 +1,25 @@
+{
+  "last_node_id": 1,
+  "last_link_id": 0,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "Note",
+      "pos": [120, 120],
+      "size": [620, 320],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "widgets_values": [
+        "MiniMax Music 3 reference\n\nThis is a placeholder for the music lane.\n\nRequired model files:\n- minimax_music3_dit_fp16.safetensors\n- minimax_music3_dit_int8_convrot.safetensors\n- minimax_music3_text_encoder_pruned_int8_convrot.safetensors\n- minimax_music3_dav.safetensors\n\nOpen the official MiniMax Music 3 ComfyUI template, confirm the node classes on this Pod, then export it as API JSON."
+      ]
+    }
+  ],
+  "links": [],
+  "groups": [],
+  "config": {},
+  "extra": { "ds": { "scale": 1.0, "offset": [0, 0] } },
+  "version": 0.4
+}

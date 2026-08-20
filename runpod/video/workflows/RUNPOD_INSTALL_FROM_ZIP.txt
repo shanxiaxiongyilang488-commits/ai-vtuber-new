@@ -1,0 +1,56 @@
+How to install these workflows on RunPod ComfyUI
+
+1. Upload COMFYUI_WORKFLOWS_OPEN_THIS.zip to JupyterLab.
+   Put it in /workspace if possible.
+
+2. Open JupyterLab Terminal.
+
+3. Run:
+
+python3 - <<'PY'
+import pathlib, zipfile
+zip_path = pathlib.Path("/workspace/COMFYUI_WORKFLOWS_OPEN_THIS.zip")
+target_root = pathlib.Path("/workspace/runpod-slim/ComfyUI/user/default/workflows")
+target_pack = target_root / "ai-vtuber"
+for target in (target_root, target_pack):
+    target.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(zip_path) as z:
+        z.extractall(target)
+print("Installed workflows.")
+PY
+
+4. Reload the ComfyUI browser tab.
+
+5. Optional diagnosis:
+
+bash /workspace/runpod-slim/ComfyUI/user/default/workflows/ai-vtuber/DIAGNOSE_ON_RUNPOD.sh
+
+6. Open the Workflow sidebar.
+   If it still looks empty, drag this file from JupyterLab FileBrowser into
+   the ComfyUI graph area:
+
+anima-base-v1-ui.json
+
+Recommended order:
+
+1. anima-base-v1-ui.json
+   Basic image generation. Use this first.
+
+2. anima-shiro-img2img-ui.json
+   Image-to-image from the original Shiro reference image.
+
+3. anima-shiro-posesheet-img2img-ui.json
+   Full-body standing pose collection from the original Shiro design sheet.
+
+4. anima-shiro-turnaround-clean-ui.json
+   Clean full-body turnaround without copying the old reference sheet layout.
+
+5. minimax-h3-shiro-good-morning-ui.json
+   Shiro good morning video: blink, mouth movement, and small hand wave.
+
+6. minimax-h3-i2v-ui.json
+   Image-to-video. Use this only after image generation works.
+
+7. minimax-music3-reference-ui.json
+   Music reference only. Use the official MiniMax Music 3 template in
+   ComfyUI Workflow Templates when it is available on the Pod.

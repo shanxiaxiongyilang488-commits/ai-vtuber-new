@@ -1,0 +1,28 @@
+AI_VTUBER_COMFY_WORKFLOWS
+version: 2026-08-15-0005
+
+Open first:
+anima-base-v1-ui.json
+
+Image workflows:
+anima-base-v1-ui.json
+anima-shiro-img2img-ui.json
+anima-shiro-posesheet-img2img-ui.json
+anima-shiro-turnaround-clean-ui.json
+anima-base-v1-api.json
+anima-lora-v1-api.json
+anima-controlnet-v1-api.json
+
+Video workflows:
+minimax-h3-i2v-ui.json
+minimax-h3-shiro-good-morning-ui.json
+minimax-h3-i2v-api.json
+minimax-h3-reference-api.json
+
+Music workflows:
+minimax-music3-reference-ui.json
+minimax-music3-reference.json
+
+RunPod commands:
+Install with Python zipfile, then run scripts from:
+/workspace/runpod-slim/ComfyUI/user/default/workflows/ai-vtuber

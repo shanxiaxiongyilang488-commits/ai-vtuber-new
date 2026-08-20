@@ -1,0 +1,26 @@
+{
+  "name": "minimax-music3-reference",
+  "kind": "reference-manifest",
+  "executable": false,
+  "reason": "MiniMax Music 3 ComfyUI node graph should be exported from the official ComfyUI template after the local ComfyUI version and node classes are confirmed on the Pod.",
+  "source": {
+    "comfyuiTemplate": "ComfyUI Template Library: MiniMax Music 3",
+    "modelRepo": "MiniMaxAI/MiniMax-Music3"
+  },
+  "requiredModels": [
+    "diffusion_models/minimax_music3_dit_fp16.safetensors",
+    "diffusion_models/minimax_music3_dit_int8_convrot.safetensors",
+    "text_encoders/minimax_music3_text_encoder_pruned_int8_convrot.safetensors",
+    "vae/minimax_music3_dav.safetensors"
+  ],
+  "expectedInputs": {
+    "prompt": "Japanese or English music direction",
+    "lyrics": "Optional lyrics. Leave empty for instrumental/BGM.",
+    "durationSeconds": 30,
+    "seed": 0
+  },
+  "output": {
+    "type": "audio",
+    "format": "wav"
+  }
+}

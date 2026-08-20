@@ -6,11 +6,12 @@ on:
       worker:
         description: Worker image to build
         required: true
-        default: voice
+        default: unified
         type: choice
         options:
           - voice
           - video
+          - unified
 
 permissions:
   contents: read
@@ -23,9 +24,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        worker:
-          - voice
-          - video
+        include:
+          - worker: voice
+            context: runpod/voice
+            dockerfile: runpod/voice/Dockerfile
+          - worker: video
+            context: runpod/video
+            dockerfile: runpod/video/Dockerfile
+          - worker: unified
+            context: runpod
+            dockerfile: runpod/unified/Dockerfile
     steps:
       - name: Check selection
         id: selection
@@ -40,6 +48,15 @@ jobs:
       - name: Check out repository
         if: steps.selection.outputs.enabled == 'true'
         uses: actions/checkout@v4
+
+      - name: Verify RunPod worker contracts
+        if: steps.selection.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          python runpod/unified/test_bridge_auth.py
+          python runpod/unified/test_entrypoint_contract.py
+          python -m unittest discover -s runpod/voice -p 'test_*.py'
+          python -m unittest discover -s runpod/video -p 'test_*.py'
 
       - name: Set up Docker Buildx
         if: steps.selection.outputs.enabled == 'true'
@@ -63,7 +80,8 @@ jobs:
         if: steps.selection.outputs.enabled == 'true'
         uses: docker/build-push-action@v6
         with:
-          context: runpod/${{ matrix.worker }}
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
           platforms: linux/amd64
           push: true
           tags: |
