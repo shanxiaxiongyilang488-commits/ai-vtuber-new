@@ -1,0 +1,15 @@
+{
+  "input": {
+    "task": "voice.speak",
+    "engine": "irodori-v4",
+    "characterId": "shiro",
+    "text": "こんにちは、るーつさん。",
+    "voice": {
+      "mode": "design",
+      "model": "",
+      "caption": "明るく自然な日本語の若い女性声。ドライな一人の声。",
+      "speed": 1.0,
+      "pitchShiftSemitones": 0
+    }
+  }
+}

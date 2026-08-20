@@ -1,0 +1,85 @@
+ComfyUI workflow troubleshooting
+
+1. The Workflow sidebar says empty
+
+This only means the workflow files are not saved inside the RunPod ComfyUI
+workflow folder yet. It does not mean ComfyUI is broken.
+
+Use one of these:
+
+- Drag anima-base-v1-ui.json into the ComfyUI graph area.
+- Or upload COMFYUI_WORKFLOWS_OPEN_THIS.zip and run:
+
+python3 - <<'PY'
+import pathlib, zipfile
+zip_path = pathlib.Path("/workspace/COMFYUI_WORKFLOWS_OPEN_THIS.zip")
+target_root = pathlib.Path("/workspace/runpod-slim/ComfyUI/user/default/workflows")
+target_pack = target_root / "ai-vtuber"
+for target in (target_root, target_pack):
+    target.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(zip_path) as z:
+        z.extractall(target)
+print("Installed workflows.")
+PY
+
+Then reload ComfyUI.
+
+To diagnose workflow/model placement, run:
+
+bash /workspace/runpod-slim/ComfyUI/user/default/workflows/ai-vtuber/DIAGNOSE_ON_RUNPOD.sh
+
+2. Use -ui.json first
+
+Open these in the ComfyUI graph screen:
+
+anima-base-v1-ui.json
+anima-shiro-img2img-ui.json
+anima-shiro-posesheet-img2img-ui.json
+anima-shiro-turnaround-clean-ui.json
+minimax-h3-i2v-ui.json
+minimax-h3-shiro-good-morning-ui.json
+minimax-music3-reference-ui.json
+
+The files ending in -api.json are for API execution or reference. They are not
+the best files for learning node connections on the graph screen.
+
+3. Red model loader node
+
+The selected model file is missing from the ComfyUI models folder.
+
+For anima-base-v1-ui.json, check:
+
+/workspace/runpod-slim/ComfyUI/models/diffusion_models/anima-base-v1.0.safetensors
+/workspace/runpod-slim/ComfyUI/models/text_encoders/qwen_3_06b_base.safetensors
+/workspace/runpod-slim/ComfyUI/models/vae/qwen_image_vae.safetensors
+
+Run this on the Pod if Anima models are missing:
+
+bash /workspace/runpod-slim/ComfyUI/user/default/workflows/ai-vtuber/DOWNLOAD_ANIMA_ON_RUNPOD.sh
+
+4. KSampler failed
+
+Click "Show details" in the red error popup first.
+
+Common causes:
+
+- Missing model file
+- Wrong node type for the installed ComfyUI version
+- H3 video workflow was opened before the H3 custom nodes/models were ready
+- GPU memory issue
+
+Start with anima-base-v1-ui.json. Only move to H3 video after image generation
+works.
+
+5. H3 video
+
+Use minimax-h3-i2v-ui.json only after the H3 worker/model check is green.
+Put a reference image named reference.png in ComfyUI input, or change the
+LoadImage node to the uploaded reference image.
+
+6. Music
+
+minimax-music3-reference-ui.json is a reference note, not a real generation
+workflow yet. MiniMax Music 3 needs the official ComfyUI template/node graph
+from the installed ComfyUI template library, then it should be exported as API
+JSON after the node classes are confirmed on the Pod.

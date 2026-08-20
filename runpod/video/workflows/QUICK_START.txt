@@ -1,0 +1,55 @@
+Quick start
+
+Windows:
+
+1. Open:
+   E:\Dev\ai-vtuber\COMFYUI_WORKFLOWS_OPEN_THIS
+
+2. Upload this file to JupyterLab:
+   COMFYUI_WORKFLOWS_OPEN_THIS.zip
+
+   Expected manifest version:
+   2026-08-15-0005
+
+RunPod JupyterLab Terminal:
+
+1. Install workflows:
+
+   python3 - <<'PY'
+   import pathlib, zipfile
+   zip_path = pathlib.Path("/workspace/COMFYUI_WORKFLOWS_OPEN_THIS.zip")
+   target_root = pathlib.Path("/workspace/runpod-slim/ComfyUI/user/default/workflows")
+   target_pack = target_root / "ai-vtuber"
+   for target in (target_root, target_pack):
+       target.mkdir(parents=True, exist_ok=True)
+       with zipfile.ZipFile(zip_path) as z:
+           z.extractall(target)
+   print("Installed workflows.")
+   PY
+
+2. Diagnose placement and models:
+
+   bash /workspace/runpod-slim/ComfyUI/user/default/workflows/ai-vtuber/DIAGNOSE_ON_RUNPOD.sh
+
+3. If Anima model files are MISS:
+
+   bash /workspace/runpod-slim/ComfyUI/user/default/workflows/ai-vtuber/DOWNLOAD_ANIMA_ON_RUNPOD.sh
+
+ComfyUI:
+
+1. Reload the browser tab.
+
+2. Open this first:
+   anima-base-v1-ui.json
+
+3. If it fails, click Show details in the red error popup.
+
+Order:
+
+1. anima-base-v1-ui.json
+2. anima-shiro-img2img-ui.json
+3. anima-shiro-posesheet-img2img-ui.json
+4. anima-shiro-turnaround-clean-ui.json
+5. minimax-h3-shiro-good-morning-ui.json
+6. minimax-h3-i2v-ui.json
+7. minimax-music3-reference-ui.json
