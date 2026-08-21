@@ -1,6 +1,8 @@
 import type { ChatImageInput, ProviderChatInput } from './types';
 
-export const GEMINI_DEFAULT_MODEL = 'gemini-2.0-flash';
+import { DEFAULT_GEMINI_TEXT_MODEL } from '$lib/server/geminiText';
+
+export const GEMINI_DEFAULT_MODEL = DEFAULT_GEMINI_TEXT_MODEL;
 
 function geminiUserParts(userMessage: string, images: ChatImageInput[]) {
   const parts: any[] = images.map((img, i) => {
@@ -21,7 +23,10 @@ function geminiUserParts(userMessage: string, images: ChatImageInput[]) {
   return parts;
 }
 
-export async function chatGemini(input: ProviderChatInput & { apiKey?: string }): Promise<string> {
+export type GeminiChatResult = { text: string; finishReason: string | null };
+
+/** Same as chatGemini but also returns finishReason so callers can detect MAX_TOKENS truncation. */
+export async function chatGeminiWithMeta(input: ProviderChatInput & { apiKey?: string }): Promise<GeminiChatResult> {
   if (!input.apiKey) throw new Error('Gemini API key is not set');
 
   const images = input.images ?? [];
@@ -74,5 +79,9 @@ export async function chatGemini(input: ProviderChatInput & { apiKey?: string })
     throw new Error('Gemini empty response');
   }
 
-  return text;
+  return { text, finishReason: candidate?.finishReason ?? null };
+}
+
+export async function chatGemini(input: ProviderChatInput & { apiKey?: string }): Promise<string> {
+  return (await chatGeminiWithMeta(input)).text;
 }

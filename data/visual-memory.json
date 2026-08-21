@@ -1,0 +1,208 @@
+{
+  "version": 1,
+  "characters": {
+    "shiro": {
+      "characterId": "shiro",
+      "visualMemory": {
+        "characterName": "Shiro (シロ)",
+        "criticalFeatures": [
+          "HEAD_UNIT_01: fully mechanical white ear sensor units mounted on top of the head, hard-surface robotics with pink inner panels (not biological cat ears)",
+          "TAIL_UNIT_02: segmented white robotic tail with articulated armor segments and cyan joint lights, connected to the rear waist port (not a fur tail)",
+          "White neck-length bob haircut with straight piecey bangs",
+          "Bright blue eyes",
+          "Square black hair clip with a glowing cyan paw print on the right side of her hair",
+          "White high-tech mechanical bodysuit with black segments and cyan glowing accents",
+          "Right shoulder plate featuring a cyan paw print icon above a cyan '02' decal with double underline",
+          "Armored white and black shoulder plate",
+          "Chest plating and mechanical collar with glowing cyan status lights"
+        ],
+        "appearance": {
+          "hair": "White, neck-length bob haircut with straight, slightly parted piecey bangs and longer side strands framing her face. HEAD_UNIT_01 mechanical ear sensor units are mounted on top of her head. A square black hair clip with a glowing cyan paw print is worn on her right side (viewer's left).",
+          "face": "Anime-style youthful face with fair skin, large bright blue eyes with detailed irises, black eyelashes and eyeliner, thin eyebrows, light blush on the cheeks, and a happy open-mouthed smile.",
+          "eyes": "青い瞳",
+          "body": "Slender, fair-skinned female humanoid wearing form-fitting high-tech mechanical armor.",
+          "outfit": "Futuristic form-fitting mechanical bodysuit in white and black with glowing cyan light accents. The right shoulder armor plate is white, decorated with a cyan paw print logo and a cyan '02' number decal underneath. The suit has a high collar and black harness-like structural straps across the chest.",
+          "armor": "白い分割装甲",
+          "colorPalette": [
+            "White",
+            "Black",
+            "Cyan",
+            "Bright Blue",
+            "Pale Pink"
+          ]
+        },
+        "equipment": {
+          "headUnit": "HEAD_UNIT_01: fully mechanical head-mounted ear sensor units. Rigid white armor shells with smooth pink inner panels and cyan glow accents. Hard-surface robotics — no fur, no biological cat ears.",
+          "earUnit": "Mechanical ear sensor units (HEAD_UNIT_01). Rigid white shells, articulated at the base, rendered as smooth mechanical surfaces, never as furry animal ears.",
+          "tailUnit": "TAIL_UNIT_02: segmented robotic tail composed of articulated white armor segments with cyan joint lights, connected to the rear waist connection port. No fur, not an organic tail.",
+          "connectionPort": "Rear waist connection port: mechanical docking port on the lower back where TAIL_UNIT_02 attaches.",
+          "mechanicalParts": [
+            "Mechanical ear sensor units (HEAD_UNIT_01)",
+            "Segmented robotic tail (TAIL_UNIT_02)",
+            "Rear waist connection port",
+            "Armored white and black shoulder plate",
+            "Chest plating and mechanical collar with glowing cyan status lights"
+          ],
+          "accessories": [
+            "肉球ヘアアクセサリー"
+          ]
+        },
+        "motion": {
+          "walking": "",
+          "tailMotion": "TAIL_UNIT_02は重力に従って自然に遅れて揺れる",
+          "earMotion": "HEAD_UNIT_01は感情に合わせて小さく動く"
+        },
+        "rules": {
+          "mustKeep": [
+            "白い分割装甲",
+            "黒い内部フレーム",
+            "HEAD_UNIT_01",
+            "TAIL_UNIT_02",
+            "Rear waist connection port",
+            "Segmented robotic tail",
+            "Mechanical ear sensor units",
+            "シアン発光ライン"
+          ],
+          "avoid": [
+            "Biological cat ears",
+            "Animal ears",
+            "Furry tail",
+            "Organic tail",
+            "Natural cat tail",
+            "生物的な猫耳に変えない",
+            "生物的な猫尻尾に変えない",
+            "普通の服に変えない",
+            "顔アップだけの構図にしない"
+          ]
+        },
+        "references": [],
+        "referenceImages": [
+          {
+            "id": "shiro-identity-reference",
+            "url": "/api/characters/shiro/reference?raw=1",
+            "title": "シロ 外見設定資料",
+            "fileName": "shiro-reference.png",
+            "createdAt": "2026-07-02T07:28:29.059Z",
+            "tags": [
+              "identity",
+              "character-reference"
+            ],
+            "importantFeatures": [
+              "HEAD_UNIT_01",
+              "TAIL_UNIT_02",
+              "CONNECTION_PORT"
+            ],
+            "category": "Reference",
+            "official": true,
+            "critical": true
+          }
+        ]
+      },
+      "updatedAt": "2026-07-03T12:02:24.935Z"
+    },
+    "mike": {
+      "characterId": "mike",
+      "visualMemory": {
+        "characterName": "ミケ",
+        "criticalFeatures": [],
+        "appearance": {
+          "hair": "",
+          "face": "",
+          "eyes": "",
+          "body": "",
+          "outfit": "",
+          "armor": "",
+          "colorPalette": []
+        },
+        "equipment": {
+          "headUnit": "",
+          "earUnit": "",
+          "tailUnit": "",
+          "connectionPort": "",
+          "mechanicalParts": [],
+          "accessories": []
+        },
+        "motion": {
+          "walking": "",
+          "tailMotion": "",
+          "earMotion": ""
+        },
+        "rules": {
+          "mustKeep": [],
+          "avoid": []
+        },
+        "references": [],
+        "referenceImages": [
+          {
+            "id": "mike-identity-reference",
+            "url": "/api/characters/mike/reference?raw=1",
+            "title": "ミケ 外見設定資料",
+            "fileName": "mike-reference.png",
+            "createdAt": "2026-07-02T07:37:56.296Z",
+            "tags": [
+              "identity",
+              "character-reference"
+            ],
+            "importantFeatures": [],
+            "category": "Reference",
+            "official": true,
+            "critical": true
+          }
+        ]
+      },
+      "updatedAt": "2026-07-02T07:37:56.296Z"
+    },
+    "n-02": {
+      "characterId": "n-02",
+      "visualMemory": {
+        "characterName": "N-02",
+        "criticalFeatures": [],
+        "appearance": {
+          "hair": "",
+          "face": "",
+          "eyes": "",
+          "body": "",
+          "outfit": "",
+          "armor": "",
+          "colorPalette": []
+        },
+        "equipment": {
+          "headUnit": "",
+          "earUnit": "",
+          "tailUnit": "",
+          "connectionPort": "",
+          "mechanicalParts": [],
+          "accessories": []
+        },
+        "motion": {
+          "walking": "",
+          "tailMotion": "",
+          "earMotion": ""
+        },
+        "rules": {
+          "mustKeep": [],
+          "avoid": []
+        },
+        "references": [],
+        "referenceImages": [
+          {
+            "id": "n-02-identity-reference",
+            "url": "/api/characters/n-02/reference?raw=1",
+            "title": "N-02 外見設定資料",
+            "fileName": "n-02-reference.png",
+            "createdAt": "2026-07-02T07:37:56.296Z",
+            "tags": [
+              "identity",
+              "character-reference"
+            ],
+            "importantFeatures": [],
+            "category": "Reference",
+            "official": true,
+            "critical": true
+          }
+        ]
+      },
+      "updatedAt": "2026-07-02T07:37:56.296Z"
+    }
+  }
+}

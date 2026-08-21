@@ -1,5 +1,8 @@
 export type MemoryScope = 'shared' | 'character';
 
+/** A memory's role. Assets are deliberately excluded from chat recall. */
+export type MemoryLayer = 'sessionMemory' | 'dailyMemory' | 'longMemory' | 'assetMemory' | 'characterMemory';
+
 export type MemorySource = 'manual' | 'chat' | 'summary' | 'import';
 
 export type MemoryRole = 'user' | 'assistant' | 'system';
@@ -22,6 +25,7 @@ export type LongTermMemory = {
   characterId?: string;
   updatedAt?: string;
   source?: MemorySource;
+  layer?: MemoryLayer;
 };
 
 export type MemorySearchInput = {
@@ -30,6 +34,7 @@ export type MemorySearchInput = {
   sharedMemories: LongTermMemory[];
   characterMemories: LongTermMemory[];
   limit?: number;
+  includeAssets?: boolean;
 };
 
 export type MemorySearchResult = {
@@ -56,12 +61,29 @@ export type BuiltMemoryPrompt = {
   debug: {
     injectedMemoryIds: string[];
     shortTermCount: number;
-    retrievedMemories?: Pick<LongTermMemory, 'id' | 'content' | 'importance' | 'tags' | 'timestamp'>[];
+    retrievedMemories?: Pick<LongTermMemory, 'id' | 'content' | 'importance' | 'tags' | 'timestamp' | 'layer'>[];
+    recall?: {
+      requested: boolean;
+      reason: string;
+      entries: Array<{
+        id?: string;
+        memoryType: MemoryLayer;
+        source?: MemorySource;
+        importance?: number;
+        reason: string;
+        used: boolean;
+        skippedReason?: string;
+        timestamp?: string;
+      }>;
+    };
   };
 };
 
 export type MemoryCoreRequest = {
   enabled?: boolean;
+  /** False by default. Recall only happens after an explicit user request. */
+  autoRecall?: boolean;
+  recallThreshold?: number;
   debug?: boolean;
   characterId?: string;
   characterName?: string;

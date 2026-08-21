@@ -1,0 +1,78 @@
+{
+  "id": "sc-shiro-terminal-01",
+  "isFallback": false,
+  "sourceModel": "gemini-3.5-flash",
+  "parseSuccess": true,
+  "title": "シロの端末操作",
+  "summary": "シロが椅子に座り、正面から端末を操作する15秒の映像設計。",
+  "theme": "端末操作",
+  "goal": "",
+  "characters": [
+    {
+      "id": "char-shiro",
+      "name": "シロ",
+      "role": "主人公",
+      "description": "端末を操作する人物"
+    }
+  ],
+  "references": [],
+  "location": "",
+  "style": "",
+  "emotion": "",
+  "duration": 15,
+  "cuts": [
+    {
+      "id": "cut-01",
+      "order": 1,
+      "time": "0:00〜0:05",
+      "title": "端末の起動",
+      "summary": "椅子に座ったシロが、目の前のホログラム端末を起動する。",
+      "visual": "青い光を放つホログラムディスプレイと、それを見つめるシロ。",
+      "characters": [
+        "シロ"
+      ],
+      "action": "椅子に座った状態で、空中に手を伸ばしてホログラム端末を起動する。",
+      "dialogue": "",
+      "camera": "正面ミディアムショット。シロの表情と起動する端末を正面から捉える。",
+      "emotion": "真剣な表情",
+      "duration": 5,
+      "references": []
+    },
+    {
+      "id": "cut-02",
+      "order": 2,
+      "time": "0:05〜0:10",
+      "title": "高速タイピング",
+      "summary": "シロが真剣な表情でホログラムキーボードを操作する。",
+      "visual": "指先の動きに合わせてエフェクトが弾けるホログラムキーボード。",
+      "characters": [
+        "シロ"
+      ],
+      "action": "両手を使って、空中に浮かぶキーボードを素早くタイピングする。",
+      "dialogue": "",
+      "camera": "斜め前からのアップ。手元の動きと、集中するシロの表情を捉える（後ろ姿は映さない）",
+      "emotion": "集中・真剣",
+      "duration": 5,
+      "references": []
+    },
+    {
+      "id": "cut-03",
+      "order": 3,
+      "time": "0:10〜0:15",
+      "title": "操作完了と安堵",
+      "summary": "操作を完了し、画面を閉じて一息つく。",
+      "visual": "消えゆくホログラムの光と、リラックスするシロ。",
+      "characters": [
+        "シロ"
+      ],
+      "action": "最後のキーを押し、画面をスワイプして閉じる。椅子にもたれかかる。",
+      "dialogue": "",
+      "camera": "正面バストショット。安堵する表情を正面から捉える。",
+      "emotion": "安堵・満足げな微笑み",
+      "duration": 5,
+      "references": []
+    }
+  ],
+  "createdAt": "2026-06-27T21:56:10Z",
+  "updatedAt": "2026-06-27T21:56:10Z"
+}

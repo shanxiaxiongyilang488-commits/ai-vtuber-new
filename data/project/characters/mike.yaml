@@ -1,0 +1,13 @@
+version: 1
+unit_id: "mike"
+source: "character_ref_vision"
+characters:
+  - id: "mike"
+    hair_color: "black and orange"
+    eye_color: "golden brown"
+    ears: "black cat ears with white inner fur"
+    tail: "none visible"
+    android_parts: "none visible"
+    outfit: "white and black form-fitting suit with orange accents, featuring futuristic armor-like segments on the shoulders and chest with orange markings and a number '01' on the right shoulder"
+    accessories: "black square device with an orange paw print on the left side of the head, positioned near the ear"
+    appearance: "unknown"

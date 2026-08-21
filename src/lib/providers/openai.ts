@@ -1,6 +1,7 @@
 import type { ChatImageInput, ProviderChatInput } from './types';
 
 export const OPENAI_DEFAULT_MODEL = 'gpt-5.4-mini';
+export const OPENAI_ORCHESTRATION_MODEL = 'gpt-5.5';
 
 function openAIUserContent(userMessage: string, images: ChatImageInput[]) {
   if (images.length === 0) return userMessage;

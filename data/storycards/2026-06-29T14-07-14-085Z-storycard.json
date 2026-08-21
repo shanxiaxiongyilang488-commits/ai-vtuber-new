@@ -1,0 +1,55 @@
+{
+  "title": "ミケ完成体表示",
+  "duration": 15,
+  "cuts": [
+    {
+      "id": "CUT01",
+      "start": "0:00",
+      "end": "0:04",
+      "title": "研究所背景",
+      "description": "Wide shot of empty laboratory interior with equipment tables and lighting rigs, full-body framing.",
+      "requiredUnits": [
+        "研究所背景"
+      ]
+    },
+    {
+      "id": "CUT02",
+      "start": "0:04",
+      "end": "0:08",
+      "title": "ミケ登場",
+      "description": "Full-body view of ミケ materializing in standing pose, HEAD_UNIT_01 and TAIL_UNIT_02 equipped, facing forward in lab.",
+      "requiredUnits": [
+        "ミケ",
+        "HEAD_UNIT_01",
+        "TAIL_UNIT_02",
+        "研究所背景"
+      ]
+    },
+    {
+      "id": "CUT03",
+      "start": "0:08",
+      "end": "0:12",
+      "title": "モニター確認",
+      "description": "Close-up pan across ミケ's completed full-body form confirming HEAD_UNIT_01 and TAIL_UNIT_02, official key visual framing.",
+      "requiredUnits": [
+        "ミケ",
+        "HEAD_UNIT_01",
+        "TAIL_UNIT_02",
+        "研究所背景"
+      ]
+    },
+    {
+      "id": "CUT04",
+      "start": "0:12",
+      "end": "0:15",
+      "title": "終了",
+      "description": "Static full-body hold of ミケ in completed state within laboratory, official key visual composition.",
+      "requiredUnits": [
+        "ミケ",
+        "HEAD_UNIT_01",
+        "TAIL_UNIT_02",
+        "研究所背景"
+      ]
+    }
+  ]
+}

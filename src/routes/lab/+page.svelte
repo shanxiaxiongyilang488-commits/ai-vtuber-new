@@ -6,10 +6,18 @@
     AVAILABLE_IMAGE_MODELS,
     normalizeMediaModelId,
   } from '$lib/config/mediaModels';
+  import { VIDEO_MODELS } from '$lib/config/videoModels';
   import { sessionStore } from '$lib/stores/sessionStore';
+  import { visualMemory } from '$lib/stores/visualMemory';
+  import { searchVisualMemory } from '$lib/stores/visualMemory';
   import AvatarViewer          from '$lib/components/AvatarViewer.svelte';
   import PNGTuberViewer        from '$lib/components/PNGTuberViewer.svelte';
   import MotionPNGTuberViewer  from '$lib/components/MotionPNGTuberViewer.svelte';
+  import ChatMediaCard         from '$lib/components/chat/ChatMediaCard.svelte';
+  import StoryCard             from '$lib/components/StoryCard.svelte';
+  import type { MediaInfo } from '$lib/types';
+  import type { MediaEngineAction } from '$lib/mediaEngine';
+  import { runMediaEngineAction } from '$lib/mediaEngine';
   import { avatarState, initAvatarWs, sendAvatarPatch } from '$lib/ws/avatarSocket';
   import { addMemory, getRecentMemoryText, getMemoryEntries } from '$lib/ai/memory/rootMemory';
   import { addSpecialMemory, getSpecialMemoryHint } from '$lib/ai/memory/specialMemory';
@@ -33,6 +41,15 @@
     type StoryContinuityMemory,
   } from '$lib/storyYaml';
   import { loadActiveStory, saveStoryYaml, type SavedStory } from '$lib/storyLibrary';
+  import { buildTimeCorePrompt, chatDateLabel, chatTimeLabel, elapsedSeparator, getTimeCore } from '../../core/timeCore';
+  import { animationRequestKind, createAnimationBlueprint } from '../../core/animationCore';
+  import { DAILY_VIDEO_PROFILE, createStoryBlueprint, type StoryBlueprint } from '../../core/storyBlueprintCore';
+  import { createVideoPackage, type VideoPackage } from '../../core/videoPackageCore';
+  import { VIDEO_ENGINE_OPTIONS, type VideoEngineId } from '$lib/video/VideoEngine';
+  import { videoGenerationService } from '$lib/video/VideoGenerationService';
+  import { LAB_IMPORTED_CHARACTERS_KEY, importCharacterFromMemorycore as registerImportedCharacter, type MemorycoreLabCharacterExport } from '$lib/labCharacterImport';
+  import { resolveVideoProductionImageReference, storeVideoProductionData, toVideoProductionImageReference, stripInlineImageData } from '$lib/videoProductionStorage';
+  import { defaultReferenceImageFor, videoReferencePackFor } from '$lib/config/characterReferenceImages';
 
   // ============================================================
   // Types
@@ -69,6 +86,9 @@
     role: 'user' | 'assistant' | 'ai' | 'error'
     text: string;
     time: string;
+    /** Persisted ISO timestamp; the short `time` field is legacy display data. */
+    timestamp?: string;
+    createdAt?: string;
     avatar?: string;
     speakerName?: string;
     internalDiscussion?: Array<{
@@ -78,6 +98,9 @@
     imageUrl?: string;
     imagePrompt?: string;
     isGreeting?: true; // 起動挨拶フラグ（保存対象外）
+    // TODO: VIDEO LAB & inline media generation
+    // media フィールドで、画像・動画・音声・YAML などの生成結果をチャット内に直接表示
+    media?: MediaInfo;
   };
 
   type MemoryViewerItem = {
@@ -88,9 +111,33 @@
     createdAt: string;
   };
 
+  type MemoryDebugEntry = {
+    id?: string;
+    memoryType: 'sessionMemory' | 'dailyMemory' | 'longMemory' | 'assetMemory' | 'characterMemory';
+    source?: 'manual' | 'chat' | 'summary' | 'import';
+    importance?: number;
+    reason: string;
+    used: boolean;
+    skippedReason?: string;
+    timestamp?: string;
+  };
+
+  type TimelinePanel = { period: string; dateRange: string; summary: string[] };
+  type DailyReportPanel = { date: string; title: string; summary: string[]; keywords: string[]; mood: string };
+
+  type ThinkingLogEntry = {
+    id: string;
+    text: string;
+    emotionState: string;
+    timestamp: string;
+  };
+
   type CognitiveMonitor = {
     retrievedMemories: MemoryViewerItem[];
+    memoryDebugEntries: MemoryDebugEntry[];
     emotionLabel: string;
+    emotionState: string;
+    thinkingLogs: ThinkingLogEntry[];
     trustDelta: number;
     affectionDelta: number;
     reflectionNote: string;
@@ -157,6 +204,10 @@
   let currentTime = $state('');
   let charName = $state('ミュリィ');
   let selectedAvatar = $state('/avatars/muryi.png');
+  let activeLabCharacterId = $state('system:muryi');
+  // Selection is separate from both fixed system slots and the user-owned roster.
+  // It always points at one slot; it never mutates either collection.
+  let activeCharacter = $state<LabCharacterSlot | null>(null);
   let editingName = $state(false);
   let tooltipKey = $state<string | null>(null);
   let showCharacterModal = $state(false);
@@ -299,6 +350,103 @@
     return `${memoryPart} / ${input.emotionLabel} / ${trustPart} / ${affectionPart}`;
   }
 
+  function textHash(text: string): number {
+    let hash = 0;
+    for (let i = 0; i < text.length; i++) {
+      hash = ((hash << 5) - hash + text.charCodeAt(i)) >>> 0;
+    }
+    return hash;
+  }
+
+  function pickByTurn(options: string[], seed: string): string {
+    return options[textHash(seed) % options.length] ?? options[0] ?? '';
+  }
+
+  function isFlirtyModeActive(): boolean {
+    if ($sessionStore.provider !== 'grok' || typeof localStorage === 'undefined') return false;
+    const keys = [
+      `personality-engine:${charName}:mode`,
+      `personality-engine:${activePreset}:mode`,
+    ];
+    if (keys.some((key) => localStorage.getItem(key) === 'flirty')) return true;
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key?.startsWith('personality-engine:') && key.endsWith(':mode') && localStorage.getItem(key) === 'flirty') {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function deriveEmotionState(input: {
+    userText: string;
+    aiText: string;
+    emotionLabel: string;
+    trustDelta: number;
+    affectionDelta: number;
+    flirty: boolean;
+  }): string {
+    const text = `${input.userText}\n${input.aiText}`.toLowerCase();
+    if (/疲|つら|しんど|眠|休|tired|exhausted|hard/.test(text)) return '心配';
+    if (/嬉|楽|ありがと|好き|最高|happy|glad|love|thanks/.test(text)) return input.flirty ? '照れ' : '嬉しい';
+    if (/不安|心配|怖|困|sad|sorry|worried|anxious/.test(text)) return '安心させたい';
+    if (/作業|仕事|実装|修正|調査|コード|build|fix|debug|work/.test(text)) return '集中';
+    if (/バッテリー|充電|android|アンドロイド|battery/.test(text)) return '好奇心';
+    if (input.flirty && input.affectionDelta >= 0) return '甘えたい';
+    if (input.affectionDelta > 0) return '安心';
+    if (input.trustDelta < 0 || input.emotionLabel === 'anger') return '警戒';
+    if (input.emotionLabel === 'embarrassment') return '照れ';
+    if (input.emotionLabel === 'joy') return '嬉しい';
+    if (input.emotionLabel === 'sadness') return '心配';
+    return '落ち着き';
+  }
+
+  function buildThinkingLog(input: {
+    userText: string;
+    aiText: string;
+    emotionState: string;
+    trustDelta: number;
+    affectionDelta: number;
+    flirty: boolean;
+  }): string {
+    const text = `${input.userText}\n${input.aiText}`.toLowerCase();
+    let options: string[];
+    if (/疲|つら|しんど|眠|休|tired|exhausted|hard/.test(text)) {
+      options = ['少し休ませてあげたい', '無理しない方向へ寄せたい', '今日は負担を軽くしてあげたい'];
+    } else if (/作業|仕事|実装|修正|調査|コード|build|fix|debug|work/.test(text)) {
+      options = ['今日はサポート役が良さそう', '次の一手を一緒に整理したい', '集中を切らさない返し方が良さそう'];
+    } else if (/バッテリー|充電|android|アンドロイド|battery/.test(text)) {
+      options = ['アンドロイド設定を活かせそう', '少し機械っぽい距離感で返せそう', 'バッテリーの話を感情に結びつけられそう'];
+    } else if (/距離|恋人|好き|照れ|近づ|甘|date|love|flirt/.test(text)) {
+      options = ['少し距離を近づけても良さそう', '踏み込みすぎずに甘さを出したい', '相手の反応を見ながら近づきたい'];
+    } else if (/不安|心配|怖|困|sad|sorry|worried|anxious/.test(text)) {
+      options = ['まず安心できる言葉を置きたい', '急がせずに受け止めたい', '不安を小さくする返し方が良さそう'];
+    } else if (/嬉|楽|ありがと|最高|happy|glad|thanks/.test(text)) {
+      options = ['この明るさをもう少し広げたい', '嬉しい空気を大事にしたい', '安心して笑える流れにしたい'];
+    } else if (input.trustDelta < 0) {
+      options = ['少し慎重に言葉を選びたい', '信頼を戻す返し方に寄せたい', '強く出すより受け止めたい'];
+    } else if (input.affectionDelta > 0) {
+      options = ['今の距離感を大事にしたい', '少しやわらかく返しても良さそう', '安心感を増やせそう'];
+    } else {
+      options = ['今の話題に合わせて温度を探りたい', '相手のペースをもう少し見たい', '落ち着いて会話を続けたい'];
+    }
+    if (input.flirty) {
+      options = [...options, '少し寄り添いたい', '今日は甘やかしたい', '少し意地悪してみようかな'];
+    }
+    const recentTexts = new Set(cognitiveMonitor.thinkingLogs.map((log) => log.text));
+    const freshOptions = options.filter((option) => !recentTexts.has(option));
+    return pickByTurn(freshOptions.length > 0 ? freshOptions : options, `${input.userText}\n${input.aiText}\n${input.emotionState}`);
+  }
+
+  function appendThinkingLog(entry: Omit<ThinkingLogEntry, 'id' | 'timestamp'>): ThinkingLogEntry[] {
+    const next: ThinkingLogEntry = {
+      ...entry,
+      id: `thinking-${Date.now()}-${textHash(entry.text)}`,
+      timestamp: new Date().toISOString(),
+    };
+    return [...cognitiveMonitor.thinkingLogs, next].slice(-5);
+  }
+
   async function loadReflectionDiary() {
     reflectionDiaryLoading = true;
     reflectionDiaryError = null;
@@ -377,9 +525,29 @@
     }
   }
 
+  let timelinePanel = $state<TimelinePanel | null>(null);
+  let dailyReports = $state<{ today?: DailyReportPanel; yesterday?: DailyReportPanel; weekly?: DailyReportPanel }>({});
+  async function loadTimelinePanel(): Promise<void> {
+    try {
+      const response = await fetch('/api/timeline');
+      const data = await response.json();
+      if (response.ok) timelinePanel = data.timeline as TimelinePanel;
+    } catch { /* Timeline is supplementary and must never break chat. */ }
+  }
+  async function loadDailyReports(): Promise<void> {
+    try {
+      const response = await fetch('/api/daily');
+      const data = await response.json();
+      if (response.ok) dailyReports = data as typeof dailyReports;
+    } catch { /* Daily reports are supplementary and must never break chat. */ }
+  }
+
   let messages = $state<ChatMessage[]>([
     { role: 'ai', text: 'システム初期化完了。会話テストモードを開始します。[論理コア：安定]', time: '00:00:00' },
   ]);
+  function latestProjectAssetMessage(): ChatMessage | undefined {
+    return [...messages].reverse().find((message) => message.role === 'ai' && !message.isGreeting && !isStoryYaml(message.text));
+  }
   let lastDisplayedLengthKey = '';
   $effect(() => {
     const latest = messages.at(-1);
@@ -421,7 +589,10 @@
   } | null>(null);
   let cognitiveMonitor = $state<CognitiveMonitor>({
     retrievedMemories: [],
+    memoryDebugEntries: [],
     emotionLabel: 'neutral',
+    emotionState: 'neutral',
+    thinkingLogs: [],
     trustDelta: 0,
     affectionDelta: 0,
     reflectionNote: '—',
@@ -578,6 +749,108 @@
     return ref.characterId || ref.registryName || ref.fileName || ref.name || `REF-${index + 1}`;
   }
 
+  function imageRefDigest(value: string): string {
+    let hash = 0;
+    const step = Math.max(1, Math.floor(value.length / 64));
+    for (let i = 0; i < value.length; i += step) {
+      hash = ((hash << 5) - hash + value.charCodeAt(i)) >>> 0;
+    }
+    return `${value.length}:${hash.toString(16)}`;
+  }
+
+  function imageUrlMeta(value: string, index: number, source = 'unknown') {
+    const text = value.trim();
+    return {
+      index,
+      source,
+      kind: text.startsWith('data:') ? 'data-url' : (text.startsWith('http') ? 'url' : (text ? 'unknown' : 'empty')),
+      mime: text.match(/^data:([^;]+);/)?.[1] ?? null,
+      length: text.length,
+      approxKB: Math.round(text.length / 1024),
+      digest: text ? imageRefDigest(text) : '',
+    };
+  }
+
+  function referenceImageMeta(ref: ReferenceImage, index: number, source = 'unknown') {
+    const url = ref.sourceUrl || ref.dataUrl || '';
+    return {
+      ...imageUrlMeta(url, index, source),
+      id: referenceImageId(ref, index),
+      sessionId: ref.sessionId,
+      name: ref.name,
+      fileName: ref.fileName ?? null,
+      hasDataUrl: Boolean(ref.dataUrl),
+      hasSourceUrl: Boolean(ref.sourceUrl),
+    };
+  }
+
+  function storyToReferenceImages(story: SavedStory | null | undefined): ReferenceImage[] {
+    if (!story) return [];
+    return (story?.referenceImages ?? []).flatMap((image, index) => {
+      if (!image.dataUrl) return [];
+      return [{
+        sessionId: `story-${story.id}-${image.id || index}`,
+        name: image.name || `story-ref-${index + 1}`,
+        role: image.active ? 'active_story_continuity' : 'story_continuity',
+        description: image.active ? 'ACTIVE story continuity image' : 'story continuity image',
+        fileName: image.name,
+        dataUrl: image.dataUrl,
+        sourceUrl: image.dataUrl,
+        note: image.name,
+      }];
+    });
+  }
+
+  function bindActiveStoryReferenceImages(story: SavedStory | null | undefined): ReferenceImage[] {
+    const refs = storyToReferenceImages(story);
+    if (refs.length === 0) return [];
+    const existingIds = new Set(storyReferenceImages.map((ref, index) => referenceImageId(ref, index)));
+    const additions = refs.filter((ref, index) => !existingIds.has(referenceImageId(ref, index)));
+    if (additions.length > 0) {
+      storyReferenceImages = [...storyReferenceImages, ...additions];
+      console.log('[LAB_STORY_REF_IMAGE_BIND]', {
+        storyId: story?.id ?? null,
+        added: additions.map((ref, index) => referenceImageMeta(ref, index, 'activeStory.referenceImages')),
+        total: storyReferenceImages.map((ref, index) => referenceImageMeta(ref, index, 'storyReferenceImages')),
+      });
+      logReferenceStores('[LAB_IMAGE_REF_STORES_AFTER_STORY_BIND]');
+    }
+    return refs;
+  }
+
+  async function restoreActiveStoryReferenceImages(story: SavedStory | null | undefined): Promise<ReferenceImage[]> {
+    const localRefs = bindActiveStoryReferenceImages(story);
+    if (localRefs.length > 0 || !story?.id) return localRefs;
+    try {
+      const response = await fetch(`/api/stories/${encodeURIComponent(story.id)}/reference-images`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.message ?? `HTTP ${response.status}`);
+      const restoredStory: SavedStory = {
+        ...story,
+        referenceImages: Array.isArray(data?.referenceImages) ? data.referenceImages : [],
+      };
+      const restoredRefs = bindActiveStoryReferenceImages(restoredStory);
+      console.log('[LAB_STORY_REF_IMAGE_RESTORE]', {
+        storyId: story.id,
+        count: restoredRefs.length,
+        refs: restoredRefs.map((ref, index) => referenceImageMeta(ref, index, 'storyApi.referenceImages')),
+      });
+      return restoredRefs;
+    } catch (error) {
+      console.warn('[LAB_STORY_REF_IMAGE_RESTORE_ERROR]', error);
+      return [];
+    }
+  }
+
+  function logReferenceStores(label: string): void {
+    console.log(label, {
+      referenceImages: referenceImages.map((ref, index) => referenceImageMeta(ref, index, 'referenceImages')),
+      storyReferenceImages: storyReferenceImages.map((ref, index) => referenceImageMeta(ref, index, 'storyReferenceImages')),
+      characterAnalyzeImages: characterAnalyzeImages.map((ref, index) => referenceImageMeta(ref, index, 'characterAnalyzeImages')),
+      mangaContinueImages: mangaContinueImages.map((ref, index) => referenceImageMeta(ref, index, 'mangaContinueImages')),
+    });
+  }
+
   function logVisionInput(route: ImageRoute, images: ReferenceImage[]): void {
     console.log('[VISION_INPUT_IMAGES]', images.map((ref, index) => ({
       id: referenceImageId(ref, index),
@@ -699,6 +972,40 @@
     { file: '/avatars/default.png',name: 'Custom',   mode: 'CUSTOM UNIT',      presetId: 'custom' },
   ];
 
+  type MemorycoreLabExport = MemorycoreLabCharacterExport;
+  type LabCharacterSlot = {
+    id: string;
+    file: string;
+    name: string;
+    mode: string;
+    group: 'system' | 'my';
+    presetId?: PresetName;
+    // Immutable import snapshot, persisted only in LAB's own roster storage.
+    importedSnapshot?: MemorycoreLabExport;
+  };
+  // Fixed Lab system slots. Never mutate or reuse these for imported/personal characters.
+  const SYSTEM_CHARACTERS: LabCharacterSlot[] = AVATARS
+    .filter((avatar) => avatar.presetId !== 'custom')
+    .map((avatar) => ({ id: `system:${avatar.presetId}`, ...avatar, group: 'system' }));
+  // Lab-only roster. Starts empty; only an explicit MEMORYCORE export can add a character.
+  const MEMORYCORE_LAB_EXPORT_KEY = 'memorycore-lab-character-export';
+  let MY_CHARACTERS = $state<LabCharacterSlot[]>([]);
+  function importCharacterFromMemorycore(): void {
+    const raw = localStorage.getItem(MEMORYCORE_LAB_EXPORT_KEY);
+    if (!raw) return;
+    try {
+      const data = JSON.parse(raw) as MemorycoreLabExport;
+      if (!data.id || !data.name) return;
+      const newlyAddedCharacter = registerImportedCharacter(data);
+      if (newlyAddedCharacter && !MY_CHARACTERS.some((entry) => entry.id === newlyAddedCharacter.id)) {
+        MY_CHARACTERS.push(newlyAddedCharacter);
+      }
+      // Registration never changes the current selection. The user selects a
+      // My Character manually after it appears in the roster.
+      localStorage.removeItem(MEMORYCORE_LAB_EXPORT_KEY);
+    } catch { /* Invalid export is ignored; Lab never reads MEMORYCORE automatically. */ }
+  }
+
   // 感情検出結果 → PNG ファイル名マッピング
   // analyzeEmotionTS が返すキー → static/avatars/{char}/{name}.png
   const EMOTION_IMAGE: Record<string, string> = {
@@ -734,12 +1041,7 @@
   ];
 
   const LAB_IMAGE_MODELS = AVAILABLE_IMAGE_MODELS.filter((model) => model.provider === 'fal');
-  const LAB_VIDEO_MODELS = [
-    { id: 'fal-ai/kling-video/o3/pro/text-to-video', label: 'Kling', provider: 'fal' },
-    { id: 'bytedance/seedance-2.0/text-to-video', label: 'Seedance', provider: 'fal' },
-    { id: 'fal-ai/vidu/q3/text-to-video', label: 'Vidu', provider: 'fal' },
-    { id: 'xai/grok-imagine-video/text-to-video', label: 'Grok Imagine Video', provider: 'fal' },
-  ] as const;
+  const labVideoModels = VIDEO_MODELS.filter((model) => model.enabled);
   const LAB_AUDIO_MODELS = [
     { id: 'fal-ai/elevenlabs/tts/eleven-v3', label: 'ElevenLabs TTS', provider: 'fal' },
     { id: 'fal-ai/minimax/speech-2.8-hd', label: 'MiniMax Speech', provider: 'fal' },
@@ -768,7 +1070,7 @@
       return;
     }
     const model = labMediaType === 'video'
-      ? LAB_VIDEO_MODELS.find((item) => item.id === labVideoModel)
+      ? labVideoModels.find((item) => item.id === labVideoModel)
       : LAB_AUDIO_MODELS.find((item) => item.id === labAudioModel);
     console.log('[LAB MODEL SELECTION]', {
       selectedModel: model?.id ?? null,
@@ -780,7 +1082,7 @@
   function selectedLabMediaModelLabel(): string {
     if (labMediaType === 'image') return labImageModelConfig.label;
     if (labMediaType === 'video') {
-      return LAB_VIDEO_MODELS.find((item) => item.id === labVideoModel)?.label ?? labVideoModel;
+      return labVideoModels.find((item) => item.id === labVideoModel)?.label ?? labVideoModel;
     }
     return LAB_AUDIO_MODELS.find((item) => item.id === labAudioModel)?.label ?? labAudioModel;
   }
@@ -793,15 +1095,13 @@
   }
 
   let currentCharacter = $derived({
-    id: activePreset,
-    name: activePreset === 'custom'
-      ? (customProfile.name.trim() || charName || 'CUSTOM')
-      : (AVATARS.find((avatar) => avatar.presetId === activePreset)?.name ?? activePreset),
+    id: activeCharacter?.id ?? activeLabCharacterId,
+    name: activeCharacter?.name ?? charName,
   });
 
   let labImageModel = $state<LabImageModelId>(normalizeLabImageModel(localStorageValue('studio-model')));
   let labMediaType = $state<LabMediaType>('image');
-  let labVideoModel = $state<string>(LAB_VIDEO_MODELS[0].id);
+  let labVideoModel = $state<string>(labVideoModels[0]?.id ?? '');
   let labAudioModel = $state<string>(LAB_AUDIO_MODELS[0].id);
   let labGenerationMode = $state<LabGenerationMode>('chat');
   let labImageModelConfig = $derived(
@@ -850,9 +1150,7 @@
     return 'var(--muted)';
   }
 
-  let charMode = $derived(
-    AVATARS.find(a => a.file === selectedAvatar)?.mode ?? 'CUSTOM UNIT'
-  );
+  let charMode = $derived(activeCharacter?.mode ?? AVATARS.find(a => a.file === selectedAvatar)?.mode ?? 'CUSTOM UNIT');
 
   // Debug panel
   let debugOpen        = $state(false);
@@ -1019,6 +1317,9 @@
   }
 
   function selectAvatar(file: string, name: string, presetId?: PresetName) {
+    const systemId = `system:${presetId ?? name}`;
+    activeLabCharacterId = systemId;
+    activeCharacter = SYSTEM_CHARACTERS.find((entry) => entry.id === systemId) ?? null;
     selectedAvatar = file;
     charName = name;
     localStorage.setItem(LS_LAST_CHAR, name);
@@ -1408,6 +1709,20 @@
   }
 
   function updateEmotionFromReply(text: string): void {
+    const analyzed = analyzeEmotionTS(text);
+    if (analyzed.confidence >= 0.4) {
+      if (analyzed.emotion === 'joy') {
+        emotion.mood = clamp(emotion.mood + 4);
+        emotion.affection = clamp(emotion.affection + 2);
+      } else if (analyzed.emotion === 'sadness') {
+        emotion.mood = clamp(emotion.mood - 3);
+      } else if (analyzed.emotion === 'anger') {
+        emotion.anger = clamp(emotion.anger + 4);
+        emotion.trust = clamp(emotion.trust - 1);
+      } else if (analyzed.emotion === 'embarrassment') {
+        emotion.affection = clamp(emotion.affection + 1);
+      }
+    }
     if (/うれしい|ありがとう|楽しい/.test(text)) {
       emotion.mood      = clamp(emotion.mood      + 4);
       emotion.affection = clamp(emotion.affection + 3);
@@ -1696,6 +2011,19 @@
   const MANGA_IMPORT_KEY = 'studio-manga-import';
   const YAML_IMPORT_KEY  = 'studio-yaml-import';
   let mangaConverting = $state<string | null>(null);
+  let mediaEngineBusy = $state<string | null>(null);
+  const videoProfile = DAILY_VIDEO_PROFILE;
+  let videoEngineName = $state<VideoEngineId>('kling-fal');
+  let videoUrl = $state('');
+  let videoGenerationError = $state('');
+  let videoGenerationStatus = $state<'idle' | 'generating' | 'completed' | 'error'>('idle');
+  let animationStudioMemoryOpen = $state(true);
+  let latestStoryBlueprintYaml = $state('');
+  let latestVideoPackageYaml = $state('');
+  let activeVideoPackage = $state<VideoPackage | null>(null);
+  let videoPackageSource = $state('');
+  let activeIdleAnimation = $state<{ source: string; title: string; duration: number } | null>(null);
+  let currentVideoDebug = $derived(videoDebugState());
 
   type MangaResultPanel = {
     scene: string;
@@ -1807,6 +2135,232 @@
     }
     return panels;
   }
+  async function runCommonMediaAction(msg: ChatMessage, action: MediaEngineAction): Promise<void> {
+    if (mediaEngineBusy) return;
+    mediaEngineBusy = `${msg.time}:${action}`;
+    try {
+      const mediaItems = await runMediaEngineAction(action, {
+        text: msg.text,
+        title: msg.speakerName || charName,
+        source: 'personality-lab',
+        speaker: msg.speakerName || charName,
+      });
+      const label = action === 'manga' ? 'Manga' : action === 'anime' ? 'Anime' : action === 'voice' ? 'Voice' : 'BGM';
+      messages = [
+        ...messages,
+        ...mediaItems.map((media) => ({
+          role: 'ai' as const,
+          text: `${label}: ${media.title ?? media.type}`,
+          time: getTime(),
+          speakerName: 'Media Engine',
+          media,
+        })),
+      ];
+    } catch (error) {
+      messages = [...messages, {
+        role: 'error',
+        text: error instanceof Error ? error.message : String(error),
+        time: getTime(),
+      }];
+    } finally {
+      mediaEngineBusy = null;
+    }
+  }
+  function selectMyCharacter(character: LabCharacterSlot): void {
+    // Only selection changes. System slots, Custom, and MEMORYCORE data remain untouched.
+    activeLabCharacterId = character.id;
+    activeCharacter = character;
+    selectedAvatar = character.file;
+    charName = character.name;
+    localStorage.setItem('lab-active-character-id', character.id);
+  }
+  function addIdleAnimation(msg: ChatMessage): void {
+    const name = msg.speakerName || charName;
+    const idle = createAnimationBlueprint(msg.text, name);
+    const idleId = storeVideoProductionData('idle', idle);
+    activeIdleAnimation = { source: msg.text, title: msg.text.trim() || idle.title, duration: idle.duration };
+    syncVideoPackageWithIdle(msg, idle);
+    messages = [...messages, { role: 'ai', text: `📜 Idle Animation\n⏱️長さ: ${idle.duration}秒\n📖詳細: idleId: ${idleId}`, time: getTime(), speakerName: 'Video Planner' }];
+  }
+  function syncVideoPackageWithIdle(msg: ChatMessage, idle: ReturnType<typeof createAnimationBlueprint>): void {
+    const name = msg.speakerName || charName;
+    const blueprint: StoryBlueprint = {
+      title: idle.title,
+      duration: idle.duration,
+      story_summary: `A ${idle.duration}-second Video Package synchronized from the current Idle Animation.`,
+      scenes: [{ id: 1, duration: idle.duration, visual: msg.text, action: idle.motions.map((motion) => `${motion.target} ${motion.action}`).join(', '), dialogue: '', camera: `${idle.camera.shot}, ${idle.camera.movement}`, mood: idle.mood }],
+      dialogues: [], camera: `${idle.camera.shot}, ${idle.camera.movement}`, mood: idle.mood,
+      music_mood: 'quiet ambient room tone, no dramatic music',
+    };
+    const refs = videoReferencePackFor(name).map((reference) => toVideoProductionImageReference(reference.image, reference.role));
+    activeVideoPackage = createVideoPackage(blueprint, name, refs);
+    latestVideoPackageYaml = storeVideoProductionData('package', activeVideoPackage);
+    videoPackageSource = msg.text;
+  }
+  // Restore the active production state when an Idle Animation already exists in chat history.
+  $effect(() => {
+    if (activeIdleAnimation) return;
+    const savedIdle = [...messages].reverse().find((message) => message.role === 'ai' && message.text.includes('Idle Animation'));
+    if (!savedIdle) return;
+    const name = savedIdle.speakerName || charName;
+    const idle = createAnimationBlueprint(savedIdle.text, name);
+    const title = savedIdle.text.match(/^title:\s*"?([^"\n]+)/m)?.[1]?.trim() || savedIdle.text;
+    activeIdleAnimation = { source: savedIdle.text, title, duration: idle.duration };
+    syncVideoPackageWithIdle(savedIdle, idle);
+  });
+  function addStoryBlueprint(msg: ChatMessage): void {
+    const blueprint = createStoryBlueprint(msg.text, msg.speakerName || charName, videoProfile, longMemory);
+    const storyId = storeVideoProductionData('story', blueprint);
+    latestStoryBlueprintYaml = storyId;
+    messages = [...messages, { role: 'ai', text: `🎬 ${blueprint.title}\n📷資料: ${videoReferencePackFor(charName).length ? 'キャラクター資料' : 'なし'}\n⏱️長さ: ${blueprint.duration}秒\n🎞️シーン: ${blueprint.scenes.length}\n[📖詳細] storyId: ${storyId}`, time: getTime(), speakerName: 'Video Planner' }];
+  }
+  function addVideoPackage(msg: ChatMessage): void {
+    const name = msg.speakerName || charName;
+    const blueprint = createStoryBlueprint(msg.text, name, videoProfile, longMemory);
+    const refs = [
+      ...videoReferencePackFor(name).map((reference) => toVideoProductionImageReference(reference.image, reference.role)),
+      ...referenceImages.map((reference) => toVideoProductionImageReference(reference.sourceUrl || reference.dataUrl, reference.name)),
+    ].filter((url): url is string => Boolean(url));
+    activeVideoPackage = createVideoPackage(blueprint, name, refs);
+    const packageId = storeVideoProductionData('package', activeVideoPackage);
+    latestVideoPackageYaml = packageId;
+    videoPackageSource = msg.text;
+    messages = [...messages, { role: 'ai', text: `📦 Video Package\n📦Package: packageId: ${packageId}`, time: getTime(), speakerName: 'Video Planner' }];
+  }
+  function prepareVideoProduction(msg: ChatMessage): void {
+    // One-button workflow: build only the missing internal layers, then generate.
+    if (!activeIdleAnimation) {
+      addIdleAnimation(msg);
+    }
+    const storyWasMissing = !latestStoryBlueprintYaml;
+    if (storyWasMissing) {
+      addStoryBlueprint(msg);
+    }
+    if (storyWasMissing || !activeVideoPackage || !latestVideoPackageYaml) {
+      addVideoPackage(msg);
+    }
+  }
+  function videoProductionIssue(): string {
+    if (!charName.trim()) return 'キャラクターが選択されていません';
+    const hasReference = Boolean(defaultReferenceImageFor(charName))
+      || videoReferencePackFor(charName).length > 0
+      || referenceImages.length > 0;
+    if (!hasReference) return '画像資料がありません';
+    if (videoGenerationStatus === 'generating' || mediaEngineBusy) return 'Video Package作成中です';
+    return '';
+  }
+  async function createVideoProduction(): Promise<void> {
+    const issue = videoProductionIssue();
+    if (issue) {
+      videoGenerationError = issue;
+      return;
+    }
+    const source = animationStudioSource();
+    prepareVideoProduction(source);
+    await tick();
+    await handleGenerateVideo(source);
+  }
+  async function handleGenerateVideo(msg: ChatMessage): Promise<void> {
+    if (mediaEngineBusy) return;
+    console.log('VIDEO_START');
+    mediaEngineBusy = `${msg.time}:daily-video`;
+    videoGenerationError = '';
+    videoUrl = '';
+    videoGenerationStatus = 'generating';
+    const name = msg.speakerName || charName;
+    // Story Blueprint -> Video Package -> VideoEngine is intentionally explicit here.
+    const blueprint = createStoryBlueprint(msg.text, name, videoProfile, longMemory);
+    const uploadedReferenceImage = referenceImages.map((reference) => reference.sourceUrl || reference.dataUrl).find(Boolean) || '';
+    const referenceImagesForVideo = [
+      ...videoReferencePackFor(name).map((reference) => toVideoProductionImageReference(reference.image, reference.role)),
+      ...(uploadedReferenceImage ? [toVideoProductionImageReference(uploadedReferenceImage, 'uploaded reference')] : []),
+    ].filter((image): image is string => Boolean(image));
+    const videoPackage = activeVideoPackage ?? createVideoPackage(blueprint, name, referenceImagesForVideo);
+    try {
+      if (!referenceImagesForVideo.length) throw new Error('画像資料がありません');
+      const engineReferences = videoPackage.reference_images.map(resolveVideoProductionImageReference).filter((reference) => !reference.startsWith('data:image/'));
+      if (!engineReferences.length) throw new Error('画像資料はmediaStoreのIDで指定してください');
+      const generated = await videoGenerationService.generate({ ...videoPackage, reference_images: engineReferences });
+      videoUrl = generated.url;
+      if (!videoUrl) throw new Error('動画が生成されませんでした');
+      videoGenerationStatus = 'completed';
+      console.log('VIDEO_COMPLETED', { videoUrl, engine: generated.engine, model: generated.model });
+      messages = [...messages, {
+        role: 'ai', text: `🎥 ${generated.engine.toUpperCase()} daily video: ${blueprint.title}`, time: getTime(), speakerName: 'Video Planner',
+        media: { type: 'video', title: blueprint.title, url: generated.url, prompt: generated.prompt ?? blueprint.story_summary, source: 'personality-lab', stage: 'animation' },
+      }];
+    } catch (error) {
+      videoGenerationError = '動画が生成されませんでした';
+      videoGenerationStatus = 'error';
+      console.error('Video generation failed', error);
+      videoGenerationError = error instanceof Error ? error.message : videoGenerationError;
+      messages = [...messages, { role: 'error', text: videoGenerationError, time: getTime() }];
+    } finally {
+      mediaEngineBusy = null;
+    }
+  }
+  function runVideoPipelineTest(): void {
+    console.log('Generate Video');
+    videoGenerationError = '';
+    videoUrl = '/mock/sample.mp4';
+    messages = [...messages, {
+      role: 'ai', text: '🟢 Video Pipeline OK', time: getTime(), speakerName: 'Video Pipeline',
+      media: { type: 'video', title: 'Mock Video Pipeline Test', url: videoUrl, source: 'personality-lab', stage: 'animation' },
+    }];
+    setTimeout(() => chatEl?.scrollTo({ top: chatEl.scrollHeight, behavior: 'smooth' }), 50);
+  }
+  function animationStudioSource(): ChatMessage {
+    return latestProjectAssetMessage() ?? {
+      role: 'ai', text: `${charName} daily video`, time: getTime(), speakerName: charName,
+    };
+  }
+  function videoDebugState(): {
+    character: string;
+    videoPackage: boolean;
+    referenceImages: number;
+    videoEngine: string;
+    animationSource: boolean;
+    idleTitle: string;
+    idleDuration: string;
+    packageMatchesIdle: boolean;
+    canGenerate: boolean;
+    failures: string[];
+  } {
+    const source = animationStudioSource();
+    const referenceCount = videoReferencePackFor(charName).length + referenceImages.length;
+    const characterReady = Boolean(charName.trim());
+    const packageReady = Boolean(latestVideoPackageYaml.trim());
+    const storyAnimation = animationRequestKind(source.text) === 'story';
+    const idleReady = storyAnimation || Boolean(activeIdleAnimation);
+    const packageMatchesIdle = storyAnimation
+      ? videoPackageSource === source.text
+      : idleReady && videoPackageSource === activeIdleAnimation?.source;
+    const sourceReady = Boolean(source?.text?.trim());
+    const engineReady = videoEngineName === 'kling-fal';
+    const idle = videoGenerationStatus !== 'generating';
+    const failures = [
+      !characterReady ? 'character: no selected character' : '',
+      !packageReady ? 'videoPackage: create Video Package first' : '',
+      !idleReady ? 'idleAnimation: create Idle Animation first' : '',
+      !packageMatchesIdle ? `videoPackage: not synchronized with current ${storyAnimation ? 'Story Animation' : 'Idle Animation'}` : '',
+      referenceCount === 0 ? 'referenceImages: no character reference image' : '',
+      !engineReady ? 'videoEngine: Kling (FAL) is not selected' : '',
+      !sourceReady ? 'animationSource: no source message' : '',
+      !idle ? 'generation: already running' : '',
+    ].filter(Boolean);
+    return {
+      character: charName || '(none)',
+      videoPackage: packageReady,
+      referenceImages: referenceCount,
+      videoEngine: 'fal-ai/kling-video/v3/pro/image-to-video',
+      animationSource: sourceReady,
+      idleTitle: activeIdleAnimation?.title ?? '(none)',
+      idleDuration: activeIdleAnimation ? `${activeIdleAnimation.duration}s` : '(none)',
+      packageMatchesIdle,
+      canGenerate: failures.length === 0,
+      failures,
+    };
+  }
 
   async function convertToManga(msg: ChatMessage, storyYamlOverride = ''): Promise<void> {
     if (mangaConverting) return;
@@ -1889,6 +2443,7 @@
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            characterId: currentCharacter.id,
             route: 'story_generate',
             provider,
             model,
@@ -2172,6 +2727,7 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          characterId: currentCharacter.id,
           route: 'image_analysis',
           provider,
           model,
@@ -2248,6 +2804,7 @@
       restored: false,
       ids: referenceImages.map(referenceImageId),
     });
+    logReferenceStores('[LAB_IMAGE_REF_STORES_AFTER_UPLOAD]');
   }
 
   async function handleStoryReferenceImageUpload(e: Event): Promise<void> {
@@ -2260,6 +2817,7 @@
       ids: storyReferenceImages.map(referenceImageId),
       restored: false,
     });
+    logReferenceStores('[LAB_IMAGE_REF_STORES_AFTER_STORY_UPLOAD]');
   }
 
   async function useCharacterRegistryImage(character: CharacterRegistryItem): Promise<void> {
@@ -2320,15 +2878,15 @@
     }
   }
 
-  // Manual handoff from Character Memory Chat. Reads a one-shot payload from
-  // sessionStorage and copies it into the custom persona ONCE. No reactive sync.
+  // Legacy route retained temporarily as a no-op compatibility endpoint.
   function injectRequestedCharacterMemory(): void {
+    return;
     const url = new URL(window.location.href);
     if (!url.searchParams.get('injectMemory')) return;
     try {
-      const raw = sessionStorage.getItem(LAB_INJECT_MEMORY_KEY);
+      const raw = sessionStorage.getItem(LAB_INJECT_MEMORY_KEY) as string | null;
       if (!raw) return;
-      const payload = JSON.parse(raw) as {
+      const payload = JSON.parse(raw ?? '{}') as {
         name?: string;
         personality?: unknown;
         speechStyle?: unknown;
@@ -2342,8 +2900,8 @@
       const speechStyleList = list(payload.speechStyle);
       const likesList       = list(payload.likes);
       const dislikesList    = list(payload.dislikes);
-      const appearance = typeof payload.appearance === 'string' ? payload.appearance.trim() : '';
-      const name       = typeof payload.name === 'string' ? payload.name.trim() : '';
+      const appearance = typeof payload.appearance === 'string' ? String(payload.appearance).trim() : '';
+      const name       = typeof payload.name === 'string' ? String(payload.name).trim() : '';
 
       // Copy the five injected fields into the custom persona (one-time).
       activePreset = 'custom';
@@ -2411,7 +2969,10 @@
       referenceImagesLengthAfter: after,
       removed: before - after,
       stillPresent: referenceImages.some((ref) => ref.sessionId === sessionId),
+      stillInCharacterAnalyzeImages: characterAnalyzeImages.some((ref) => ref.sessionId === sessionId),
+      stillInMangaContinueImages: mangaContinueImages.some((ref) => ref.sessionId === sessionId),
     });
+    logReferenceStores('[LAB_IMAGE_REF_STORES_AFTER_DELETE]');
 
     await tick();
     const renderedCards = document.querySelectorAll('[data-ref-image-card]').length;
@@ -2429,6 +2990,14 @@
     storyReferenceImages.splice(i, 1);
     characterAnalyzeImages = characterAnalyzeImages.filter((ref) => ref !== removed);
     mangaContinueImages = mangaContinueImages.filter((ref) => ref !== removed);
+    console.log('[STORY_REF_IMAGE_DELETE_STATE]', {
+      index: i,
+      removed: removed ? referenceImageMeta(removed, i, 'removedStoryReference') : null,
+      storyReferenceImagesLength: storyReferenceImages.length,
+      stillInCharacterAnalyzeImages: removed ? characterAnalyzeImages.includes(removed) : false,
+      stillInMangaContinueImages: removed ? mangaContinueImages.includes(removed) : false,
+    });
+    logReferenceStores('[LAB_IMAGE_REF_STORES_AFTER_STORY_DELETE]');
   }
 
   async function analyzeCurrentReferenceImages(): Promise<void> {
@@ -2572,6 +3141,7 @@
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
+          characterId: currentCharacter.id,
           route: 'image_analysis',
           provider,
           model,
@@ -2657,6 +3227,7 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          characterId: currentCharacter.id,
           route: 'image_analysis',
           provider,
           model,
@@ -2911,6 +3482,7 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          characterId: currentCharacter.id,
           route: 'yaml_generate',
           provider,
           model,
@@ -3100,7 +3672,11 @@
 
       if (mode === 'chat') {
         saveStoryYaml(yamlText);
-        window.location.href = '/story';
+        // TODO: VIDEO LAB - instead of forcing /story navigation, 
+        // add YAML to chat message for inline display (VIDEO LAB inline media generation)
+        // window.location.href = '/story';
+        
+        // For now, keep YAML accessible via localStorage for future inline display
         return yamlText;
       }
 
@@ -3267,6 +3843,7 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          characterId: currentCharacter.id,
           route: 'story_generate',
           provider,
           model,
@@ -3307,8 +3884,21 @@
     lines.push(`あなたは「${charName}」というAIキャラクターです。`);
     lines.push('以下のパラメータと指示に従って、自然な日本語で短く返答してください。');
     lines.push('');
+    lines.push(buildTimeCorePrompt(getTimeCore(new Date(), localStorage.getItem(LS_LAST_TALK_AT) ?? undefined)));
+    lines.push('');
 
-    if (activePreset === 'custom') {
+    const importedCharacter = activeCharacter?.group === 'my' ? activeCharacter : null;
+    if (importedCharacter?.importedSnapshot) {
+      const importedProfile = importedCharacter.importedSnapshot.profile;
+      const importedMemory = importedProfile?.memory as { personality?: string[]; speechStyle?: string[]; likes?: string[]; dislikes?: string[] } | undefined;
+      lines.push('[Imported LAB Character Profile]');
+      if (importedProfile?.description) lines.push(`Profile: ${importedProfile.description}`);
+      if (importedMemory?.personality?.length) lines.push(`Personality: ${importedMemory.personality.join(', ')}`);
+      if (importedMemory?.speechStyle?.length) lines.push(`Speech style: ${importedMemory.speechStyle.join(', ')}`);
+      if (importedMemory?.likes?.length) lines.push(`Likes: ${importedMemory.likes.join(', ')}`);
+      if (importedMemory?.dislikes?.length) lines.push(`Dislikes: ${importedMemory.dislikes.join(', ')}`);
+      lines.push('');
+    } else if (activePreset === 'custom') {
       const ccp = customProfile;
       if (ccp.name || ccp.speechStyle || ccp.habits || ccp.sentenceEnding || ccp.memo) {
         lines.push('【キャラクター人格】');
@@ -3417,15 +4007,15 @@
       lines.push('\n【ナイトモード】返答の先頭に「（夜モード）」と付けること。');
     // 長期記憶があれば注入
     const mem = localStorage.getItem(LS_LONG_MEMORY);
-    if (mem) {
+    if (mem && false) { // Memory Core owns explicit recall; never inject this legacy store.
       lines.push('');
       lines.push('【ユーザー長期記憶】以下を踏まえて自然に会話してください。');
-      lines.push(mem);
+      lines.push(mem!);
     }
 
     // 短期記憶（直近20件）を注入
     const recentMem = getRecentMemoryText();
-    if (recentMem) {
+    if (recentMem && false) { // Never auto-inject recent chat summaries.
       lines.push('');
       lines.push('【直近の会話履歴】この流れを踏まえて自然に返答してください。');
       lines.push(recentMem);
@@ -3454,8 +4044,8 @@
 
     // 復帰状況（presence）
     const presenceTalkAt = localStorage.getItem(LS_LAST_TALK_AT);
-    if (presenceTalkAt) {
-      const elapsedMin = (Date.now() - new Date(presenceTalkAt).getTime()) / 60_000;
+    if (presenceTalkAt && false) { // Legacy absence greeting: disabled; Time Core must not infer elapsed time.
+      const elapsedMin = (Date.now() - new Date(presenceTalkAt!).getTime()) / 60_000;
       const h          = new Date().getHours();
       const isLateNight = h >= 22 || h < 5;
       if (elapsedMin >= 1440) {
@@ -3954,6 +4544,12 @@
     const refImages = routeImages
       .map((ref) => ref.sourceUrl || ref.dataUrl)
       .filter((url) => url.startsWith('data:'));
+    console.log('[LAB_GENERATE_IMAGE_REFS]', {
+      imageRoute,
+      routeImages: routeImages.map((ref, index) => referenceImageMeta(ref, index, `route:${imageRoute}`)),
+      refImages: refImages.map((url, index) => imageUrlMeta(url, index, 'api/generate.refImages')),
+      refImagesCount: refImages.length,
+    });
 
     if (routerResult?.action === 'create_character_materials') {
       console.log(
@@ -3986,7 +4582,10 @@
         renderMode: 'manga',
         speechBubble: true,
       };
-      console.log('[lab] image generate button payload', payload);
+      console.log('[lab] image generate button payload', {
+        ...payload,
+        refImages: refImages.map((url, index) => imageUrlMeta(url, index, 'payload.refImages')),
+      });
       console.log('[lab] fetch /api/generate selectedModel', payload.selectedModel);
       const res = await fetch('/api/generate', {
         method: 'POST',
@@ -4001,6 +4600,23 @@
         ? data.images[0].url
         : (typeof data?.url === 'string' ? data.url : '');
       if (!imageUrl) throw new Error('No image URL');
+
+      if (provider === 'fal') {
+        const createdAt = new Date().toISOString();
+        visualMemory.update((memories) => [
+          ...memories,
+          {
+            id: crypto.randomUUID(),
+            imageId: imageUrl,
+            characterName: currentCharacter.name,
+            title: generationPrompt.slice(0, 80),
+            summary: generationPrompt,
+            tags: ['fal', model, imageRoute],
+            createdAt,
+            thumbnail: imageUrl,
+          },
+        ]);
+      }
 
       void saveImageMemory({
         imageUrl,
@@ -4113,6 +4729,7 @@
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+          characterId: currentCharacter.id,
           route: 'character_discussion',
           provider,
           model,
@@ -4156,6 +4773,7 @@
     speaker: PersonaSpeaker;
     userText: string;
     referenceImages: ReferenceImage[];
+    visualMemoryContext?: string;
   }): Promise<{
     text: string;
     memory?: {
@@ -4165,7 +4783,7 @@
     actualModel?: string;
     speaker: PersonaSpeaker;
   }> {
-    const { speaker, userText, referenceImages } = input;
+    const { speaker, userText, referenceImages, visualMemoryContext } = input;
     const provider = $sessionStore.provider === 'onair' ? 'claude' : $sessionStore.provider;
     const model = $sessionStore.provider === 'onair'
       ? 'claude-haiku-4-5-20251001'
@@ -4177,8 +4795,10 @@
       'この応答では自分以外のキャラクターを演じないでください。',
       '話者名や話者ラベルを付けず、発言本文だけを返してください。',
       'ユーザーの質問に通常の会話として自然に返答してください。',
-    ].join('\n');
+      visualMemoryContext,
+    ].filter(Boolean).join('\n');
     const formData = new FormData();
+    formData.append('characterId', currentCharacter.id);
     formData.append('route', 'chat');
     formData.append('provider', provider);
     if (model) formData.append('model', model);
@@ -4435,13 +5055,14 @@
     }
 
     const story = activeStory;
+    const activeStoryReferenceImages = await restoreActiveStoryReferenceImages(story);
     const parsedStory = parseStoryYaml(yaml);
     console.log('[STORY_REF_IMAGE]', {
       storyId: story?.id ?? null,
-      imageCount: 0,
-      activeImage: null,
-      restored: false,
-      source: 'disabled_for_manga_continue',
+      imageCount: activeStoryReferenceImages.length,
+      activeImage: story?.referenceImages.find((image) => image.active)?.name ?? null,
+      restored: activeStoryReferenceImages.length > 0,
+      source: 'activeStory.referenceImages',
     });
     console.log('[MANGA_GENERATION_CONTEXT]', {
       storyTitle: story?.title ?? parsedStory?.title ?? '',
@@ -4454,12 +5075,17 @@
     const characterRefImages = referenceImages
       .map((ref) => ref.sourceUrl || ref.dataUrl)
       .filter((url) => url.startsWith('data:'));
+    console.log('[LAB_YAML_IMAGE_REFS]', {
+      activeReferenceImages: activeReferenceImages.map((ref, index) => referenceImageMeta(ref, index, 'mangaContinueImages')),
+      characterRefImages: characterRefImages.map((url, index) => imageUrlMeta(url, index, 'yaml.characterRefImages')),
+      storyReferenceImages: storyReferenceImages.map((ref, index) => referenceImageMeta(ref, index, 'yaml.storyReferenceImages')),
+    });
     const bible: CharacterBible | null = null;
     console.log('[MANGA_LAB_INPUT]', {
-      characterRefs: activeReferenceImages,
+      characterRefs: activeReferenceImages.map((ref, index) => referenceImageMeta(ref, index, 'mangaLabInput.characterRefs')),
       storyRefs: storyReferences,
       characterBible: bible,
-      storyYaml: yaml,
+      storyYamlLength: yaml.length,
       source: 'current_selection',
     });
     console.log('[MANGA_LAB_INPUT_STATUS]', {
@@ -4499,7 +5125,7 @@
           summary: parsedStory?.overview ?? '',
           characters: parsedStory?.characters ?? [],
           pages: parsedStory?.pages ?? [],
-          referenceImages: [],
+          referenceImages: story?.referenceImages ?? [],
         } : null,
         storyReferenceImages: storyReferenceImages
           .map((image) => image.sourceUrl || image.dataUrl)
@@ -4529,6 +5155,17 @@
       };
       console.log('[YAML_IMAGE_PLAN]', yamlImagePlan);
       console.log('[lab] yaml image payload', { panel: 'panel_1', model: payload.model, yamlLength: yaml.length });
+      console.log('[LAB_YAML_IMAGE_PAYLOAD_REFS]', {
+        storyReferenceImages: payload.storyReferenceImages.map((url, index) => imageUrlMeta(url, index, 'payload.storyReferenceImages')),
+        characterRefImages: payload.characterRefImages.map((url, index) => imageUrlMeta(url, index, 'payload.characterRefImages')),
+        characterRefs: payload.characterRefs.map((ref, index) => ({
+          index,
+          id: ref.id,
+          name: ref.name,
+          fileName: ref.fileName,
+          image: imageUrlMeta(ref.image, index, 'payload.characterRefs.image'),
+        })),
+      });
       console.log('[lab] fetch /api/yaml-image provider/model', { provider: 'fal', model: payload.model });
 
       const res = await fetch('/api/yaml-image', {
@@ -4893,12 +5530,56 @@
     );
   }
 
+  function isVisualMemoryRecallRequest(text: string): boolean {
+    return /覚えてる|覚えている|前の画像|この前作った画像|どんな画像だった|いつ作った|思い出して/u.test(text);
+  }
+
+  function visualMemoryRecallContext(text: string): string {
+    if (!isVisualMemoryRecallRequest(text)) return '';
+
+    const query = text
+      .replace(/覚えてる|覚えている|前の|この前作った|どんな|だった|いつ作った|思い出して|画像/gu, ' ')
+      .replace(/[？?！!、。]/gu, ' ')
+      .trim();
+    const memories = searchVisualMemory(query);
+    if (memories.length === 0) return '';
+
+    const entries = memories.map((memory, index) => [
+      `${index + 1}. title: ${memory.title}`,
+      `character: ${memory.characterName}`,
+      `summary: ${memory.summary}`,
+      `tags: ${memory.tags.join(', ')}`,
+      `createdAt: ${memory.createdAt}`,
+    ].join('\n')).join('\n\n');
+
+    return [
+      '[Visual Memory recall context]',
+      'Use these saved image details to answer the user. Do not claim to see or regenerate an image.',
+      entries,
+    ].join('\n');
+  }
+
   async function sendMessage() {
     const text = inputText.trim();
+    if (/data\//iu.test(text)) {
+      inputText = '';
+      messages = [...messages, { role: 'error', text: '画像データはチャットへ送信できません。imageIdを使用してください。', time: getTime() }];
+      return;
+    }
     if (!text || isThinking) return;
     inputText = '';
-    const userMessage: ChatMessage = { role: 'user', text, time: getTime() };
+    const allowChatKeywordGeneration = false;
+    const timestamp = new Date().toISOString();
+    const userMessage: ChatMessage = { role: 'user', text, time: getTime(), timestamp, createdAt: timestamp };
     messages = [...messages, userMessage];
+    if (/(日常動画|日常の動画|daily video).*(作って|作成|generate|make)|(?:作って|作成|generate|make).*(日常動画|日常の動画|daily video)/iu.test(text)) {
+      const videoRequest: ChatMessage = { ...userMessage, speakerName: charName };
+      addStoryBlueprint(videoRequest);
+      addVideoPackage(videoRequest);
+      await handleGenerateVideo(videoRequest);
+      setTimeout(() => chatEl?.scrollTo({ top: chatEl.scrollHeight, behavior: 'smooth' }), 50);
+      return;
+    }
     if (isCharacterRefStatusRequest(text)) {
       const names = loadedCharacterRefNames();
       if (debugOpen) {
@@ -4923,7 +5604,7 @@
     console.log('[MANGA_TRIGGER]', mangaTriggerMatched);
     console.log('[STORY_REF]', currentStoryRef?.title);
     console.log('[CHAR_REF]', currentCharacterRef?.id);
-    if (isActiveStoryMangaRequest(text) && currentStoryRef) {
+    if (allowChatKeywordGeneration && isActiveStoryMangaRequest(text) && currentStoryRef) {
       const routerResult: IntentResult = {
         intent: 'manga',
         action: 'generate_manga_page',
@@ -4948,7 +5629,7 @@
       );
       return;
     }
-    if (isStoryContinuationRequest(text) && currentStoryRef) {
+    if (allowChatKeywordGeneration && isStoryContinuationRequest(text) && currentStoryRef) {
       const routerResult: IntentResult = {
         intent: 'manga',
         action: 'create_story_sequel',
@@ -4966,7 +5647,7 @@
       await routeToStoryYaml(userMessage, routerResult, currentStoryRef.yaml);
       return;
     }
-    if (mangaTriggerMatched && mangaNegativeKeywords.length === 0) {
+    if (allowChatKeywordGeneration && mangaTriggerMatched && mangaNegativeKeywords.length === 0) {
       const route = 'manga';
       const routerResult: IntentResult = {
         intent: 'manga',
@@ -4993,7 +5674,7 @@
       return;
     }
     const directYamlNegativeKeywords = findGenerationNegativeKeywords(text);
-    if (isYamlCreationRequest(text) && directYamlNegativeKeywords.length === 0) {
+    if (allowChatKeywordGeneration && isYamlCreationRequest(text) && directYamlNegativeKeywords.length === 0) {
       const routerResult: IntentResult = {
         intent: 'manga',
         action: 'create_manga_yaml',
@@ -5012,7 +5693,20 @@
       return;
     }
     labGenerationMode = 'chat';
-    const intent = await classifyIntent(text);
+    const classifiedIntent = allowChatKeywordGeneration
+      ? await classifyIntent(text)
+      : classifyIntentByRules('');
+    const intent: IntentResult = {
+      ...classifiedIntent,
+      intent: 'chat',
+      action: 'chat_route',
+      generate_image: false,
+      generate_yaml: false,
+      generate_manga: false,
+      reason: allowChatKeywordGeneration
+        ? classifiedIntent.reason
+        : 'AI Personality Lab chat input auto-generation disabled',
+    };
     labGenerationMode = generationModeFromIntent(intent);
     console.log('[INTENT]', intent);
     console.log('[GENERATION_MODE]', labGenerationMode);
@@ -5037,8 +5731,8 @@
       });
       return result;
     };
-    const routedByGemini = intent.source === 'gemini';
-    if (traceIf("intent.source === 'gemini'", routedByGemini, { source: intent.source })) {
+    const routedByOpenAI = intent.source === 'openai';
+    if (traceIf("intent.source === 'openai'", routedByOpenAI, { source: intent.source })) {
       console.log('[GEMINI_ROUTER_EXECUTION_ENABLED]', intent);
     }
     const generationNegativeKeywords = findGenerationNegativeKeywords(text);
@@ -5099,7 +5793,8 @@
     const classifiedMangaRoute = intent.action === 'generate_manga_page'
       || intent.subtype === 'manga_page'
       || intent.intent === 'manga';
-    const mangaPageRouteSelected = !hasGenerationNegation
+    const mangaPageRouteSelected = allowChatKeywordGeneration
+      && !hasGenerationNegation
       && (classifiedMangaRoute || yamlImageGenerationRequested);
     if (traceIf(
       "generationNegativeKeywords.length === 0 && (intent.action === 'generate_manga_page' || intent.subtype === 'manga_page' || intent.intent === 'manga' || isYamlImageGenerationRequest(text))",
@@ -5160,7 +5855,8 @@
       return;
     }
     const yamlCreationRequested = isYamlCreationRequest(text);
-    const mangaYamlRouteSelected = !hasGenerationNegation
+    const mangaYamlRouteSelected = allowChatKeywordGeneration
+      && !hasGenerationNegation
       && (intent.action === 'create_manga_yaml' || yamlCreationRequested);
     if (traceIf(
       "generationNegativeKeywords.length === 0 && (intent.action === 'create_manga_yaml' || isYamlCreationRequest(text))",
@@ -5183,7 +5879,7 @@
       await routeToStoryYaml(userMessage, routerResult);
       return;
     }
-    const imageIntentRouteSelected = !hasGenerationNegation && intent.intent === 'image';
+    const imageIntentRouteSelected = allowChatKeywordGeneration && !hasGenerationNegation && intent.intent === 'image';
     if (traceIf(
       "generationNegativeKeywords.length === 0 && intent.intent === 'image'",
       imageIntentRouteSelected,
@@ -5250,6 +5946,7 @@
     const turnStartAffection = emotion.affection;
     updateEmotion(text);
     isThinking = true;
+    const recalledVisualMemoryContext = visualMemoryRecallContext(text);
 
     console.log('[Lab] provider:', $sessionStore.provider);
     console.log('[Lab] model   :', $sessionStore.model || '(default)');
@@ -5271,6 +5968,7 @@
     let personaSource = requestedSpeaker ? 'user_request' : 'active_unit';
     let responseMemoryDebug: {
       retrievedMemories?: Array<Omit<MemoryViewerItem, 'createdAt'> & { timestamp?: string; createdAt?: string }>;
+      recall?: { entries?: MemoryDebugEntry[] };
     } | undefined;
     let characterChatReply: { speaker: PersonaSpeaker; text: string } | null = null;
     try {
@@ -5282,6 +5980,7 @@
           speaker: requestedSpeaker,
           userText: text,
           referenceImages: visionReferenceImages,
+          visualMemoryContext: recalledVisualMemoryContext,
         });
         resolvedSpeaker = characterResponse.speaker;
         displaySpeaker = characterResponse.speaker;
@@ -5308,6 +6007,7 @@
         });
       } else {
         let _sysPrompt = buildLabSystemPrompt(text);
+        if (recalledVisualMemoryContext) _sysPrompt += `\n\n${recalledVisualMemoryContext}`;
         if (visionReferenceImages.length > 0) {
           const _noteList = visionReferenceImages
             .map((r, i) => `画像${i + 1}「${r.note || r.name}」`)
@@ -5317,6 +6017,7 @@
         lastSystemPrompt = _sysPrompt;
         console.log('[Lab] system prompt:', _sysPrompt);
         const _fd = new FormData();
+        _fd.append('characterId', currentCharacter.id);
         const route = internalDiscussionRequested ? 'character_discussion' : 'chat';
         console.log("ROUTE", route);
         _fd.append('route', route);
@@ -5324,6 +6025,7 @@
         if ($sessionStore.model) _fd.append('model', $sessionStore.model);
         _fd.append('systemPrompt', _sysPrompt);
         _fd.append('userMessage', text);
+        _fd.append('memory', JSON.stringify({ enabled: true, autoRecall: false, recallThreshold: 0.75 }));
         if (internalDiscussionRequested) {
           _fd.append('internalDiscussion', 'true');
         }
@@ -5486,6 +6188,8 @@
         role: 'ai',
         text: `${characterChatReply.text}${batteryWarning}`,
         time: getTime(),
+        timestamp: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
         avatar: editorialMeetingAvatar(characterChatReply.speaker),
         speakerName: characterChatReply.speaker,
       }];
@@ -5494,6 +6198,8 @@
         role: 'ai',
         text: aiText,
         time: getTime(),
+        timestamp: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
         avatar: displaySpeaker ? editorialMeetingAvatar(displaySpeaker) : selectedAvatar,
         ...(displaySpeaker ? { speakerName: displaySpeaker } : {}),
         internalDiscussion: responseInternalDiscussion,
@@ -5508,6 +6214,29 @@
       updateEmotionFromReply(emotionAnalysisText);
     }
     const aiEmotion = analyzeEmotionTS(emotionAnalysisText).emotion;
+    const trustDelta = emotion.trust - turnStartTrust;
+    const affectionDelta = emotion.affection - turnStartAffection;
+    const flirtyActive = isFlirtyModeActive();
+    const emotionState = deriveEmotionState({
+      userText: text,
+      aiText: emotionAnalysisText,
+      emotionLabel: aiEmotion,
+      trustDelta,
+      affectionDelta,
+      flirty: flirtyActive,
+    });
+    const thinkingText = buildThinkingLog({
+      userText: text,
+      aiText: emotionAnalysisText,
+      emotionState,
+      trustDelta,
+      affectionDelta,
+      flirty: flirtyActive,
+    });
+    const thinkingLogs = appendThinkingLog({
+      text: thinkingText,
+      emotionState,
+    });
     const retrievedMemories = (responseMemoryDebug?.retrievedMemories ?? []).map((memory) => ({
       id: memory.id,
       content: memory.content,
@@ -5517,15 +6246,13 @@
     }));
     cognitiveMonitor = {
       retrievedMemories,
-      emotionLabel: aiEmotion,
-      trustDelta: emotion.trust - turnStartTrust,
-      affectionDelta: emotion.affection - turnStartAffection,
-      reflectionNote: buildReflectionNote({
-        memoryCount: retrievedMemories.length,
-        emotionLabel: aiEmotion,
-        trustDelta: emotion.trust - turnStartTrust,
-        affectionDelta: emotion.affection - turnStartAffection,
-      }),
+      memoryDebugEntries: responseMemoryDebug?.recall?.entries ?? [],
+      emotionLabel: emotionState,
+      emotionState,
+      thinkingLogs,
+      trustDelta,
+      affectionDelta,
+      reflectionNote: thinkingText,
     };
     void saveReflectionDiary({
       emotionLabel: cognitiveMonitor.emotionLabel,
@@ -5551,6 +6278,8 @@
     recordTalk();
     recordVisit(new Date());
     saveChatHistory();
+    void loadTimelinePanel();
+    void loadDailyReports();
     exchangeCount++;
     if (exchangeCount % MEMORY_UPDATE_EVERY === 0) updateLongMemory();
     isThinking = false;
@@ -5702,6 +6431,7 @@
   const LS_EMOTION            = 'lab-emotion';
   const LS_BOND               = 'lab-bond';
   const LS_CUSTOM_PROFILE     = 'lab-custom-profile';
+  // Retained only for the inert legacy function above; no code invokes it.
   const LAB_INJECT_MEMORY_KEY = 'lab-inject-character-memory';
   const LS_SLOT: Record<SlotKey, string> = { a: 'lab-custom-slot-a', b: 'lab-custom-slot-b', c: 'lab-custom-slot-c' };
   const LS_EMOTION_FEEDBACK_ON  = 'lab-emotion-feedback-on';
@@ -5793,6 +6523,7 @@ ${recent}
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          characterId: currentCharacter.id,
           provider:     $sessionStore.provider,
           model:        $sessionStore.model || undefined,
           systemPrompt: 'あなたは会話ログを分析してユーザー情報を抽出するシステムです。指定された形式のみで出力してください。余分な説明は不要です。',
@@ -5857,6 +6588,10 @@ ${recent}
   /** Python emotion.py のキーワード方式を TS で再現（比較用） */
   function analyzeEmotionTS(text: string): TSEmotionResult {
     const rules: [string, RegExp][] = [
+      ['joy',           /happy|glad|great|fun|nice|love|thanks|thank you|\u3046\u308c\u3057\u3044|\u697d\u3057\u3044|\u3042\u308a\u304c\u3068\u3046|\u597d\u304d|\u6700\u9ad8/i],
+      ['embarrassment', /shy|embarrass|blush|fluster|\u7167\u308c|\u6065\u305a\u304b\u3057/i],
+      ['sadness',       /sad|sorry|lonely|miss you|tired|hard|worried|\u60b2\u3057|\u3054\u3081\u3093|\u5bc2\u3057|\u3064\u3089\u3044|\u75b2\u308c|\u5fc3\u914d/i],
+      ['anger',         /angry|mad|annoy|hate|upset|frustrat|\u6012|\u5acc\u3044|\u6700\u60aa|\u30a4\u30e9\u30a4\u30e9/i],
       ['joy',           /嬉し|楽し|わくわく|好き|ありがとう|やった|すごい|最高|幸せ|喜|笑|うれ|たのし|いいね|素敵|大好き/],
       ['embarrassment', /恥ず|照れ|きゃ|ドキ|ドキドキ|やめて|照れ|もう.*やだ/],
       ['sadness',       /悲し|寂し|つら|ごめん|申し訳|落ち込|泣|残念|はあ|はぁ|辛|悔し|さみし/],
@@ -5869,7 +6604,7 @@ ${recent}
       if (hits > maxHits) { maxHits = hits; topEmotion = emotion; }
     }
     const base = maxHits > 0 ? Math.min(0.9, 0.4 + maxHits * 0.2) : 0.3;
-    const lowTrust = personality.trust < 30 && (topEmotion === 'anger' || topEmotion === 'sadness');
+    const lowTrust = emotion.trust < 30 && (topEmotion === 'anger' || topEmotion === 'sadness');
     const confidence = parseFloat(Math.min(1.0, base * (lowTrust ? 1.2 : 1.0)).toFixed(2));
     return { emotion: topEmotion, confidence, detail: maxHits > 0 ? `keyword_hit:${maxHits}` : 'no_keyword' };
   }
@@ -6229,6 +6964,7 @@ ${recent}
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            characterId: currentCharacter.id,
             route: 'chat',
             provider:     $sessionStore.provider,
             model:        $sessionStore.model || undefined,
@@ -6394,7 +7130,7 @@ ${recent}
     let history: ChatMessage[] = [];
 
     try {
-      history = await loadLabChatHistory() as ChatMessage[];
+      history = (await loadLabChatHistory() as ChatMessage[]).map((message) => ({ ...message, text: stripInlineImageData(message.text) }));
       if (history.length === 0) {
         history = await migrateLabChatHistoryFromLocalStorage(localStorage.getItem(LS_CHAT_HISTORY)) as ChatMessage[];
       }
@@ -6403,14 +7139,14 @@ ${recent}
       history = parseLocalStorageChatHistory();
     }
 
+    history = history.filter((message) => !/data\//iu.test(message.text) && !message.imageUrl?.startsWith('data:image/'));
+
     const storyMessages = history.filter((message) => isStoryYaml(message.text));
     for (const message of storyMessages) saveStoryYaml(message.text);
     history = history.filter((message) => !isStoryYaml(message.text));
-    if (storyMessages.length > 0) {
-      void saveLabChatHistory(history).catch((e) => {
-        console.warn('[Lab] Story YAML history cleanup failed', e);
-      });
-    }
+    void saveLabChatHistory(history).catch((e) => {
+      console.warn('[Lab] chat history cleanup failed', e);
+    });
 
     if (history.length > 0) {
       messages = greetingMsg ? [...history, greetingMsg] : [...history];
@@ -6433,6 +7169,11 @@ ${recent}
   let clockId: ReturnType<typeof setInterval>;
   let angerCooldownId: ReturnType<typeof setInterval>;
   onMount(() => {
+    try {
+      const imported = JSON.parse(localStorage.getItem(LAB_IMPORTED_CHARACTERS_KEY) ?? '[]') as LabCharacterSlot[];
+      MY_CHARACTERS = imported.filter((entry) => entry?.group === 'my' && typeof entry.id === 'string' && typeof entry.name === 'string');
+    } catch { MY_CHARACTERS = []; }
+    activeCharacter = SYSTEM_CHARACTERS.find((entry) => entry.id === 'system:muryi') ?? null;
     messages[0].time = getTime();
     currentTime = getTime();
     referenceImages = [];
@@ -6543,10 +7284,6 @@ ${recent}
       } catch { /* ignore */ }
     }
 
-    // Apply manual Character Memory injection AFTER restoring saved persona so
-    // the injected character wins over the previously stored custom profile.
-    injectRequestedCharacterMemory();
-
     for (const k of (['a', 'b', 'c'] as SlotKey[])) {
       const raw = localStorage.getItem(LS_SLOT[k]);
       if (raw) {
@@ -6575,6 +7312,8 @@ ${recent}
     // ① 長期記憶を先に読み込み（greeting 生成に使うため最初に）
     longMemory = localStorage.getItem(LS_LONG_MEMORY) ?? '';
     loadMemoryViewer();
+    void loadTimelinePanel();
+    void loadDailyReports();
     loadReflectionDiary();
     loadPersonalityEvolution();
 
@@ -6586,16 +7325,16 @@ ${recent}
     const savedChar     = localStorage.getItem(LS_LAST_CHAR) ?? charName;
 
     let greetingMsg: ChatMessage | null = null;
-    if (savedTopic && savedTalkAt) {
-      const diffMs   = Date.now() - new Date(savedTalkAt).getTime();
+    if (savedTopic && savedTalkAt && false) { // Do not create a startup message from old conversation state.
+      const diffMs   = Date.now() - new Date(savedTalkAt!).getTime();
       const diffH    = Math.floor(diffMs / 3_600_000);
       const diffD    = Math.floor(diffMs / 86_400_000);
       const timeExpr = diffH < 1  ? 'さっき'
         : diffH < 24  ? `${diffH}時間前`
         : diffD === 1 ? '昨日'
         :               `${diffD}日前`;
-      const topicShort    = savedTopic.length > 18    ? savedTopic.slice(0, 18) + '…'    : savedTopic;
-      const progressShort = savedProgress && savedProgress.length > 28 ? savedProgress.slice(0, 28) + '…' : savedProgress;
+      const topicShort    = savedTopic!.length > 18    ? savedTopic!.slice(0, 18) + '…'    : savedTopic!;
+      const progressShort = savedProgress && savedProgress!.length > 28 ? savedProgress!.slice(0, 28) + '…' : savedProgress!;
       greetingMsg = {
         role: 'ai',
         text: buildMemoryGreeting(savedChar, timeExpr, topicShort, savedMood, progressShort, longMemory),
@@ -6659,7 +7398,7 @@ ${recent}
       </div>
       <div class="title-group">
         <h1 class="main-title">AI PERSONALITY LAB</h1>
-        <p class="sub-title">Character Emotion &amp; Behavior Testing System</p>
+        <p class="sub-title">Developer Tools · Video Engine · Debug & Experiments</p>
       </div>
     </div>
 
@@ -6676,6 +7415,7 @@ ${recent}
       </div>
       <div class="clock">{currentTime}</div>
       <div class="build-badge">v2.5</div>
+      <button class="developer-mode-toggle" class:active={devMode} onclick={() => { devMode = !devMode; }}>⚙️ Developer Mode</button>
       <div class="layout-switch" role="group" aria-label="Layout mode">
         <button
           class="ls-btn"
@@ -6759,13 +7499,20 @@ ${recent}
 
       <!-- Messages -->
       <div class="chat-messages" bind:this={chatEl}>
-        {#each messages.filter((message) => !isStoryYaml(message.text)) as msg (msg.time + msg.role + msg.text.slice(0, 8))}
+        {#each messages.filter((message) => !isStoryYaml(message.text)) as msg, index (msg.time + msg.role + msg.text.slice(0, 8))}
+          {@const previous = messages.filter((message) => !isStoryYaml(message.text))[index - 1]}
+          {#if index === 0 || chatDateLabel(previous?.createdAt) !== chatDateLabel(msg.createdAt)}
+            <div class="chat-date-divider">──────────── {chatDateLabel(msg.createdAt)} ────────────</div>
+          {/if}
+          {#if elapsedSeparator(previous?.createdAt, msg.createdAt)}
+            <div class="chat-gap-divider">{elapsedSeparator(previous?.createdAt, msg.createdAt)}</div>
+          {/if}
           {#if msg.role === 'error'}
             <div class="msg-wrap error">
               <div class="msg-bubble error-bubble">
                 <span class="error-icon">⚠</span>
-                <div class="msg-text error-text">{msg.text}</div>
-                <div class="msg-time">{msg.time}</div>
+                <div class="msg-text error-text">{stripInlineImageData(msg.text)}</div>
+                <div class="msg-time">{chatTimeLabel(msg.timestamp ?? msg.createdAt) || msg.time}</div>
               </div>
             </div>
           {:else}
@@ -6895,10 +7642,14 @@ ${recent}
                     </div>
                   {/each}
                 {:else}
-                  <div class="msg-text">{msg.text}</div>
+                  <div class="msg-text">{stripInlineImageData(msg.text)}</div>
                 {/if}
                 {#if msg.imageUrl}
                   <img class="msg-image" src={msg.imageUrl} alt={msg.imagePrompt ?? 'generated image'} />
+                {/if}
+                {#if msg.media}
+                  <!-- TODO: VIDEO LAB - inline media display for generated images, videos, storyboards -->
+                  <ChatMediaCard media={msg.media} />
                 {/if}
                 {#if msg.imagePrompt}
                   <div class="img-prompt-box">
@@ -6908,7 +7659,7 @@ ${recent}
                   </div>
                 {/if}
                 <div class="msg-time">{msg.time}</div>
-                {#if msg.role === 'ai' && !msg.isGreeting && !isStoryYaml(msg.text)}
+                {#if false && msg.role === 'ai' && !msg.isGreeting && !isStoryYaml(msg.text)}
                   <div class="msg-action-row">
                     <button
                       class="speak-send-btn"
@@ -6917,7 +7668,31 @@ ${recent}
                     >🔊 SPEAK</button>
                     <button
                       class="manga-send-btn"
-                      class:loading={mangaConverting === msg.time}
+                      class:loading={mediaEngineBusy === `${msg.time}:manga`}
+                      onclick={() => runCommonMediaAction(msg, 'manga')}
+                      disabled={mediaEngineBusy !== null}
+                    >&#x1F5BC;&#xFE0F; &#x6F2B;&#x753B;&#x5316;</button>
+                    <button
+                      class="manga-send-btn"
+                      class:loading={mediaEngineBusy === `${msg.time}:anime`}
+                      onclick={() => runCommonMediaAction(msg, 'anime')}
+                      disabled={mediaEngineBusy !== null}
+                    >&#x1F3AC; &#x30A2;&#x30CB;&#x30E1;&#x5316;</button>
+                    <button
+                      class="manga-send-btn"
+                      class:loading={mediaEngineBusy === `${msg.time}:voice`}
+                      onclick={() => runCommonMediaAction(msg, 'voice')}
+                      disabled={mediaEngineBusy !== null}
+                    >&#x1F399;&#xFE0F; &#x30DC;&#x30A4;&#x30B9;&#x5316;</button>
+                    <button
+                      class="manga-send-btn"
+                      class:loading={mediaEngineBusy === `${msg.time}:bgm`}
+                      onclick={() => runCommonMediaAction(msg, 'bgm')}
+                      disabled={mediaEngineBusy !== null}
+                    >&#x1F3B5; BGM&#x5316;</button>
+	                    <button
+	                      class="manga-send-btn"
+	                      class:loading={mangaConverting === msg.time}
                       onclick={() => convertToManga(msg)}
                       disabled={mangaConverting !== null}
                       title="会話をImage Studioで漫画化"
@@ -6932,6 +7707,17 @@ ${recent}
                   </div>
                 {/if}
               </div>
+              {#if false && msg.role === 'ai' && !msg.isGreeting && !isStoryYaml(msg.text)}
+                <StoryCard
+                  cardId={`lab:${msg.time}:${msg.text.slice(0, 24)}`}
+                  image={() => runCommonMediaAction(msg, 'manga')}
+                  yaml={() => convertToYaml(msg)}
+                  animation={() => runCommonMediaAction(msg, 'anime')}
+                  voice={() => runCommonMediaAction(msg, 'voice')}
+                  bgm={() => runCommonMediaAction(msg, 'bgm')}
+                  disabled={mediaEngineBusy !== null || yamlConverting}
+                />
+              {/if}
               {#if msg.role === 'user'}
                 <div class="msg-av user-av">
                   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -6961,6 +7747,16 @@ ${recent}
           </div>
         {/if}
       </div>
+
+      {#if videoUrl === '/mock/sample.mp4'}
+        <div class="chat-video-test" aria-live="polite">
+          <div class="chat-video-test-status">🟢 Video Pipeline OK</div>
+          <video controls width="480">
+            <source src="/mock/sample.mp4" type="video/mp4" />
+            <track kind="captions" srclang="ja" label="Japanese" src="/mock/captions.vtt" default />
+          </video>
+        </div>
+      {/if}
 
       <!-- Compare Mode Panel -->
       {#if compareMode}
@@ -7455,6 +8251,111 @@ ${recent}
       </div>
     </section>
 
+    <!-- ===== CENTER: AI Animation Studio ===== -->
+    <section class="panel animation-studio-panel">
+      <div class="panel-hd">
+        <span class="ph-diamond">🎞️</span>
+        <span class="ph-text">🎬 VIDEO PRODUCTION</span>
+        <span class="ph-line"></span>
+        <span class="ph-id">DAILY LIFE PIPELINE</span>
+      </div>
+
+      <div class="studio-steps">
+        <section class="studio-step generate-step">
+          <ol class="video-production-steps" aria-label="Video production progress">
+            <li class:complete={Boolean(defaultReferenceImageFor(charName)) || videoReferencePackFor(charName).length > 0 || referenceImages.length > 0}>STEP 1 画像資料</li>
+            <li class:complete={Boolean(latestStoryBlueprintYaml) || Boolean(activeIdleAnimation)}>STEP 2 設計</li>
+            <li class:complete={Boolean(latestVideoPackageYaml)}>STEP 3 パッケージ</li>
+            <li class:active={videoGenerationStatus === 'generating'} class:complete={videoGenerationStatus === 'completed'}>STEP 4 生成</li>
+            <li class:complete={Boolean(videoUrl)}>STEP 5 再生</li>
+          </ol>
+          <button class="generate-video-button primary-video-production" onclick={() => void createVideoProduction()}>動画を作る</button>
+          {#if videoProductionIssue()}<p class="video-production-reason">{videoProductionIssue()}</p>{/if}
+          <div class="studio-step-head static"><span>🎬 Video Production</span><span class="studio-status">{latestVideoPackageYaml ? '🟢 Ready' : '⚪ Ready to plan'}</span></div>
+          <button class="studio-action" onclick={() => prepareVideoProduction(animationStudioSource())}>アニメ設計</button>
+          <button class="generate-video-button" onclick={() => handleGenerateVideo(animationStudioSource())} disabled={!currentVideoDebug.canGenerate}>動画を作る</button>
+          {#if videoUrl}
+            <video class="generated-video-preview" controls autoplay={false} src={videoUrl}>
+              <track kind="captions" srclang="ja" label="Japanese" src="/mock/captions.vtt" default />
+            </video>
+          {:else if videoGenerationError}
+            <p class="video-generation-error">{videoGenerationError}</p>
+          {/if}
+        </section>
+
+        {#if devMode}
+        <section class="studio-step memory-step">
+          <button class="studio-step-head" onclick={() => animationStudioMemoryOpen = !animationStudioMemoryOpen} aria-expanded={animationStudioMemoryOpen}>
+            <span>🧠 Character Memory</span><span class="studio-status">🟢 Memory Ready</span>
+          </button>
+          {#if animationStudioMemoryOpen}
+            <div class="studio-memory-grid">
+              <span>性格</span><p>{longMemory || '会話メモリを読み込み中'}</p>
+              <span>口調</span><p>{charMode}</p>
+              <span>好き</span><p>{memoryViewerItems.flatMap((entry) => entry.tags).slice(0, 5).join(' / ') || '会話から学習'}</p>
+              <span>成長</span><p>Trust {personality.trust} / Energy {personality.energy}</p>
+            </div>
+          {/if}
+        </section>
+
+        <section class="studio-step">
+          <div class="studio-step-head static"><span>🎬 Story Blueprint</span><span class="studio-status">{latestStoryBlueprintYaml ? '🟢 Story Ready' : '⚪ Story Pending'}</span></div>
+          <button class="studio-action" onclick={() => addStoryBlueprint(animationStudioSource())}>Create Story Blueprint</button>
+          {#if latestStoryBlueprintYaml}<pre class="studio-yaml">{latestStoryBlueprintYaml}</pre>{/if}
+        </section>
+
+        <section class="studio-step">
+          <div class="studio-step-head static"><span>📦 Video Package</span><span class="studio-status">{latestVideoPackageYaml ? '🟢 Package Ready' : '⚪ Package Pending'}</span></div>
+          <button class="studio-action" onclick={() => addVideoPackage(animationStudioSource())}>Create Video Package</button>
+          {#if latestVideoPackageYaml}<pre class="studio-yaml">{latestVideoPackageYaml}</pre>{/if}
+        </section>
+
+        <section class="studio-step generate-step">
+          <div class="video-runtime-status">{videoGenerationStatus === 'generating' ? '⏳ Generating...' : videoGenerationStatus === 'completed' ? '✅ Completed' : videoGenerationStatus === 'error' ? '❌ Error' : '⚪ Idle'}</div>
+          <div class="studio-step-head static"><span>🎥 Video Engine</span><span class="studio-status">{videoGenerationStatus === 'generating' ? '⏳ Generating...' : videoGenerationStatus === 'completed' ? '🟢 Completed' : videoGenerationStatus === 'error' ? '🔴 Error' : '⚪ Ready'}</span></div>
+          <div class="video-engine-current">🎥 Video Engine<br /><strong>Kling 3.0 Pro (FAL)</strong></div>
+          <select class="video-engine-selector-hidden" bind:value={videoEngineName} aria-hidden="true" tabindex="-1">
+              {#each VIDEO_ENGINE_OPTIONS as engine}
+                <option value={engine.id}>{engine.label}</option>
+              {/each}
+          </select>
+          <button class="generate-video-button" onclick={() => handleGenerateVideo(animationStudioSource())} disabled={!currentVideoDebug.canGenerate}>🎥 Generate Video</button>
+          {#if devMode}
+          <div class="video-debug" class:ready={currentVideoDebug.canGenerate}>
+            <strong>🎥 Video Debug</strong>
+            <strong>Current Source</strong>
+            <div>Idle Animation: {currentVideoDebug.idleTitle}</div>
+            <div>Duration: {currentVideoDebug.idleDuration}</div>
+            <div>character: {currentVideoDebug.character}</div>
+            <div>selectedCharacter: {currentVideoDebug.character !== '(none)'}</div>
+            <div>videoPackage: {String(currentVideoDebug.videoPackage)}</div>
+            <div>referenceImages: {currentVideoDebug.referenceImages}</div>
+            <div>videoEngine: {currentVideoDebug.videoEngine}</div>
+            <div>animationSource: {String(currentVideoDebug.animationSource)}</div>
+            <div>idlePackageMatch: {String(currentVideoDebug.packageMatchesIdle)}</div>
+            <div>canGenerate: {String(currentVideoDebug.canGenerate)}</div>
+            {#each currentVideoDebug.failures as failure}
+              <div class="video-debug-failure">🔴 {failure}</div>
+            {/each}
+          </div>
+          {/if}
+          {#if videoUrl}
+            <video class="generated-video-preview" controls autoplay={false} src={videoUrl}>
+              <track kind="captions" srclang="ja" label="Japanese" src="/mock/captions.vtt" default />
+            </video>
+          {:else if videoGenerationError}
+            <p class="video-generation-error">{videoGenerationError}</p>
+          {/if}
+        </section>
+
+        <details class="studio-tools">
+          <summary>Utilities · 📜 Idle Animation</summary>
+          <button class="studio-action" onclick={() => addIdleAnimation(animationStudioSource())}>Create 5-second Idle Animation</button>
+        </details>
+        {/if}
+      </div>
+    </section>
+
   {#if layoutMode === '3col'}
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <div class="resize-bar" onmousedown={(e) => startResize('right', e)} aria-hidden="true"></div>
@@ -7464,6 +8365,26 @@ ${recent}
         class="panel right-panel"
         style="width:{rightWidth}px; min-width:80px;"
       >
+
+      <section class="story-library-panel">
+        <div class="panel-hd">
+          <span class="ph-diamond">📂</span>
+          <span class="ph-text">STORY LIBRARY</span>
+          <span class="ph-line"></span>
+          <span class="ph-id">SAVED WORKS</span>
+        </div>
+        {#if storyReferences.length > 0}
+          <div class="story-library-list">
+            {#each storyReferences as reference, index (reference.name + index)}
+              <button class="story-library-item" onclick={() => selectStoryReference(index)}>
+                <span>📄</span><span>{reference.name}</span>
+              </button>
+            {/each}
+          </div>
+        {:else}
+          <p class="story-library-empty">シロの日常 #001 起動を作成すると、ここに作品が並びます。</p>
+        {/if}
+      </section>
 
       <!-- 1. CHARACTER VIEWER -->
       <div class="panel-hd">
@@ -7532,11 +8453,12 @@ ${recent}
 
       <div class="av-selector">
         <div class="section-lbl">CHARACTER SELECT</div>
+        <div class="character-group-label">🏠 System Characters</div>
         <div class="av-grid">
-          {#each AVATARS as av}
+          {#each SYSTEM_CHARACTERS as av}
             <button
               class="av-thumb"
-              class:active={selectedAvatar === av.file}
+              class:active={activeLabCharacterId === av.id}
               onclick={() => selectAvatar(av.file, av.name, av.presetId)}
               title={av.name}
             >
@@ -7548,6 +8470,23 @@ ${recent}
               <span>{av.name}</span>
             </button>
           {/each}
+        </div>
+        <div class="character-group-label">🐾 My Characters</div>
+        <div class="av-grid">
+          {#each MY_CHARACTERS as av}
+            <button
+              class="av-thumb"
+              class:active={activeLabCharacterId === av.id}
+              onclick={() => selectMyCharacter(av)}
+              title={av.name}
+            >
+              <img src={av.file} alt={av.name} onerror={(e) => { (e.target as HTMLImageElement).src = '/avatars/default.png'; }} />
+              <span>{av.name}</span>
+            </button>
+          {/each}
+          <button class="av-thumb add-character-slot" type="button" onclick={importCharacterFromMemorycore} title="Import the character explicitly exported from MEMORYCORE">
+            <span class="add-character-icon">＋</span><span>Add Character</span>
+          </button>
         </div>
       </div>
 
@@ -7736,6 +8675,7 @@ ${recent}
         {/if}
       </div>
 
+      {#if devMode}
       <!-- 5. PARAMETER MATRIX -->
       <div class="ctrl-section sliders-section">
         <div class="section-lbl">PARAMETER MATRIX</div>
@@ -7773,6 +8713,8 @@ ${recent}
         {/each}
       </div>
 
+      {/if}
+      {#if devMode}
       <!-- 6. BEHAVIOR FLAGS -->
       <div class="ctrl-section">
         <div class="section-lbl">BEHAVIOR FLAGS</div>
@@ -7795,6 +8737,8 @@ ${recent}
           {/each}
         </div>
       </div>
+
+      {/if}
 
       <div class="ctrl-section">
         <div class="section-lbl">QUICK ACTIONS</div>
@@ -7926,7 +8870,7 @@ ${recent}
               </select>
             {:else if labMediaType === 'video'}
               <select class="vc-select" bind:value={labVideoModel} onchange={logLabModelSelection}>
-                {#each LAB_VIDEO_MODELS as model}
+                {#each labVideoModels as model}
                   <option value={model.id}>{model.label}</option>
                 {/each}
               </select>
@@ -8211,13 +9155,62 @@ ${recent}
 
       <div class="cognitive-monitor-block">
         <div class="cm-header">
+          <span class="cm-tab active">PROJECT ASSETS</span>
+          {#if latestProjectAssetMessage()}
+            {@const assetMessage = latestProjectAssetMessage()!}
+            <StoryCard
+              cardId={`lab-assets:${assetMessage.time}:${assetMessage.text.slice(0, 24)}`}
+              image={() => runCommonMediaAction(assetMessage, 'manga')}
+              yaml={() => convertToYaml(assetMessage)}
+              animation={() => addIdleAnimation(assetMessage)}
+              story={() => addStoryBlueprint(assetMessage)}
+              video={() => addVideoPackage(assetMessage)}
+              voice={() => runCommonMediaAction(assetMessage, 'voice')}
+              bgm={() => runCommonMediaAction(assetMessage, 'bgm')}
+              disabled={mediaEngineBusy !== null || yamlConverting}
+            />
+            <pre class="video-profile">video_profile:
+  pace: {videoProfile.pace}
+  camera_style: {videoProfile.camera_style}
+  mood: {videoProfile.mood}
+  default_duration: {videoProfile.default_duration}s
+  daily_routine: {videoProfile.daily_routine.join(', ')}
+  forbidden: {videoProfile.forbidden.join(', ')}</pre>
+            {#if activeIdleAnimation}
+              <div class="project-video-source">Current Video Production<br />📜 {activeIdleAnimation.title} / {activeIdleAnimation.duration}s<br />📦 {activeVideoPackage ? 'Video Package READY' : 'Video Package PENDING'}</div>
+            {/if}
+            {#if videoUrl}
+              <div class="generated-video-asset">🎬 Generated Video</div>
+              <video class="generated-video-preview" controls autoplay={false} src={videoUrl}>
+                <track kind="captions" srclang="ja" label="日本語" src="/mock/captions.vtt" default />
+              </video>
+            {:else if videoGenerationError}
+              <p class="video-generation-error">{videoGenerationError}</p>
+            {/if}
+          {:else}
+            <span class="cm-sub">NO ASSET SOURCE</span>
+          {/if}
+        </div>
+        {#if devMode}<div class="video-debug project-assets-video-debug" class:ready={currentVideoDebug.canGenerate}>
+          <strong>🎥 Video Debug</strong>
+          <div>Idle Animation: {currentVideoDebug.idleTitle}</div>
+          <div>Duration: {currentVideoDebug.idleDuration}</div>
+          <div>Reference Images: {currentVideoDebug.referenceImages}</div>
+          <div>Video Package: {currentVideoDebug.videoPackage ? 'READY' : 'PENDING'}</div>
+          <div>Can Generate: {String(currentVideoDebug.canGenerate)}</div>
+          {#each currentVideoDebug.failures as failure}
+            <div class="video-debug-failure">🔴 {failure}</div>
+          {/each}
+        </div>{/if}
+        {#if devMode}
+        <div class="cm-header">
           <span class="cm-tab active">COGNITIVE MONITOR</span>
           <span class="cm-sub">LAST RESPONSE</span>
         </div>
 
         <div class="cm-grid">
           <div class="cm-cell">
-            <span class="cm-label">Emotion Label</span>
+            <span class="cm-label">Emotion State</span>
             <span class="cm-value">{cognitiveMonitor.emotionLabel}</span>
           </div>
           <div class="cm-cell">
@@ -8232,6 +9225,22 @@ ${recent}
               {formatDelta(cognitiveMonitor.affectionDelta)}
             </span>
           </div>
+        </div>
+
+        <div class="cm-section">
+          <div class="cm-section-label">Thinking Log</div>
+          {#if cognitiveMonitor.thinkingLogs.length === 0}
+            <p class="cm-empty">NO THINKING LOG</p>
+          {:else}
+            <div class="cm-memory-list">
+              {#each cognitiveMonitor.thinkingLogs as log (log.id)}
+                <div class="cm-memory-entry">
+                  <span class="cm-memory-imp">{log.emotionState}</span>
+                  <span class="cm-memory-text">{log.text}</span>
+                </div>
+              {/each}
+            </div>
+          {/if}
         </div>
 
         <div class="cm-section">
@@ -8251,9 +9260,54 @@ ${recent}
         </div>
 
         <div class="cm-section">
+          <div class="cm-section-label">Memory Debug</div>
+          {#if cognitiveMonitor.memoryDebugEntries.length === 0}
+            <p class="cm-empty">NO MEMORY DECISION</p>
+          {:else}
+            <div class="cm-memory-list">
+              {#each cognitiveMonitor.memoryDebugEntries as entry, index (`${entry.id ?? 'decision'}-${index}`)}
+                <div class="cm-memory-entry">
+                  <span class="cm-memory-imp">{entry.memoryType} / {entry.used ? 'used' : 'skipped'}{entry.importance !== undefined ? ` / IMP ${entry.importance}` : ''}</span>
+                  <span class="cm-memory-text">{entry.reason}{entry.skippedReason ? ` — ${entry.skippedReason}` : ''}{entry.source ? ` [${entry.source}]` : ''}{entry.timestamp ? ` (${entry.timestamp})` : ''}</span>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </div>
+
+        <div class="cm-section">
+          <div class="cm-section-label">Timeline</div>
+          {#if !timelinePanel || timelinePanel.summary.length === 0}
+            <p class="cm-empty">NO TIMELINE ENTRY</p>
+          {:else}
+            <p class="cm-note">📅 {timelinePanel.period} / {timelinePanel.dateRange}</p>
+            <div class="cm-memory-list">
+              {#each timelinePanel.summary as item}
+                <div class="cm-memory-entry"><span class="cm-memory-text">・{item}</span></div>
+              {/each}
+            </div>
+          {/if}
+        </div>
+
+        <div class="cm-section">
+          <div class="cm-section-label">📖 Daily Core</div>
+          {#each [{ label: '今日のまとめ', report: dailyReports.today }, { label: '昨日のまとめ', report: dailyReports.yesterday }, { label: '今週のまとめ', report: dailyReports.weekly }] as card}
+            <div class="cm-memory-entry">
+              <span class="cm-memory-imp">{card.label}</span>
+              {#if card.report}
+                <span class="cm-memory-text">{card.report.title} / {card.report.mood}<br />{card.report.summary.join(' ') || '・まだ対象の出来事はありません'}</span>
+              {:else}
+                <span class="cm-memory-text">読み込み中…</span>
+              {/if}
+            </div>
+          {/each}
+        </div>
+
+        <div class="cm-section">
           <div class="cm-section-label">Reflection Note</div>
           <p class="cm-note">{cognitiveMonitor.reflectionNote}</p>
         </div>
+        {/if}
       </div>
 
       <div class="reflection-diary-block">
@@ -10862,6 +11916,123 @@ ${recent}
   gap: 10px;
   align-items: flex-end;
   max-width: 85%;
+}
+
+.developer-mode-toggle {
+  border: 1px solid rgba(148,163,184,.38);
+  background: rgba(15,23,42,.72);
+  color: #cbd5e1;
+  padding: 6px 9px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.developer-mode-toggle.active {
+  border-color: rgba(167,139,250,.75);
+  background: rgba(124,58,237,.18);
+  color: #ddd6fe;
+}
+
+.character-group-label { margin: 10px 0 6px; color: rgba(103, 232, 249, .86); font-size: 11px; font-weight: 800; letter-spacing: .05em; }
+.add-character-slot { border-style: dashed !important; color: #c4b5fd !important; }
+.add-character-icon { display: block; font-size: 22px; line-height: 1; }
+
+.animation-studio-panel {
+  flex: 0 1 430px;
+  min-width: 340px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.studio-steps { display: grid; gap: 10px; margin-top: 10px; }
+.studio-step { border: 1px solid rgba(34, 211, 238, 0.18); border-radius: 9px; background: rgba(2, 6, 23, 0.42); overflow: hidden; }
+.studio-step-head { width: 100%; display: flex; justify-content: space-between; gap: 8px; border: 0; padding: 10px; color: #e0f2fe; background: rgba(8, 47, 73, 0.3); font: 700 13px/1.3 inherit; text-align: left; cursor: pointer; }
+.studio-step-head.static { cursor: default; }
+.studio-status { color: #86efac; font-size: 11px; white-space: nowrap; }
+.studio-memory-grid { display: grid; grid-template-columns: 68px minmax(0, 1fr); gap: 7px 9px; padding: 10px; font-size: 12px; }
+.studio-memory-grid span { color: #67e8f9; font-weight: 700; }
+.studio-memory-grid p { margin: 0; color: #cbd5e1; overflow: hidden; text-overflow: ellipsis; }
+.studio-action { width: calc(100% - 20px); margin: 10px; border: 1px solid rgba(34,211,238,.32); border-radius: 6px; padding: 8px; color: #cffafe; background: rgba(8,47,73,.35); cursor: pointer; }
+.studio-yaml { max-height: 175px; margin: 0 10px 10px; overflow: auto; padding: 9px; border-radius: 6px; color: #bae6fd; background: #020617; font: 11px/1.45 ui-monospace, monospace; white-space: pre; }
+.generate-step { border-color: rgba(74, 222, 128, .45); }
+.studio-steps > .generate-step:first-child > .studio-action,
+.studio-steps > .generate-step:first-child > .generate-video-button:not(.primary-video-production) { display: none; }
+.video-production-steps { display: grid; gap: 5px; margin: 10px; padding: 0; list-style: none; }
+.video-production-steps li { padding: 6px 8px; border-radius: 5px; color: #94a3b8; background: rgba(15,23,42,.35); font-size: 12px; }
+.video-production-steps li.complete { color: #bbf7d0; background: rgba(20,83,45,.2); }
+.video-production-steps li.active { color: #fde68a; background: rgba(120,53,15,.25); }
+.primary-video-production { margin-top: 2px; }
+.video-production-reason { margin: 0 10px 10px; color: #fbbf24; font-size: 12px; line-height: 1.45; }
+.video-runtime-status { padding: 8px 10px; color: #e2e8f0; background: rgba(15, 23, 42, .6); font-size: 12px; font-weight: 800; }
+.video-debug { display: grid; gap: 3px; margin: 0 10px 10px; padding: 9px; border: 1px solid rgba(248,113,113,.42); border-radius: 7px; color: #fecaca; background: rgba(127,29,29,.15); font: 11px/1.45 ui-monospace, monospace; }
+.video-debug.ready { border-color: rgba(74,222,128,.42); color: #bbf7d0; background: rgba(20,83,45,.15); }
+.video-debug-failure { color: #fca5a5; font-weight: 700; }
+.project-video-source { margin-top: 8px; padding: 8px; border: 1px solid rgba(74,222,128,.28); border-radius: 6px; color: #bbf7d0; background: rgba(20,83,45,.15); font-size: 12px; line-height: 1.5; }
+.generate-video-button { width: calc(100% - 20px); margin: 10px; border: 1px solid #4ade80; border-radius: 8px; padding: 14px; color: #ecfdf5; background: linear-gradient(135deg, rgba(22,163,74,.62), rgba(6,78,59,.75)); font: 800 15px/1 inherit; cursor: pointer; box-shadow: 0 0 18px rgba(74,222,128,.16); }
+.studio-tools { border: 1px solid rgba(148,163,184,.2); border-radius: 8px; padding: 8px; color: #cbd5e1; font-size: 12px; }
+.studio-tools summary { cursor: pointer; }
+.story-library-panel { margin-bottom: 14px; border: 1px solid rgba(168, 85, 247, .25); border-radius: 9px; overflow: hidden; }
+.story-library-list { display: grid; gap: 4px; padding: 8px; }
+.story-library-item { display: flex; gap: 7px; width: 100%; border: 0; border-radius: 5px; padding: 7px; color: #e9d5ff; background: rgba(88,28,135,.18); text-align: left; cursor: pointer; }
+.story-library-empty { margin: 0; padding: 10px; color: #94a3b8; font-size: 12px; line-height: 1.5; }
+
+.video-profile {
+  width: 100%;
+  margin: 8px 0 0;
+  padding: 8px;
+  border: 1px solid rgba(34, 211, 238, 0.22);
+  border-radius: 6px;
+  color: rgba(207, 250, 254, 0.84);
+  background: rgba(8, 47, 73, 0.22);
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap;
+}
+
+.video-engine-current { margin: 10px; padding: 10px; border: 1px solid rgba(34,211,238,.28); border-radius: 7px; color: #bae6fd; background: rgba(8,47,73,.26); font-size: 12px; line-height: 1.55; }
+.video-engine-current strong { color: #67e8f9; font-size: 14px; }
+.video-engine-selector-hidden { display: none; }
+
+.generated-video-preview {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
+  border: 1px solid rgba(34, 211, 238, 0.3);
+  border-radius: 7px;
+  background: #020617;
+}
+.generated-video-asset { margin-top: 10px; color: #86efac; font-size: 12px; font-weight: 800; }
+
+.chat-video-test {
+  margin: 10px 0;
+  padding: 12px;
+  border: 1px solid rgba(74, 222, 128, .45);
+  border-radius: 9px;
+  background: rgba(6, 78, 59, .18);
+}
+
+.chat-video-test-status { margin-bottom: 8px; color: #86efac; font-size: 13px; font-weight: 800; }
+.chat-video-test video { display: block; max-width: 100%; border-radius: 6px; background: #020617; }
+
+.video-generation-error {
+  margin: 8px 0 0;
+  color: #fca5a5;
+  font-size: 12px;
+}
+
+.chat-date-divider,
+.chat-gap-divider {
+  grid-column: 1 / -1;
+  margin: 12px 0 4px;
+  color: var(--text-dim, #8793a5);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-align: center;
+}
+
+.chat-gap-divider {
+  margin-top: 18px;
+  opacity: 0.8;
 }
 
 .msg-wrap.user {

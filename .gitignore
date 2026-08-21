@@ -20,6 +20,8 @@ Thumbs.db
 
 # Local API settings (may contain secrets)
 /data/settings.json
+/data/character-memory.json
+/data/character-memory-test.json
 
 # Vite
 vite.config.js.timestamp-*
@@ -29,4 +31,8 @@ vite.config.ts.timestamp-*
 python/.venv
 python/__pycache__
 python/*.pyc
+python/voice_bridge/__pycache__
+
+# Voice Bridge generated audio
+/static/voice-output
 .claude/

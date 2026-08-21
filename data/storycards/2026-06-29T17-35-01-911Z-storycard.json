@@ -1,0 +1,95 @@
+{
+  "title": "シロ ショートアニメ 研究室の小さな奇跡",
+  "duration": 15,
+  "cuts": [
+    {
+      "id": "CUT01",
+      "start": "0:00",
+      "end": "0:04",
+      "title": "起動",
+      "description": "広角の未来研究室全景、朝光の中で中央の充電ポッドが開き、眠っていたシロのHEAD_UNIT_01のLEDが点灯する。",
+      "requiredUnits": [
+        "シロ",
+        "HEAD_UNIT_01",
+        "TAIL_UNIT_02",
+        "CONNECTION_PORT",
+        "ORANGE_MESH",
+        "白い分割装甲",
+        "黒い内部フレーム",
+        "シアン発光ライン",
+        "肉球ヘアアクセサリー",
+        "充電ポッド",
+        "未来研究室",
+        "朝光",
+        "shiro-official-identity",
+        "shiro-official-mood"
+      ]
+    },
+    {
+      "id": "CUT02",
+      "start": "0:04",
+      "end": "0:08",
+      "title": "起床",
+      "description": "中景正面、シロが充電ポッドから上体を起こして両腕を伸ばし、HEAD_UNIT_01が小さく動きTAIL_UNIT_02が遅れて揺れる。",
+      "requiredUnits": [
+        "シロ",
+        "HEAD_UNIT_01",
+        "TAIL_UNIT_02",
+        "CONNECTION_PORT",
+        "ORANGE_MESH",
+        "白い分割装甲",
+        "黒い内部フレーム",
+        "シアン発光ライン",
+        "肉球ヘアアクセサリー",
+        "充電ポッド",
+        "未来研究室",
+        "shiro-official-identity",
+        "shiro-official-expression"
+      ]
+    },
+    {
+      "id": "CUT03",
+      "start": "0:08",
+      "end": "0:11",
+      "title": "モニター確認",
+      "description": "斜め後方の中景、シロが大型モニターに向き直り、画面のMISSIONとSTATUS準備完了表示を確認する。",
+      "requiredUnits": [
+        "シロ",
+        "HEAD_UNIT_01",
+        "TAIL_UNIT_02",
+        "CONNECTION_PORT",
+        "ORANGE_MESH",
+        "白い分割装甲",
+        "黒い内部フレーム",
+        "シアン発光ライン",
+        "肉球ヘアアクセサリー",
+        "大型モニター",
+        "MISSION表示",
+        "STATUS準備完了表示",
+        "未来研究室",
+        "shiro-official-identity"
+      ]
+    },
+    {
+      "id": "CUT04",
+      "start": "0:11",
+      "end": "0:15",
+      "title": "終了",
+      "description": "正面寄り中景、シロがこちらへ振り向いて片手を振り、ウインクしながらTAIL_UNIT_02をゆっくり揺らす。",
+      "requiredUnits": [
+        "シロ",
+        "HEAD_UNIT_01",
+        "TAIL_UNIT_02",
+        "CONNECTION_PORT",
+        "ORANGE_MESH",
+        "白い分割装甲",
+        "黒い内部フレーム",
+        "シアン発光ライン",
+        "肉球ヘアアクセサリー",
+        "未来研究室",
+        "shiro-official-identity",
+        "shiro-official-expression"
+      ]
+    }
+  ]
+}

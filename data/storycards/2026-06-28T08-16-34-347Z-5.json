@@ -1,0 +1,64 @@
+{
+  "title": "5秒のおはよう動画",
+  "duration": 5,
+  "cuts": [
+    {
+      "id": "CUT01",
+      "start": "0:00",
+      "end": "0:01",
+      "title": "起床前",
+      "description": "朝の柔らかい光が入る室内、ベッドでSHIROが目を閉じて横になっている中寄りショット。",
+      "requiredUnits": [
+        "SHIRO",
+        "ベッド",
+        "枕",
+        "朝日の窓",
+        "shiro-official-identity",
+        "shiro-official-mood"
+      ]
+    },
+    {
+      "id": "CUT02",
+      "start": "0:01",
+      "end": "0:03",
+      "title": "おはよう",
+      "description": "SHIROが上体を起こして笑顔になり、カメラへ片手を小さく振る正面中寄りショット。",
+      "requiredUnits": [
+        "SHIRO",
+        "ベッド",
+        "枕",
+        "朝日の窓",
+        "shiro-official-identity",
+        "shiro-official-expression"
+      ]
+    },
+    {
+      "id": "CUT03",
+      "start": "0:03",
+      "end": "0:04",
+      "title": "表示確認",
+      "description": "画面中央に明るい文字「おはよう」が表示され、SHIROが笑顔で文字を指す正面ショット。",
+      "requiredUnits": [
+        "SHIRO",
+        "おはよう文字",
+        "ベッド",
+        "朝日の窓",
+        "shiro-official-identity",
+        "shiro-official-expression"
+      ]
+    },
+    {
+      "id": "CUT04",
+      "start": "0:04",
+      "end": "0:05",
+      "title": "終了",
+      "description": "SHIROが笑顔のまま手を下ろし、朝日の中でカメラを見つめる固定バストショット。",
+      "requiredUnits": [
+        "SHIRO",
+        "朝日の窓",
+        "shiro-official-identity",
+        "shiro-official-expression"
+      ]
+    }
+  ]
+}

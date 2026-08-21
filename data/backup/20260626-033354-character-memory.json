@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "characters": {
+    "shiro": {
+      "id": "shiro",
+      "name": "シロ",
+      "role": "妹",
+      "description": "ネコ型アンドロイド姉妹　ミケの妹",
+      "memory": {
+        "personality": [],
+        "speechStyle": [],
+        "likes": [],
+        "dislikes": []
+      },
+      "memoryV2": {
+        "persona": {
+          "species": "",
+          "personality": [],
+          "speechStyle": [],
+          "relationship": "妹"
+        },
+        "longTermMemory": [],
+        "shortTermMemory": []
+      },
+      "reviewMemory": [],
+      "messages": [],
+      "seededFromRegistry": true,
+      "createdAt": "2026-06-25T11:28:41.839Z",
+      "updatedAt": "2026-06-25T11:28:41.839Z"
+    }
+  }
+}

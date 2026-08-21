@@ -17,6 +17,17 @@ export type MediaModelInfo = {
 
 export const BUILTIN_MEDIA_MODELS: MediaModelInfo[] = [
   {
+    id: 'nanobanana-2-lite',
+    label: 'NanoBanana 2 Lite',
+    provider: 'fal',
+    apiModel: 'google/nano-banana-2-lite',
+    kind: 'image',
+    edit: false,
+    estimatedCost: null,
+    aliases: ['nano-banana-2-lite', 'NanoBanana 2 Lite', 'Nano Banana 2 Lite', 'google/nano-banana-2-lite'],
+    source: 'builtin',
+  },
+  {
     id: 'fal-ai/nano-banana-2',
     label: 'Nano Banana 2',
     provider: 'fal',
@@ -80,6 +91,30 @@ export const BUILTIN_MEDIA_MODELS: MediaModelInfo[] = [
     edit: true,
     estimatedCost: null,
     aliases: ['FAL GPT Image 2 Edit', 'openai/gpt-image-2/edit'],
+    source: 'builtin',
+  },
+  // Seedream 5 系は fal-ai/bytedance/seedream/v5/{tier}/{task} の階層で増える。
+  // Pro を追加する場合は tier 部分を pro にした同形のエントリを足すだけでよい。
+  {
+    id: 'fal-ai/bytedance/seedream/v5/lite/text-to-image',
+    label: 'Seedream 5 Lite',
+    provider: 'fal',
+    apiModel: 'fal-ai/bytedance/seedream/v5/lite/text-to-image',
+    kind: 'image',
+    edit: false,
+    estimatedCost: 0.035,
+    aliases: ['seedream-5-lite', 'Seedream 5 Lite', 'seedream-v5-lite'],
+    source: 'builtin',
+  },
+  {
+    id: 'fal-ai/bytedance/seedream/v5/lite/edit',
+    label: 'Seedream 5 Lite Edit',
+    provider: 'fal',
+    apiModel: 'fal-ai/bytedance/seedream/v5/lite/edit',
+    kind: 'image',
+    edit: true,
+    estimatedCost: 0.035,
+    aliases: ['seedream-5-lite-edit', 'Seedream 5 Lite Edit'],
     source: 'builtin',
   },
   {

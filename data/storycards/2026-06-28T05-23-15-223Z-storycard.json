@@ -1,0 +1,63 @@
+{
+  "title": "研究室歩行",
+  "duration": 15,
+  "cuts": [
+    {
+      "id": "CUT01",
+      "start": "0:00",
+      "end": "0:04",
+      "title": "歩行開始",
+      "description": "研究室の通路奥へ向かうSHIROを背面フルショットで表示し、全身が画面内に収まった状態で一歩踏み出す。",
+      "requiredUnits": [
+        "SHIRO",
+        "shiro-official-identity",
+        "研究室セット",
+        "HEAD_UNIT_01",
+        "TAIL_UNIT_02"
+      ]
+    },
+    {
+      "id": "CUT02",
+      "start": "0:04",
+      "end": "0:08",
+      "title": "研究室歩行",
+      "description": "背後から追従する固定高さのフルショットで、SHIROが研究室内をまっすぐ歩き、HEAD_UNIT_01とTAIL_UNIT_02が後ろ姿に見える。",
+      "requiredUnits": [
+        "SHIRO",
+        "shiro-official-identity",
+        "研究室セット",
+        "研究室機材",
+        "HEAD_UNIT_01",
+        "TAIL_UNIT_02"
+      ]
+    },
+    {
+      "id": "CUT03",
+      "start": "0:08",
+      "end": "0:11",
+      "title": "HEAD_UNIT_01・TAIL_UNIT_02確認",
+      "description": "背面フルショットのままSHIROが歩調をゆるめ、HEAD_UNIT_01とTAIL_UNIT_02を画面中央に収めて装着状態を視認できる。",
+      "requiredUnits": [
+        "SHIRO",
+        "shiro-official-identity",
+        "研究室セット",
+        "HEAD_UNIT_01",
+        "TAIL_UNIT_02"
+      ]
+    },
+    {
+      "id": "CUT04",
+      "start": "0:11",
+      "end": "0:15",
+      "title": "終了",
+      "description": "SHIROが研究室通路の先で立ち止まり、背面フルショットで全身とHEAD_UNIT_01、TAIL_UNIT_02を見せたまま静止する。",
+      "requiredUnits": [
+        "SHIRO",
+        "shiro-official-identity",
+        "研究室セット",
+        "HEAD_UNIT_01",
+        "TAIL_UNIT_02"
+      ]
+    }
+  ]
+}

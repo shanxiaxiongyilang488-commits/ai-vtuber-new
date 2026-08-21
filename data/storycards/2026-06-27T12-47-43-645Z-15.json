@@ -1,0 +1,88 @@
+{
+  "id": "storycard-mqwcuuwa-yb0xru",
+  "title": "シロ 15秒ショートアニメ",
+  "summary": "シロの15秒ショートアニメ",
+  "theme": "ショートアニメ",
+  "goal": "",
+  "characters": [
+    {
+      "name": "シロ"
+    }
+  ],
+  "references": [
+    {
+      "id": "shiro:registry-reference",
+      "kind": "image",
+      "title": "シロ Character REF",
+      "url": "/api/characters/shiro/reference?raw=1",
+      "tags": [
+        "character-registry",
+        "registered"
+      ]
+    }
+  ],
+  "location": "",
+  "style": "",
+  "emotion": "",
+  "duration": 15,
+  "cuts": [
+    {
+      "id": "fallback-cut-1",
+      "order": 1,
+      "time": "0:00-0:04",
+      "title": "全身歩行",
+      "summary": "全身歩行",
+      "characters": [
+        "シロ"
+      ],
+      "action": "全身で歩く",
+      "camera": "全身表示",
+      "duration": 4,
+      "references": []
+    },
+    {
+      "id": "fallback-cut-2",
+      "order": 2,
+      "time": "0:04-0:08",
+      "title": "横歩き",
+      "summary": "横歩き",
+      "characters": [
+        "シロ"
+      ],
+      "action": "横向きに歩く",
+      "camera": "横から全身を捉える",
+      "duration": 4,
+      "references": []
+    },
+    {
+      "id": "fallback-cut-3",
+      "order": 3,
+      "time": "0:08-0:12",
+      "title": "後ろ姿",
+      "summary": "後ろ姿",
+      "characters": [
+        "シロ"
+      ],
+      "action": "歩行を続ける",
+      "camera": "後ろ姿を捉える",
+      "duration": 4,
+      "references": []
+    },
+    {
+      "id": "fallback-cut-4",
+      "order": 4,
+      "time": "0:12-0:15",
+      "title": "TAIL_UNIT_02確認",
+      "summary": "TAIL_UNIT_02確認",
+      "characters": [
+        "シロ"
+      ],
+      "action": "TAIL_UNIT_02の動きを確認する",
+      "camera": "TAIL_UNIT_02が見える構図",
+      "duration": 3,
+      "references": []
+    }
+  ],
+  "createdAt": "2026-06-27T12:47:43.593Z",
+  "updatedAt": "2026-06-27T12:47:43.593Z"
+}

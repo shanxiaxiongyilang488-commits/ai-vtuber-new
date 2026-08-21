@@ -1,0 +1,87 @@
+{
+  "title": "ルシア ライブ後のハイタッチ",
+  "duration": 15,
+  "cuts": [
+    {
+      "id": "SCENE01",
+      "start": "0:00",
+      "end": "0:03",
+      "title": "ライブ終演",
+      "description": "ステージ上でルシアが観客に向けて最後の感謝のポーズをとり、大きく手を振る。背景には無数のペンライトの光が広がっている。",
+      "duration": 3,
+      "camera": "Low Angle, Slight Push In",
+      "motion": "ルシアが笑顔で観客席に向かって大きく手を振る",
+      "dialogue": "みんな〜っ！ありがとう〜っ！",
+      "requiredUnits": [
+        "ルシア",
+        "ライブ会場ステージ",
+        "ペンライトの光"
+      ]
+    },
+    {
+      "id": "SCENE02",
+      "start": "0:03",
+      "end": "0:06",
+      "title": "ハイタッチ・シェル",
+      "description": "ステージ裏の通路で、ルシアが隣にいるシェルと右手で元気よくハイタッチを交わす。",
+      "duration": 3,
+      "camera": "Medium Shot, Slight Pan Right",
+      "motion": "ルシアとシェルが笑顔で右手ハイタッチを交わす",
+      "dialogue": "やったね、シェル！",
+      "requiredUnits": [
+        "ルシア",
+        "シェル",
+        "ステージ裏通路"
+      ]
+    },
+    {
+      "id": "SCENE03",
+      "start": "0:06",
+      "end": "0:09",
+      "title": "ハイタッチ・ユイ",
+      "description": "通路をさらに進み、ルシアがユイとハイタッチを交わし、満面の笑みでお互いを見つめ合う。",
+      "duration": 3,
+      "camera": "Medium Shot, Slight Pan Right",
+      "motion": "ルシアとユイがハイタッチを交わし、笑顔で見つめ合う",
+      "dialogue": "最高のライブだったよね、ユイ！",
+      "requiredUnits": [
+        "ルシア",
+        "ユイ",
+        "ステージ裏通路"
+      ]
+    },
+    {
+      "id": "SCENE04",
+      "start": "0:09",
+      "end": "0:12",
+      "title": "ハイタッチ・リズ",
+      "description": "ルシアがリズと両手でハイタッチを交わし、お互いのパフォーマンスを称え合う。",
+      "duration": 3,
+      "camera": "Medium Shot, Slight Pan Right",
+      "motion": "ルシアとリズが正面で両手ハイタッチをする",
+      "dialogue": "リズのダンス、完璧だったよ！",
+      "requiredUnits": [
+        "ルシア",
+        "リズ",
+        "ステージ裏通路"
+      ]
+    },
+    {
+      "id": "SCENE05",
+      "start": "0:12",
+      "end": "0:15",
+      "title": "終了",
+      "description": "マネージャーからドリンクボトルを受け取りつつ、笑顔でハイタッチを交わし、最後にお互いを労う。",
+      "duration": 3,
+      "camera": "Two Shot to Close Up, Static",
+      "motion": "マネージャーからルシアへのボトル手渡しとハイタッチ、お互いが頷く",
+      "dialogue": "お疲れさま、ルシア！最高だったよ！",
+      "requiredUnits": [
+        "ルシア",
+        "マネージャー",
+        "ステージ裏通路",
+        "ドリンクボトル"
+      ]
+    }
+  ]
+}

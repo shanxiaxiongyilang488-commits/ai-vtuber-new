@@ -1,0 +1,91 @@
+{
+  "id": "sc-001",
+  "isFallback": false,
+  "sourceModel": "gemini-3.5-flash",
+  "parseSuccess": true,
+  "title": "端末操作プロセス",
+  "summary": "シロが歩かずに着席し、端末を操作して結果を確認するまでの一連の流れ。",
+  "theme": "端末操作",
+  "goal": "",
+  "characters": [
+    {
+      "id": "shiro",
+      "name": "シロ",
+      "role": "主人公",
+      "description": "メインキャラクター"
+    }
+  ],
+  "references": [],
+  "location": "",
+  "style": "",
+  "emotion": "",
+  "duration": 15,
+  "cuts": [
+    {
+      "id": "cut-1",
+      "order": 1,
+      "time": "0:00〜0:03",
+      "title": "着席",
+      "summary": "シロが正面を向いたまま椅子に着席する。",
+      "characters": [
+        "シロ"
+      ],
+      "action": "歩くことなく、その場で椅子に腰を下ろす。",
+      "dialogue": "",
+      "camera": "正面からのミディアムショット。後ろ姿は映さない。",
+      "emotion": "真剣な表情",
+      "duration": 3,
+      "references": []
+    },
+    {
+      "id": "cut-2",
+      "order": 2,
+      "time": "0:03〜0:07",
+      "title": "端末操作",
+      "summary": "端末を集中して操作する。",
+      "characters": [
+        "シロ"
+      ],
+      "action": "手元の端末のキーボードやタッチパネルを素早く操作する。",
+      "dialogue": "",
+      "camera": "斜め前方からのアップ。手元と表情を捉える。",
+      "emotion": "集中した目元",
+      "duration": 4,
+      "references": []
+    },
+    {
+      "id": "cut-3",
+      "order": 3,
+      "time": "0:07〜0:11",
+      "title": "モニター確認",
+      "summary": "画面の表示内容を確認し、安堵する。",
+      "characters": [
+        "シロ"
+      ],
+      "action": "操作を終え、画面に表示された結果をじっと見つめる。",
+      "dialogue": "",
+      "camera": "正面ややローアングル。画面の光が顔を照らす。",
+      "emotion": "安堵の微笑み",
+      "duration": 4,
+      "references": []
+    },
+    {
+      "id": "cut-4",
+      "order": 4,
+      "time": "0:11〜0:15",
+      "title": "終了",
+      "summary": "操作を完了し、満足そうにうなずく。",
+      "characters": [
+        "シロ"
+      ],
+      "action": "端末を閉じ、一息ついてカメラに向かって軽くうなずく。",
+      "dialogue": "",
+      "camera": "正面からのバストショット。",
+      "emotion": "満足げな表情",
+      "duration": 4,
+      "references": []
+    }
+  ],
+  "createdAt": "2026-06-27T21:59:33Z",
+  "updatedAt": "2026-06-27T21:59:33Z"
+}

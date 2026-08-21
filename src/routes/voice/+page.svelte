@@ -1,49 +1,25 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
 
-  const focusAreas = [
-    'Irodori-TTS',
-    'Irodori VoiceDesign',
-    '音声サンプル管理',
-  ];
+  type VoiceMode = 'design' | 'clone' | 'lora';
 
-  const sampleSlots = [
-    { label: 'TTS ENGINE', value: 'Irodori-TTS', tone: 'cyan' },
-    { label: 'VOICE DESIGN', value: 'Caption control', tone: 'purple' },
-    { label: 'SAMPLE LIBRARY', value: 'voice_library', tone: 'cyan' },
-  ];
+  type CharacterVoiceConfig = {
+    engine: string;
+    mode: VoiceMode;
+    model: string;
+    caption?: string;
+    speed?: number;
+    autoSpeak?: boolean;
+  };
 
-  const voicePresets = [
-    {
-      name: 'リセア',
-      caption:
-        '透明感のある若い女性の声。落ち着きがあり、知的でやわらかい。近い距離感で自然に話す。',
-    },
-    {
-      name: 'ミュリィ',
-      caption:
-        '明るく軽やかな少女の声。好奇心が強く、少し甘めで親しみやすい。テンポよく元気に話す。',
-    },
-    {
-      name: 'ピオナ',
-      caption:
-        '穏やかで包み込むような女性の声。少し儚く、優しく丁寧。静かな研究室でささやくように話す。',
-    },
-  ];
+  type CharacterEntry = {
+    id: string;
+    name: string;
+    role: string;
+    voice?: CharacterVoiceConfig | null;
+  };
 
-  const stylePresets = [
-    { id: 'anime girl', caption: 'アニメ調の若い女性の声。明るく表情豊かで、親しみやすい。' },
-    { id: 'cute idol', caption: '可愛いアイドルの声。華やかで甘く、笑顔で元気に話す。' },
-    { id: 'sleepy android', caption: '眠たげなアンドロイドの声。無機質で静か、少し息が抜けた話し方。' },
-    { id: 'calm android', caption: '落ち着いたアンドロイドの声。安定したトーンで、感情を抑えて丁寧に話す。' },
-    { id: 'energetic idol', caption: 'エネルギッシュなアイドルの声。高揚感があり、テンポよく明るく話す。' },
-    { id: 'soft voice', caption: '柔らかい声。近い距離感で、優しく穏やかに話す。' },
-    { id: 'mature woman', caption: '大人の女性の声。落ち着きがあり、低めで上品に話す。' },
-    { id: 'high pitch', caption: '高めの声。軽く澄んだ響きで、可愛らしく話す。' },
-    { id: 'low energy', caption: '低エネルギーの声。控えめで淡々と、少し疲れた雰囲気で話す。' },
-  ];
-
-  type VoiceLibraryItem = {
+  type VoiceCandidate = {
     id: string;
     characterName: string;
     text: string;
@@ -58,314 +34,290 @@
     checkpoint: string;
     generationTimeMs: number;
     modelReloaded: boolean;
+    mode?: VoiceMode;
   };
 
   type VoiceModelOption = {
     id: string;
     label: string;
     source: 'default' | 'env' | 'local';
-    path?: string;
-  };
-
-  type VoiceModelGroup = {
-    id: 'irodori-tts' | 'kizuna-voice-designer';
-    label: string;
-    models: VoiceModelOption[];
-  };
-
-  type IrodoriVoiceProfile = {
-    characterName: string;
-    caption: string;
-    voice: string;
-    ttsModel: string;
-    designerModel: string;
-    updatedAt: string;
-  };
-
-  type IrodoriSettings = {
-    url: string;
-    voiceProfiles: Record<string, IrodoriVoiceProfile>;
   };
 
   type VoiceBackend = 'local' | 'colab';
 
-  type VoiceSettings = {
-    backend: VoiceBackend;
-    localUrl: string;
-    colabUrl: string;
-  };
+  const stylePresets = [
+    { id: 'anime girl', caption: 'アニメ調の若い女性の声。明るく表情豊かで、親しみやすい。' },
+    { id: 'cute idol', caption: '可愛いアイドルの声。華やかで甘く、笑顔で元気に話す。' },
+    { id: 'sleepy android', caption: '眠たげなアンドロイドの声。無機質で静か、少し息が抜けた話し方。' },
+    { id: 'calm android', caption: '落ち着いたアンドロイドの声。安定したトーンで、感情を抑えて丁寧に話す。' },
+    { id: 'energetic idol', caption: 'エネルギッシュなアイドルの声。高揚感があり、テンポよく明るく話す。' },
+    { id: 'soft voice', caption: '柔らかい声。近い距離感で、優しく穏やかに話す。' },
+    { id: 'mature woman', caption: '大人の女性の声。落ち着きがあり、低めで上品に話す。' },
+    { id: 'high pitch', caption: '高めの声。軽く澄んだ響きで、可愛らしく話す。' },
+    { id: 'low energy', caption: '低エネルギーの声。控えめで淡々と、少し疲れた雰囲気で話す。' },
+  ];
 
-  const TTS_MODEL_STORAGE_KEY = 'voice-lab:model:irodori-tts';
   const DESIGNER_MODEL_STORAGE_KEY = 'voice-lab:model:kizuna-voice-designer';
 
-  let activeTab = $state<'sample' | 'design'>('sample');
-  let sampleText = $state('こんにちは。VOICE LABからIrodori-TTSの音声サンプルを生成します。');
-  let voice = $state('none');
-  let audioUrl = $state<string | null>(null);
-  let audioEl = $state<HTMLAudioElement | null>(null);
-  let isGenerating = $state(false);
-  let errorMessage = $state<string | null>(null);
-  let lastGeneratedAt = $state<string | null>(null);
-  let characterName = $state('リセア');
-  let designText = $state('こんにちは。VOICE LABで作成した声のテストです。');
-  let voiceCaption = $state(voicePresets[0].caption);
+  // --- form state -------------------------------------------------------
+  let characters = $state<CharacterEntry[]>([]);
+  let selectedCharacterId = $state('');
+  let mode = $state<VoiceMode>('design');
+  let voiceCaption = $state('');
+  let sampleText = $state('こんにちは。VOICE LABで作成した声のテストです。');
+  let candidateName = $state('');
+  let cloneModel = $state('');
+  let loraModel = $state('');
+  let autoSpeak = $state(false);
+
+  // --- resources --------------------------------------------------------
+  let candidates = $state<VoiceCandidate[]>([]);
+  let keptVoices = $state<string[]>([]);
+  let loras = $state<string[]>([]);
+  let bridgeReachable = $state(false);
+  let bridgeInfo = $state('');
+  let designerModels = $state<VoiceModelOption[]>([]);
+  let designerModel = $state('');
+
+  // --- advanced ---------------------------------------------------------
   let voiceSeed = $state('');
   let voiceSeconds = $state('');
   let voiceSteps = $state('20');
-  let voiceMemo = $state('');
-  let selectedStyleIds = $state<string[]>([]);
-  let designAudioUrl = $state<string | null>(null);
-  let designAudioEl = $state<HTMLAudioElement | null>(null);
-  let isDesigning = $state(false);
-  let designErrorMessage = $state<string | null>(null);
-  let designGeneratedAt = $state<string | null>(null);
-  let designLibraryName = $state<string | null>(null);
-  let lastDesignResult = $state<VoiceLibraryItem | null>(null);
-  let voiceLibrary = $state<VoiceLibraryItem[]>([]);
-  let libraryErrorMessage = $state<string | null>(null);
-  let ttsModels = $state<VoiceModelOption[]>([]);
-  let designerModels = $state<VoiceModelOption[]>([]);
-  let ttsModel = $state('');
-  let designerModel = $state('');
-  let modelErrorMessage = $state<string | null>(null);
+  let voiceSpeed = $state('1.0');
   let voiceBackend = $state<VoiceBackend>('local');
   let localVoiceUrl = $state('http://127.0.0.1:7860');
   let colabVoiceUrl = $state('');
-  let voiceProfiles = $state<Record<string, IrodoriVoiceProfile>>({});
   let settingsMessage = $state<string | null>(null);
-  let profileMessage = $state<string | null>(null);
 
-  function currentVoiceEndpoint() {
-    return voiceBackend === 'colab' ? colabVoiceUrl : localVoiceUrl;
-  }
+  // --- status -----------------------------------------------------------
+  let isGenerating = $state(false);
+  let elapsedSec = $state(0);
+  let generateError = $state<string | null>(null);
+  let statusMessage = $state<string | null>(null);
+  let candidatesError = $state<string | null>(null);
+  let busyCandidateId = $state<string | null>(null);
+  let elapsedTimer: ReturnType<typeof setInterval> | null = null;
 
-  function setCurrentVoiceEndpoint(value: string) {
-    if (voiceBackend === 'colab') {
-      colabVoiceUrl = value;
-      return;
-    }
-    localVoiceUrl = value;
-  }
+  const selectedCharacter = $derived(characters.find((entry) => entry.id === selectedCharacterId) ?? null);
+  const currentVoice = $derived(selectedCharacter?.voice ?? null);
 
-  function applyPreset(name: string) {
-    const preset = voicePresets.find((item) => item.name === name);
-    if (!preset) return;
-    characterName = preset.name;
-    loadVoiceProfileForCharacter(preset.name, preset.caption);
-  }
+  const canGenerate = $derived.by(() => {
+    if (isGenerating || !selectedCharacter || !sampleText.trim()) return false;
+    if (mode === 'design') return Boolean(voiceCaption.trim() && designerModel);
+    if (mode === 'clone') return Boolean(cloneModel);
+    return Boolean(loraModel);
+  });
 
-  function rebuildCaptionFromStyles() {
-    const characterPreset = voicePresets.find((item) => item.name === characterName)?.caption;
-    const selectedCaptions = stylePresets
-      .filter((preset) => selectedStyleIds.includes(preset.id))
-      .map((preset) => preset.caption);
-    voiceCaption = [characterPreset, ...selectedCaptions].filter(Boolean).join('\n');
-  }
+  const canApplyForm = $derived.by(() => {
+    if (!selectedCharacter) return false;
+    if (mode === 'design') return Boolean(voiceCaption.trim());
+    if (mode === 'clone') return Boolean(cloneModel);
+    return Boolean(loraModel);
+  });
 
-  function toggleStylePreset(id: string) {
-    selectedStyleIds = selectedStyleIds.includes(id)
-      ? selectedStyleIds.filter((item) => item !== id)
-      : [...selectedStyleIds, id];
-    rebuildCaptionFromStyles();
+  function parsedSpeed(): number {
+    const parsed = Number(voiceSpeed);
+    return Number.isFinite(parsed) && parsed > 0.25 && parsed < 4 ? parsed : 1;
   }
 
   function countSpeechCharacters(value: string) {
     return Array.from(value.replace(/\s+/g, '')).length;
   }
 
-  function estimateSecondsFromText(value: string) {
-    const characterCount = countSpeechCharacters(value.trim());
-    return Math.max(1, Math.ceil(characterCount / 15));
+  function estimatedSeconds() {
+    return Math.max(1, Math.ceil(countSpeechCharacters(sampleText.trim()) / 15));
   }
 
-  function resolvedDesignSeconds() {
-    const estimatedSeconds = estimateSecondsFromText(designText);
-    const raw = voiceSeconds.trim();
-    if (!raw || raw.toLowerCase() === 'auto') return estimatedSeconds;
-
-    const parsed = Number(raw);
-    if (!Number.isFinite(parsed) || parsed <= 0) return estimatedSeconds;
-    return Math.max(parsed, estimatedSeconds);
+  function candidateTitle(item: VoiceCandidate) {
+    return item.memo || `${item.characterName} / ${item.mode ?? 'design'}`;
   }
 
-  function secondsModeLabel() {
-    const estimatedSeconds = estimateSecondsFromText(designText);
-    const raw = voiceSeconds.trim();
-    if (!raw || raw.toLowerCase() === 'auto') return `AUTO / ${estimatedSeconds}s`;
-
-    const parsed = Number(raw);
-    if (!Number.isFinite(parsed) || parsed <= 0) return `AUTO FALLBACK / ${estimatedSeconds}s`;
-    if (parsed < estimatedSeconds) return `AUTO EXTENDED / ${estimatedSeconds}s`;
-    return `MANUAL / ${parsed}s`;
+  function candidateMode(item: VoiceCandidate): VoiceMode {
+    return item.mode ?? 'design';
   }
 
-  function modelSourceLabel(model: VoiceModelOption) {
-    if (model.source === 'local') return 'LOCAL';
-    if (model.source === 'env') return 'ENV';
-    return 'IRODORI';
+  function formatDate(value: string) {
+    return new Date(value).toLocaleString('ja-JP');
   }
 
-  function restoreSelectedModel(models: VoiceModelOption[], storageKey: string) {
-    const saved = localStorage.getItem(storageKey);
-    if (saved && models.some((model) => model.id === saved)) return saved;
-    return models[0]?.id ?? '';
+  function describeVoice(voice: CharacterVoiceConfig | null) {
+    if (!voice) return 'NOT CONFIGURED';
+    const parts = [`mode=${voice.mode}`];
+    if (voice.model) parts.push(`model=${voice.model}`);
+    if (voice.speed && voice.speed !== 1) parts.push(`speed=${voice.speed}`);
+    if (voice.autoSpeak) parts.push('autoSpeak');
+    return parts.join(' / ');
   }
 
-  async function loadVoiceModels() {
+  function syncAutoSpeakFromCharacter() {
+    autoSpeak = Boolean(selectedCharacter?.voice?.autoSpeak);
+  }
+
+  // --- loading ----------------------------------------------------------
+  async function loadCharacters() {
+    try {
+      const res = await fetch('/api/characters');
+      if (!res.ok) throw new Error(`characters load failed (${res.status})`);
+      const data = (await res.json()) as { characters?: CharacterEntry[] };
+      characters = data.characters ?? [];
+      if (!selectedCharacterId && characters.length > 0) {
+        selectedCharacterId = characters[0].id;
+      }
+      syncAutoSpeakFromCharacter();
+    } catch (e) {
+      console.error('[voice-lab] characters load failed:', e);
+    }
+  }
+
+  async function loadCandidates() {
+    try {
+      const res = await fetch('/api/voice/designer');
+      if (!res.ok) throw new Error(`candidates load failed (${res.status})`);
+      const data = (await res.json()) as { items?: VoiceCandidate[] };
+      candidates = data.items ?? [];
+      candidatesError = null;
+    } catch (e) {
+      console.error('[voice-lab] candidates load failed:', e);
+      candidatesError = e instanceof Error ? e.message : 'candidates load failed';
+    }
+  }
+
+  async function loadBridgeResources() {
+    try {
+      const res = await fetch('/api/voice/candidates');
+      if (!res.ok) throw new Error(`bridge status failed (${res.status})`);
+      const data = (await res.json()) as {
+        bridge?: { reachable?: boolean; backend?: string | null; device?: string | null; loras?: string[] };
+        keptVoices?: string[];
+      };
+      bridgeReachable = Boolean(data.bridge?.reachable);
+      bridgeInfo = bridgeReachable
+        ? `${data.bridge?.backend ?? '?'} / ${data.bridge?.device ?? '?'}`
+        : 'OFFLINE';
+      loras = data.bridge?.loras ?? [];
+      keptVoices = data.keptVoices ?? [];
+      if (!cloneModel && keptVoices.length > 0) cloneModel = keptVoices[0];
+      if (!loraModel && loras.length > 0) loraModel = loras[0];
+    } catch (e) {
+      console.error('[voice-lab] bridge status failed:', e);
+      bridgeReachable = false;
+      bridgeInfo = 'OFFLINE';
+    }
+  }
+
+  async function loadDesignerModels() {
     try {
       const res = await fetch('/api/voice/models');
       if (!res.ok) throw new Error(`model scan failed (${res.status})`);
-      const data = (await res.json()) as { engines?: VoiceModelGroup[] };
-      const ttsGroup = data.engines?.find((engine) => engine.id === 'irodori-tts');
-      const designerGroup = data.engines?.find((engine) => engine.id === 'kizuna-voice-designer');
-
-      ttsModels = ttsGroup?.models ?? [];
-      designerModels = designerGroup?.models ?? [];
-      ttsModel = restoreSelectedModel(ttsModels, TTS_MODEL_STORAGE_KEY);
-      designerModel = restoreSelectedModel(designerModels, DESIGNER_MODEL_STORAGE_KEY);
-      loadVoiceProfileForCharacter(characterName, voiceCaption);
-      modelErrorMessage = null;
+      const data = (await res.json()) as { engines?: { id: string; models: VoiceModelOption[] }[] };
+      designerModels = data.engines?.find((engine) => engine.id === 'kizuna-voice-designer')?.models ?? [];
+      const saved = localStorage.getItem(DESIGNER_MODEL_STORAGE_KEY);
+      designerModel = saved && designerModels.some((model) => model.id === saved)
+        ? saved
+        : (designerModels[0]?.id ?? '');
     } catch (e) {
       console.error('[voice-lab] model scan failed:', e);
-      modelErrorMessage = e instanceof Error ? e.message : 'Model scan failed';
     }
   }
 
-  function saveTtsModel() {
-    if (ttsModel) localStorage.setItem(TTS_MODEL_STORAGE_KEY, ttsModel);
-  }
-
-  function saveDesignerModel() {
-    if (designerModel) localStorage.setItem(DESIGNER_MODEL_STORAGE_KEY, designerModel);
-  }
-
-  async function loadIrodoriSettings() {
+  async function loadEndpointSettings() {
     try {
       const res = await fetch('/api/settings');
       if (!res.ok) throw new Error(`settings load failed (${res.status})`);
-      const data = (await res.json()) as { irodori?: Partial<IrodoriSettings>; voice?: Partial<VoiceSettings> };
-      const legacyUrl = data.irodori?.url ?? '';
+      const data = (await res.json()) as {
+        voice?: { backend?: string; localUrl?: string; colabUrl?: string };
+      };
       voiceBackend = data.voice?.backend === 'colab' ? 'colab' : 'local';
-      localVoiceUrl = data.voice?.localUrl || (voiceBackend === 'local' ? legacyUrl : '') || 'http://127.0.0.1:7860';
-      colabVoiceUrl = data.voice?.colabUrl || (voiceBackend === 'colab' ? legacyUrl : '') || '';
-      voiceProfiles = data.irodori?.voiceProfiles ?? {};
-      loadVoiceProfileForCharacter(characterName, voiceCaption);
-      settingsMessage = null;
+      localVoiceUrl = data.voice?.localUrl || 'http://127.0.0.1:7860';
+      colabVoiceUrl = data.voice?.colabUrl || '';
     } catch (e) {
       console.error('[voice-lab] settings load failed:', e);
-      settingsMessage = e instanceof Error ? e.message : 'settings load failed';
     }
   }
 
-  async function saveIrodoriSettings(message = 'SETTINGS SAVED') {
-    const res = await fetch('/api/settings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        irodori: {
-          url: currentVoiceEndpoint().trim(),
-          voiceProfiles,
-        },
-        voice: {
-          backend: voiceBackend,
-          localUrl: localVoiceUrl.trim(),
-          colabUrl: colabVoiceUrl.trim(),
-        },
-      }),
-    });
-    if (!res.ok) throw new Error(`settings save failed (${res.status})`);
-    settingsMessage = message;
-  }
-
-  async function saveIrodoriEndpoint() {
+  async function saveEndpointSettings() {
     try {
-      await saveIrodoriSettings(`ENDPOINT SAVED: ${voiceBackend.toUpperCase()}`);
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          voice: {
+            backend: voiceBackend,
+            localUrl: localVoiceUrl.trim(),
+            colabUrl: colabVoiceUrl.trim(),
+          },
+        }),
+      });
+      if (!res.ok) throw new Error(`settings save failed (${res.status})`);
+      settingsMessage = `ENDPOINT SAVED: ${voiceBackend.toUpperCase()}`;
     } catch (e) {
-      console.error('[voice-lab] endpoint save failed:', e);
       settingsMessage = e instanceof Error ? e.message : 'endpoint save failed';
     }
   }
 
-  function loadVoiceProfileForCharacter(name: string, fallbackCaption = '') {
-    const profile = voiceProfiles[name.trim()];
-    if (!profile) {
-      voiceCaption = fallbackCaption;
-      profileMessage = null;
-      return;
-    }
-
-    voice = profile.voice || voice;
-    voiceCaption = profile.caption || fallbackCaption;
-    if (profile.ttsModel && ttsModels.some((model) => model.id === profile.ttsModel)) {
-      ttsModel = profile.ttsModel;
-      saveTtsModel();
-    }
-    if (profile.designerModel && designerModels.some((model) => model.id === profile.designerModel)) {
-      designerModel = profile.designerModel;
-      saveDesignerModel();
-    }
-    profileMessage = `VOICE PROFILE LOADED: ${profile.characterName}`;
-  }
-
-  async function saveVoiceProfile() {
-    const name = characterName.trim();
-    const caption = voiceCaption.trim();
-    if (!name || !caption) return;
-
-    const nextProfile: IrodoriVoiceProfile = {
-      characterName: name,
-      caption,
-      voice: voice.trim() || 'none',
-      ttsModel,
-      designerModel,
-      updatedAt: new Date().toISOString(),
-    };
-    voiceProfiles = {
-      ...voiceProfiles,
-      [name]: nextProfile,
-    };
-
-    try {
-      await saveIrodoriSettings(`VOICE PROFILE SAVED: ${name}`);
-      profileMessage = `VOICE PROFILE SAVED: ${name}`;
-    } catch (e) {
-      console.error('[voice-lab] voice profile save failed:', e);
-      profileMessage = e instanceof Error ? e.message : 'voice profile save failed';
-    }
-  }
-
-  async function loadVoiceLibrary() {
-    try {
-      const res = await fetch('/api/voice/designer');
-      if (!res.ok) throw new Error(`voice library failed (${res.status})`);
-      const data = (await res.json()) as { items?: VoiceLibraryItem[] };
-      voiceLibrary = data.items ?? [];
-      libraryErrorMessage = null;
-    } catch (e) {
-      console.error('[voice-lab] library load failed:', e);
-      libraryErrorMessage = e instanceof Error ? e.message : 'Voice Library load failed';
-    }
-  }
-
   onMount(() => {
-    loadVoiceModels();
-    loadVoiceLibrary();
-    loadIrodoriSettings();
+    loadCharacters();
+    loadCandidates();
+    loadBridgeResources();
+    loadDesignerModels();
+    loadEndpointSettings();
   });
 
-  async function generateSample() {
-    const text = sampleText.trim();
-    if (!text || !ttsModel || isGenerating) return;
+  onDestroy(() => {
+    if (elapsedTimer) clearInterval(elapsedTimer);
+  });
+
+  // --- actions ----------------------------------------------------------
+  function startElapsed() {
+    elapsedSec = 0;
+    elapsedTimer = setInterval(() => (elapsedSec += 1), 1000);
+  }
+
+  function stopElapsed() {
+    if (elapsedTimer) clearInterval(elapsedTimer);
+    elapsedTimer = null;
+  }
+
+  async function generateVoice() {
+    if (!canGenerate || !selectedCharacter) return;
 
     isGenerating = true;
-    errorMessage = null;
+    generateError = null;
+    statusMessage = null;
+    startElapsed();
 
     try {
-      const res = await fetch('/api/voice/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, voice: voice.trim() || 'none', model: ttsModel }),
-      });
+      let res: Response;
+      if (mode === 'design') {
+        res = await fetch('/api/voice/designer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            characterName: selectedCharacter.name,
+            text: sampleText.trim(),
+            caption: voiceCaption.trim(),
+            model: designerModel,
+            seed: voiceSeed.trim(),
+            seconds: voiceSeconds.trim(),
+            steps: voiceSteps.trim() || '20',
+            memo: candidateName.trim(),
+          }),
+        });
+      } else {
+        res = await fetch('/api/voice/candidates', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            characterName: selectedCharacter.name,
+            text: sampleText.trim(),
+            mode,
+            model: mode === 'clone' ? cloneModel : loraModel,
+            caption: voiceCaption.trim(),
+            speed: parsedSpeed(),
+            memo: candidateName.trim(),
+          }),
+        });
+      }
 
       if (!res.ok) {
         const detail = await res
@@ -375,88 +327,136 @@
         throw new Error(detail || `voice generation failed (${res.status})`);
       }
 
-      const data = (await res.json()) as { audioUrl?: string };
-      if (!data.audioUrl) {
-        throw new Error('audioUrl was not returned');
+      const data = (await res.json()) as { libraryEntry?: VoiceCandidate };
+      if (data.libraryEntry) {
+        candidates = [data.libraryEntry, ...candidates.filter((item) => item.id !== data.libraryEntry?.id)];
+      } else {
+        await loadCandidates();
       }
-
-      audioUrl = `${data.audioUrl}?t=${Date.now()}`;
-      lastGeneratedAt = new Date().toLocaleTimeString('ja-JP');
-
-      await tick();
-      await audioEl?.play().catch(() => {});
+      statusMessage = `CANDIDATE ADDED (${elapsedSec}s)`;
     } catch (e) {
       console.error('[voice-lab] generate failed:', e);
-      errorMessage = e instanceof Error ? e.message : '音声生成に失敗しました';
+      generateError = e instanceof Error ? e.message : 'voice generation failed';
     } finally {
+      stopElapsed();
       isGenerating = false;
     }
   }
 
-  async function generateVoiceDesign() {
-    const name = characterName.trim();
-    const text = designText.trim();
-    const caption = voiceCaption.trim();
-    const seed = voiceSeed.trim();
-    const seconds = voiceSeconds.trim();
-    const steps = voiceSteps.trim();
-    const memo = voiceMemo.trim();
-    if (!name || !text || !caption || !designerModel || !steps || isDesigning) return;
+  async function putCharacterVoice(payload: Record<string, unknown>): Promise<CharacterEntry> {
+    if (!selectedCharacter) throw new Error('character is not selected');
+    const res = await fetch(`/api/characters/${encodeURIComponent(selectedCharacter.id)}/voice`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = (await res.json().catch(() => ({}))) as { character?: CharacterEntry; message?: string };
+    if (!res.ok || !data.character) {
+      throw new Error(data.message || `voice update failed (${res.status})`);
+    }
+    characters = characters.map((entry) => (entry.id === data.character?.id ? data.character : entry));
+    return data.character;
+  }
 
-    isDesigning = true;
-    designErrorMessage = null;
+  async function adoptCandidate(item: VoiceCandidate) {
+    if (!selectedCharacter || busyCandidateId) return;
+
+    busyCandidateId = item.id;
+    generateError = null;
+    statusMessage = null;
 
     try {
-      const res = await fetch('/api/voice/designer', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ characterName: name, text, caption, model: designerModel, seed, seconds, steps, memo }),
-      });
+      const base = {
+        engine: 'irodori',
+        speed: parsedSpeed(),
+        autoSpeak,
+      };
+      const itemMode = candidateMode(item);
+      let payload: Record<string, unknown>;
 
-      if (!res.ok) {
-        const detail = await res
-          .json()
-          .then((data: { error?: string; detail?: string }) => data.detail || data.error || '')
-          .catch(() => '');
-        throw new Error(detail || `voice designer failed (${res.status})`);
+      if (itemMode === 'design') {
+        // design 候補は wav を kept voice として登録し clone モードで採用する
+        // (bridge の design 直接合成は 30 秒固定生成で CPU では実用外のため)。
+        payload = {
+          voice: { ...base, mode: 'design', model: '', caption: item.caption },
+          keptVoice: {
+            sourceAudioUrl: item.audioUrl,
+            text: item.text,
+            name: `${selectedCharacter.id}_${item.id.slice(0, 8)}`,
+          },
+        };
+      } else {
+        payload = {
+          voice: {
+            ...base,
+            mode: itemMode,
+            model: item.checkpoint,
+            ...(item.caption ? { caption: item.caption } : {}),
+          },
+        };
       }
 
-      const data = (await res.json()) as { audioUrl?: string; libraryEntry?: VoiceLibraryItem };
-      if (!data.audioUrl) {
-        throw new Error('audioUrl was not returned');
-      }
-
-      designAudioUrl = `${data.audioUrl}?t=${Date.now()}`;
-      designLibraryName = data.audioUrl.split('/').pop() ?? null;
-      lastDesignResult = data.libraryEntry ?? null;
-      designGeneratedAt = new Date().toLocaleTimeString('ja-JP');
-      await saveVoiceProfile();
-      await loadVoiceLibrary();
-
-      await tick();
-      await designAudioEl?.play().catch(() => {});
+      const character = await putCharacterVoice(payload);
+      statusMessage = `ADOPTED: ${candidateTitle(item)} → ${character.name}`;
+      if (itemMode === 'design') await loadBridgeResources();
     } catch (e) {
-      console.error('[voice-lab] voice design failed:', e);
-      designErrorMessage = e instanceof Error ? e.message : 'Voice Design failed';
+      console.error('[voice-lab] adopt failed:', e);
+      generateError = e instanceof Error ? e.message : 'adopt failed';
     } finally {
-      isDesigning = false;
+      busyCandidateId = null;
     }
   }
 
-  async function regenerateFromLibrary(item: VoiceLibraryItem) {
-    characterName = item.characterName;
-    designText = item.text;
-    voiceCaption = item.caption;
-    voiceSeed = item.seed ?? '';
-    voiceSeconds = String(item.seconds);
-    voiceSteps = String(item.steps);
-    voiceMemo = item.memo;
-    if (designerModels.some((model) => model.id === item.checkpoint)) {
-      designerModel = item.checkpoint;
-      saveDesignerModel();
+  async function deleteCandidate(item: VoiceCandidate) {
+    if (busyCandidateId) return;
+    if (!confirm(`候補「${candidateTitle(item)}」を削除しますか?`)) return;
+
+    busyCandidateId = item.id;
+    try {
+      const res = await fetch(`/api/voice/candidates?id=${encodeURIComponent(item.id)}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error || `delete failed (${res.status})`);
+      }
+      candidates = candidates.filter((entry) => entry.id !== item.id);
+      statusMessage = `DELETED: ${candidateTitle(item)}`;
+    } catch (e) {
+      console.error('[voice-lab] delete failed:', e);
+      generateError = e instanceof Error ? e.message : 'delete failed';
+    } finally {
+      busyCandidateId = null;
     }
-    await tick();
-    await generateVoiceDesign();
+  }
+
+  async function applyFormToCharacter() {
+    if (!canApplyForm || busyCandidateId) return;
+
+    generateError = null;
+    statusMessage = null;
+    try {
+      const voice = {
+        engine: 'irodori',
+        mode,
+        model: mode === 'clone' ? cloneModel : mode === 'lora' ? loraModel : '',
+        ...(voiceCaption.trim() ? { caption: voiceCaption.trim() } : {}),
+        speed: parsedSpeed(),
+        autoSpeak,
+      };
+      const character = await putCharacterVoice({ voice });
+      statusMessage = `VOICE APPLIED: ${character.name}`;
+    } catch (e) {
+      console.error('[voice-lab] apply failed:', e);
+      generateError = e instanceof Error ? e.message : 'apply failed';
+    }
+  }
+
+  function toggleStylePreset(caption: string) {
+    const trimmed = voiceCaption.trim();
+    voiceCaption = trimmed ? `${trimmed}\n${caption}` : caption;
+  }
+
+  function saveDesignerModel() {
+    if (designerModel) localStorage.setItem(DESIGNER_MODEL_STORAGE_KEY, designerModel);
   }
 </script>
 
@@ -476,198 +476,147 @@
   <main class="voice-lab">
     <header class="lab-header">
       <a href="/" class="back-link">← CENTRAL TERMINAL</a>
-      <div class="status"><span></span>VOICE RESEARCH SECTION</div>
+      <div class="title-block">
+        <h1>VOICE LAB</h1>
+        <p>CREATE / COMPARE / ADOPT CHARACTER VOICES</p>
+      </div>
+      <div class="status">
+        <span class:offline={!bridgeReachable}></span>
+        BRIDGE {bridgeReachable ? bridgeInfo : 'OFFLINE'}
+      </div>
     </header>
 
-    <section class="hero">
-      <div>
-        <p class="eyebrow">LOCAL AUDIO RESEARCH MODULE</p>
-        <h1>VOICE LAB</h1>
-        <p class="lead">Irodori-TTS / Irodori VoiceDesign / 音声サンプル管理</p>
-      </div>
-
-      <div class="voice-core" aria-hidden="true">
-        <span class="ring ring-a"></span>
-        <span class="ring ring-b"></span>
-        <span class="ring ring-c"></span>
-        <span class="core-dot"></span>
-      </div>
-    </section>
-
-    <section class="panel-grid">
-      <div class="panel main-panel">
+    <section class="workspace">
+      <!-- ============ LEFT: CREATE ============ -->
+      <div class="panel create-panel">
         <div class="panel-header">
-          <span>{activeTab === 'sample' ? 'VOICE CONTROL' : 'VOICE DESIGN'}</span>
-          <b>{isGenerating || isDesigning ? 'GENERATING' : 'READY'}</b>
+          <span>CREATE VOICE</span>
+          <b>{isGenerating ? `GENERATING ${elapsedSec}s` : 'READY'}</b>
         </div>
 
-        <div class="tab-bar" role="tablist" aria-label="VOICE LAB modes">
-          <button class:active={activeTab === 'sample'} onclick={() => (activeTab = 'sample')}>
-            SAMPLE
-          </button>
-          <button class:active={activeTab === 'design'} onclick={() => (activeTab = 'design')}>
-            VOICE DESIGN
-          </button>
+        <label>
+          <span>Character</span>
+          <select bind:value={selectedCharacterId} onchange={syncAutoSpeakFromCharacter}>
+            {#each characters as character}
+              <option value={character.id}>{character.name} ({character.id})</option>
+            {/each}
+          </select>
+        </label>
+
+        <div class="mode-bar" role="tablist" aria-label="production mode">
+          <button class:active={mode === 'design'} onclick={() => (mode = 'design')}>VOICE DESIGN</button>
+          <button class:active={mode === 'clone'} onclick={() => (mode = 'clone')}>CLONE</button>
+          <button class:active={mode === 'lora'} onclick={() => (mode = 'lora')}>LORA</button>
         </div>
 
-        <div class="control-stack">
-          {#if activeTab === 'sample'}
+        {#if mode !== 'design' && !bridgeReachable}
+          <div class="warn-box">Voice Bridge (port 8791) が起動していません。run_voice_bridge.bat を実行してください。</div>
+        {/if}
+
+        {#if mode === 'clone'}
+          <label>
+            <span>Kept Voice</span>
+            <select bind:value={cloneModel} disabled={keptVoices.length === 0}>
+              {#each keptVoices as name}
+                <option value={name}>{name}</option>
+              {/each}
+            </select>
+          </label>
+          {#if keptVoices.length === 0}
+            <div class="hint-line">kept voice がありません。design 候補を採用すると自動登録されます。</div>
+          {/if}
+        {:else if mode === 'lora'}
+          <label>
+            <span>LoRA Model</span>
+            <select bind:value={loraModel} disabled={loras.length === 0}>
+              {#each loras as name}
+                <option value={name}>{name}</option>
+              {/each}
+            </select>
+          </label>
+          {#if loras.length === 0}
+            <div class="hint-line">学習済み LoRA がありません。</div>
+          {/if}
+        {/if}
+
+        <label>
+          <span>Voice Caption {mode === 'design' ? '(required)' : '(optional)'}</span>
+          <textarea bind:value={voiceCaption} rows="3" placeholder="声質・話し方・距離感を記述"></textarea>
+        </label>
+
+        {#if mode === 'design'}
+          <div class="style-preset-row">
+            {#each stylePresets as preset}
+              <button onclick={() => toggleStylePreset(preset.caption)} title={preset.caption}>{preset.id}</button>
+            {/each}
+          </div>
+        {/if}
+
+        <label>
+          <span>Sample Text</span>
+          <textarea bind:value={sampleText} rows="3" placeholder="生成するセリフを入力"></textarea>
+        </label>
+        {#if mode === 'design'}
+          <div class="hint-line">EST {estimatedSeconds()}s / {countSpeechCharacters(sampleText)} chars</div>
+        {/if}
+
+        <label>
+          <span>Candidate Name</span>
+          <input bind:value={candidateName} placeholder="候補の名前 (例: リセア案A・低め)" />
+        </label>
+
+        <button class="generate-btn" onclick={generateVoice} disabled={!canGenerate}>
+          {isGenerating ? `GENERATING... ${elapsedSec}s` : 'GENERATE VOICE'}
+        </button>
+
+        {#if generateError}
+          <div class="error-box">{generateError}</div>
+        {/if}
+        {#if statusMessage}
+          <div class="ok-box">{statusMessage}</div>
+        {/if}
+
+        <details class="advanced">
+          <summary>ADVANCED SETTINGS</summary>
+          <div class="advanced-body">
             <label>
               <span>Engine</span>
-              <input value="Irodori-TTS" readonly />
-            </label>
-
-            <label>
-              <span>Model</span>
-              <select bind:value={ttsModel} onchange={saveTtsModel} disabled={ttsModels.length === 0}>
-                {#each ttsModels as model}
-                  <option value={model.id}>{model.label} / {modelSourceLabel(model)}</option>
-                {/each}
-              </select>
-            </label>
-
-            <label>
-              <span>Voice Backend</span>
-              <select bind:value={voiceBackend}>
-                <option value="local">Local</option>
-                <option value="colab">Colab</option>
-              </select>
-            </label>
-
-            <label>
-              <span>Endpoint</span>
               <input
-                value={currentVoiceEndpoint()}
-                placeholder={voiceBackend === 'colab' ? 'https://xxxxx.trycloudflare.com' : 'http://127.0.0.1:7860'}
-                oninput={(event) => setCurrentVoiceEndpoint(event.currentTarget.value)}
+                readonly
+                value={mode === 'design' ? 'Irodori VoiceDesign (Gradio)' : 'Voice Bridge (FastAPI :8791)'}
               />
             </label>
 
-            <div class="actions compact-actions">
-              <button onclick={saveIrodoriEndpoint} disabled={!currentVoiceEndpoint().trim()}>
-                SAVE ENDPOINT
-              </button>
-              {#if settingsMessage}
-                <span>{settingsMessage}</span>
-              {/if}
-            </div>
-
             <label>
-              <span>Voice</span>
-              <input bind:value={voice} placeholder="none / sample / reference voice id" />
-            </label>
-
-            <label>
-              <span>Sample Text</span>
-              <textarea bind:value={sampleText} placeholder="生成したいテキストを入力"></textarea>
-            </label>
-
-            <div class="actions">
-              <button onclick={generateSample} disabled={isGenerating || !sampleText.trim() || !ttsModel}>
-                {isGenerating ? 'GENERATING WAV...' : 'GENERATE SAMPLE'}
-              </button>
-              {#if lastGeneratedAt}
-                <span>LAST WAV: {lastGeneratedAt}</span>
-              {/if}
-            </div>
-
-            {#if audioUrl}
-              <audio bind:this={audioEl} src={audioUrl} controls></audio>
-            {/if}
-
-            {#if errorMessage}
-              <div class="error-box">{errorMessage}</div>
-            {/if}
-
-            {#if modelErrorMessage}
-              <div class="error-box">{modelErrorMessage}</div>
-            {/if}
-          {:else}
-            <label>
-              <span>Engine</span>
-              <input value="Irodori VoiceDesign" readonly />
-            </label>
-
-            <label>
-              <span>Voice Backend</span>
-              <input value="Irodori VoiceDesign API" readonly />
-            </label>
-
-            <label>
-              <span>Backend</span>
-              <select bind:value={voiceBackend}>
-                <option value="local">Local</option>
-                <option value="colab">Colab</option>
-              </select>
-            </label>
-
-            <label>
-              <span>Endpoint</span>
-              <input
-                value={currentVoiceEndpoint()}
-                placeholder={voiceBackend === 'colab' ? 'https://xxxxx.trycloudflare.com' : 'http://127.0.0.1:7860'}
-                oninput={(event) => setCurrentVoiceEndpoint(event.currentTarget.value)}
-              />
-            </label>
-
-            <div class="actions compact-actions">
-              <button onclick={saveIrodoriEndpoint} disabled={!currentVoiceEndpoint().trim()}>
-                SAVE ENDPOINT
-              </button>
-              {#if settingsMessage}
-                <span>{settingsMessage}</span>
-              {/if}
-            </div>
-
-            <label>
-              <span>Model</span>
+              <span>Designer Model</span>
               <select bind:value={designerModel} onchange={saveDesignerModel} disabled={designerModels.length === 0}>
                 {#each designerModels as model}
-                  <option value={model.id}>{model.label} / {modelSourceLabel(model)}</option>
+                  <option value={model.id}>{model.label}</option>
                 {/each}
               </select>
             </label>
 
-            <div class="preset-row">
-              {#each voicePresets as preset}
-                <button class:active={characterName === preset.name} onclick={() => applyPreset(preset.name)}>
-                  {preset.name}
-                </button>
-              {/each}
+            <div class="field-grid">
+              <label>
+                <span>Backend</span>
+                <select bind:value={voiceBackend}>
+                  <option value="local">Local</option>
+                  <option value="colab">Colab</option>
+                </select>
+              </label>
+              <label class="span-2">
+                <span>Endpoint</span>
+                {#if voiceBackend === 'colab'}
+                  <input bind:value={colabVoiceUrl} placeholder="https://xxxxx.trycloudflare.com" />
+                {:else}
+                  <input bind:value={localVoiceUrl} placeholder="http://127.0.0.1:7860" />
+                {/if}
+              </label>
             </div>
-
-            <label>
-              <span>Character Name</span>
-              <input bind:value={characterName} placeholder="キャラクター名" />
-            </label>
-
-            <label>
-              <span>Text</span>
-              <textarea bind:value={designText} placeholder="生成するセリフを入力"></textarea>
-            </label>
-
-            <div class="style-preset-grid">
-              {#each stylePresets as preset}
-                <button
-                  class:active={selectedStyleIds.includes(preset.id)}
-                  onclick={() => toggleStylePreset(preset.id)}
-                >
-                  {preset.id}
-                </button>
-              {/each}
-            </div>
-
-            <label>
-              <span>Caption / Style Prompt</span>
-              <textarea bind:value={voiceCaption} placeholder="声質・話し方・距離感を記述"></textarea>
-            </label>
-
-            <div class="actions compact-actions">
-              <button onclick={saveVoiceProfile} disabled={!characterName.trim() || !voiceCaption.trim()}>
-                SAVE VOICE PROFILE
-              </button>
-              {#if profileMessage}
-                <span>{profileMessage}</span>
+            <div class="actions">
+              <button onclick={saveEndpointSettings}>SAVE ENDPOINT</button>
+              {#if settingsMessage}
+                <span>{settingsMessage}</span>
               {/if}
             </div>
 
@@ -676,142 +625,103 @@
                 <span>Seed</span>
                 <input bind:value={voiceSeed} inputmode="numeric" placeholder="blank = random" />
               </label>
-
               <label>
                 <span>Seconds</span>
                 <input bind:value={voiceSeconds} inputmode="decimal" placeholder="Auto" />
               </label>
-
               <label>
-                <span>Num Steps</span>
+                <span>Steps</span>
                 <input bind:value={voiceSteps} inputmode="numeric" placeholder="20" />
               </label>
+              <label>
+                <span>Speed</span>
+                <input bind:value={voiceSpeed} inputmode="decimal" placeholder="1.0" />
+              </label>
             </div>
-
-            <div class="estimate-box">
-              <span>PREDICTED SECONDS</span>
-              <b>{resolvedDesignSeconds()}s</b>
-              <p>{secondsModeLabel()} / {countSpeechCharacters(designText)} chars / 15 chars per sec</p>
-            </div>
-
-            <label>
-              <span>Memo</span>
-              <input bind:value={voiceMemo} placeholder="用途・印象・調整メモ" />
-            </label>
-
-            <div class="actions">
-              <button
-                onclick={generateVoiceDesign}
-                disabled={isDesigning || !characterName.trim() || !designText.trim() || !voiceCaption.trim() || !designerModel || !voiceSteps.trim()}
-              >
-                {isDesigning ? 'DESIGNING VOICE...' : 'VOICE DESIGN GENERATE'}
-              </button>
-              {#if designGeneratedAt}
-                <span>VOICE LIBRARY: {designGeneratedAt}</span>
-              {/if}
-            </div>
-
-            {#if designLibraryName}
-              <div class="library-entry">
-                <span>REGISTERED</span>
-                <b>{designLibraryName}</b>
-              </div>
-            {/if}
-
-            {#if lastDesignResult}
-              <div class="result-grid">
-                <div><span>SEED</span><b>{lastDesignResult.seed ?? 'random'}</b></div>
-                <div><span>TIME</span><b>{lastDesignResult.generationTimeMs} ms</b></div>
-                <div><span>RELOAD</span><b>{lastDesignResult.modelReloaded ? 'YES' : 'NO'}</b></div>
-                <div><span>CHECKPOINT</span><b>{lastDesignResult.checkpoint}</b></div>
-                <div class="wide"><span>CAPTION</span><p>{lastDesignResult.caption}</p></div>
-              </div>
-            {/if}
-
-            {#if designAudioUrl}
-              <audio bind:this={designAudioEl} src={designAudioUrl} controls></audio>
-            {/if}
-
-            {#if designErrorMessage}
-              <div class="error-box">{designErrorMessage}</div>
-            {/if}
-
-            {#if modelErrorMessage}
-              <div class="error-box">{modelErrorMessage}</div>
-            {/if}
-
-            <div class="library-list">
-              <div class="panel-header library-header">
-                <span>VOICE LIBRARY</span>
-                <button onclick={loadVoiceLibrary}>REFRESH</button>
-              </div>
-
-              {#if libraryErrorMessage}
-                <div class="error-box">{libraryErrorMessage}</div>
-              {:else if voiceLibrary.length === 0}
-                <div class="library-empty">NO VOICE DATA</div>
-              {:else}
-                {#each voiceLibrary as item}
-                  <div class="library-card">
-                    <div>
-                      <b>{item.characterName}</b>
-                      <span>{new Date(item.createdAt).toLocaleString('ja-JP')} / seed {item.seed ?? 'random'} / {item.seconds}s / {item.steps} steps</span>
-                    </div>
-                    <p>{item.memo || item.caption}</p>
-                    <p class="caption-line">{item.caption}</p>
-                    <div class="library-meta">
-                      <span>{item.generationTimeMs ?? 0} ms</span>
-                      <span>reload {item.modelReloaded ? 'yes' : 'no'}</span>
-                      <button onclick={() => regenerateFromLibrary(item)}>SAME SEED</button>
-                    </div>
-                    <audio src={`${item.audioUrl}?t=${item.createdAt}`} controls></audio>
-                  </div>
-                {/each}
-              {/if}
-            </div>
-          {/if}
-        </div>
+          </div>
+        </details>
       </div>
 
-      <aside class="panel side-panel">
+      <!-- ============ RIGHT: CANDIDATES ============ -->
+      <div class="panel candidates-panel">
         <div class="panel-header">
-          <span>RESEARCH TARGETS</span>
-          <b>ACTIVE PLAN</b>
-        </div>
-
-        <ul>
-          {#each focusAreas as area}
-            <li>{area}</li>
-          {/each}
-        </ul>
-
-        <div class="profile-list">
-          <div class="panel-header library-header">
-            <span>VOICE PROFILES</span>
-            <b>{Object.keys(voiceProfiles).length}</b>
+          <span>VOICE CANDIDATES</span>
+          <div class="header-actions">
+            <b>{candidates.length}</b>
+            <button class="mini-btn" onclick={loadCandidates}>REFRESH</button>
           </div>
-          {#if Object.keys(voiceProfiles).length === 0}
-            <div class="library-empty">NO PROFILE DATA</div>
-          {:else}
-            {#each Object.values(voiceProfiles) as profile}
-              <button class="profile-card" onclick={() => loadVoiceProfileForCharacter(profile.characterName)}>
-                <b>{profile.characterName}</b>
-                <span>{new Date(profile.updatedAt).toLocaleString('ja-JP')}</span>
-                <p>{profile.caption}</p>
-              </button>
-            {/each}
-          {/if}
         </div>
-      </aside>
+
+        {#if candidatesError}
+          <div class="error-box">{candidatesError}</div>
+        {:else if candidates.length === 0}
+          <div class="empty-box">NO CANDIDATES — 左のフォームから声を生成してください</div>
+        {:else}
+          <div class="candidate-list">
+            {#each candidates as item (item.id)}
+              <div class="candidate-card">
+                <div class="candidate-head">
+                  <b>{candidateTitle(item)}</b>
+                  <span class="mode-tag" data-mode={candidateMode(item)}>{candidateMode(item).toUpperCase()}</span>
+                </div>
+                <div class="candidate-meta">
+                  <span>{formatDate(item.createdAt)}</span>
+                  {#if item.checkpoint && candidateMode(item) !== 'design'}
+                    <span>{item.checkpoint}</span>
+                  {/if}
+                  {#if item.seconds}
+                    <span>{item.seconds}s</span>
+                  {/if}
+                </div>
+                <audio src={`${item.audioUrl}?t=${item.createdAt}`} controls preload="none"></audio>
+                <div class="candidate-actions">
+                  <button
+                    class="adopt-btn"
+                    onclick={() => adoptCandidate(item)}
+                    disabled={!selectedCharacter || busyCandidateId !== null}
+                  >
+                    {busyCandidateId === item.id ? 'APPLYING...' : `ADOPT → ${selectedCharacter?.name ?? '-'}`}
+                  </button>
+                  <button
+                    class="delete-btn"
+                    onclick={() => deleteCandidate(item)}
+                    disabled={busyCandidateId !== null}
+                  >
+                    DELETE
+                  </button>
+                </div>
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
     </section>
 
-    <section class="slot-grid">
-      {#each sampleSlots as slot}
-        <div class:purple={slot.tone === 'purple'} class="slot-card">
-          <span>{slot.label}</span>
-          <b>{slot.value}</b>
+    <!-- ============ BOTTOM: CURRENT VOICE ============ -->
+    <section class="panel current-panel">
+      <div class="panel-header">
+        <span>CURRENT VOICE</span>
+        <b>{selectedCharacter ? selectedCharacter.name : 'NO CHARACTER'}</b>
+      </div>
+
+      <div class="current-grid">
+        <div class="current-info">
+          <div class="current-line" class:unset={!currentVoice}>{describeVoice(currentVoice)}</div>
+          {#if currentVoice?.caption}
+            <p class="current-caption">{currentVoice.caption}</p>
+          {/if}
         </div>
-      {/each}
+
+        <div class="current-actions">
+          <label class="check-line">
+            <input type="checkbox" bind:checked={autoSpeak} />
+            <span>AUTO SPEAK</span>
+          </label>
+          <button class="apply-btn" onclick={applyFormToCharacter} disabled={!canApplyForm || busyCandidateId !== null}>
+            APPLY TO CHARACTER
+          </button>
+        </div>
+      </div>
     </section>
   </main>
 </div>
@@ -844,7 +754,6 @@
     position: relative;
     min-height: 100vh;
     overflow-x: hidden;
-    overflow-y: auto;
     background:
       radial-gradient(circle at 50% -12%, rgba(56, 189, 248, 0.18), transparent 38%),
       radial-gradient(circle at 92% 74%, rgba(168, 85, 247, 0.14), transparent 34%),
@@ -877,25 +786,23 @@
   .voice-lab {
     position: relative;
     z-index: 2;
-    width: min(1120px, calc(100vw - 40px));
-    min-height: 100vh;
-    height: auto !important;
-    max-height: none !important;
-    overflow: visible;
+    width: min(1560px, calc(100vw - 48px));
     margin: 0 auto;
-    padding: 34px 0;
+    padding: 26px 0 40px;
     display: grid;
-    grid-template-rows: auto auto 1fr auto;
-    gap: 24px;
+    gap: 18px;
   }
 
+  /* ---------- header ---------- */
   .lab-header {
-    display: flex;
-    justify-content: space-between;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
     align-items: center;
-    gap: 16px;
-    font-family: 'Orbitron', sans-serif;
-    font-size: 11px !important;
+    gap: 18px;
+    padding: 16px 22px;
+    border: 1px solid rgba(56, 189, 248, 0.24);
+    background: linear-gradient(120deg, rgba(8, 15, 32, 0.82), rgba(12, 12, 34, 0.76));
+    box-shadow: 0 18px 48px rgba(0,0,0,0.38), inset 0 1px 0 rgba(255,255,255,0.06);
   }
 
   .back-link {
@@ -903,7 +810,35 @@
     text-decoration: none;
     border: 1px solid rgba(56, 189, 248, 0.24);
     background: rgba(8, 18, 36, 0.58);
-    padding: 10px 14px;
+    padding: 9px 13px;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 11px !important;
+  }
+
+  .title-block {
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    min-width: 0;
+  }
+
+  .title-block h1 {
+    margin: 0;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 30px !important;
+    line-height: 1;
+    color: transparent;
+    background: linear-gradient(90deg, #38bdf8, #818cf8 46%, #c084fc);
+    -webkit-background-clip: text;
+    background-clip: text;
+    filter: drop-shadow(0 0 18px rgba(56,189,248,0.5));
+  }
+
+  .title-block p {
+    margin: 0;
+    color: rgba(148, 163, 184, 0.68);
+    font-family: 'Orbitron', sans-serif;
+    font-size: 10px !important;
   }
 
   .status {
@@ -911,6 +846,9 @@
     align-items: center;
     gap: 8px;
     color: rgba(203, 213, 225, 0.66);
+    font-family: 'Orbitron', sans-serif;
+    font-size: 11px !important;
+    white-space: nowrap;
   }
 
   .status span {
@@ -921,219 +859,97 @@
     box-shadow: 0 0 12px #38bdf8;
   }
 
-  .hero {
+  .status span.offline {
+    background: #f87171;
+    box-shadow: 0 0 12px #f87171;
+  }
+
+  /* ---------- layout ---------- */
+  .workspace {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 320px;
-    gap: 28px;
-    align-items: center;
-    padding: 34px;
-    border: 1px solid rgba(56, 189, 248, 0.24);
-    background:
-      linear-gradient(120deg, rgba(8, 15, 32, 0.82), rgba(12, 12, 34, 0.76)),
-      radial-gradient(circle at 82% 50%, rgba(56,189,248,0.14), transparent 38%);
-    box-shadow: 0 28px 80px rgba(0,0,0,0.42), inset 0 1px 0 rgba(255,255,255,0.06);
-  }
-
-  .eyebrow {
-    margin: 0 0 10px;
-    color: rgba(148, 163, 184, 0.68);
-    font-family: 'Orbitron', sans-serif;
-    font-size: 11px !important;
-  }
-
-  h1 {
-    margin: 0;
-    font-family: 'Orbitron', sans-serif;
-    font-size: clamp(48px, 9vw, 96px) !important;
-    line-height: 0.95;
-    color: transparent;
-    background: linear-gradient(90deg, #38bdf8, #818cf8 46%, #c084fc);
-    -webkit-background-clip: text;
-    background-clip: text;
-    filter: drop-shadow(0 0 24px rgba(56,189,248,0.56)) drop-shadow(0 0 46px rgba(168,85,247,0.36));
-  }
-
-  .lead {
-    margin: 12px 0 0;
-    color: #cbd5e1;
-    font-size: 20px !important;
-  }
-
-  .voice-core {
-    position: relative;
-    height: 220px;
-    display: grid;
-    place-items: center;
-  }
-
-  .ring {
-    position: absolute;
-    border-radius: 50%;
-    border-style: solid;
-  }
-
-  .ring-a {
-    width: 210px;
-    height: 210px;
-    border: 1px solid rgba(56, 189, 248, 0.32);
-    border-top-color: #38bdf8;
-    animation: spin 14s linear infinite;
-  }
-
-  .ring-b {
-    width: 150px;
-    height: 150px;
-    border: 1px solid rgba(168, 85, 247, 0.28);
-    border-right-color: #c084fc;
-    animation: spin-reverse 9s linear infinite;
-  }
-
-  .ring-c {
-    width: 86px;
-    height: 86px;
-    border: 1px solid rgba(56, 189, 248, 0.3);
-    border-bottom-color: #67e8f9;
-    animation: spin 5s linear infinite;
-  }
-
-  .core-dot {
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    background: #e0f2fe;
-    box-shadow: 0 0 18px #38bdf8, 0 0 56px rgba(56,189,248,0.56);
-  }
-
-  @keyframes spin { to { transform: rotate(360deg); } }
-  @keyframes spin-reverse { to { transform: rotate(-360deg); } }
-
-  .panel-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1.4fr) minmax(300px, 0.6fr);
+    grid-template-columns: minmax(0, 11fr) minmax(0, 9fr);
     gap: 18px;
-    height: auto;
-    max-height: none;
-    overflow: visible;
-  }
-
-  .panel,
-  .slot-card {
-    border: 1px solid rgba(56, 189, 248, 0.2);
-    background: rgba(8, 15, 32, 0.72);
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);
+    align-items: start;
   }
 
   .panel {
+    border: 1px solid rgba(56, 189, 248, 0.2);
+    background: rgba(8, 15, 32, 0.72);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);
     padding: 20px;
-  }
-
-  .main-panel,
-  .control-stack {
-    height: auto;
-    max-height: none;
-    overflow: visible;
   }
 
   .panel-header {
     display: flex;
     justify-content: space-between;
+    align-items: center;
     gap: 16px;
     color: rgba(148, 163, 184, 0.7);
     font-family: 'Orbitron', sans-serif;
     font-size: 11px !important;
-    margin-bottom: 18px;
+    margin-bottom: 16px;
   }
 
   .panel-header b {
     color: #67e8f9;
   }
 
-  .tab-bar,
-  .preset-row {
-    display: flex;
-    flex-wrap: wrap;
+  .header-actions {
+    display: inline-flex;
+    align-items: center;
     gap: 10px;
-    margin-bottom: 16px;
   }
 
-  .tab-bar button,
-  .preset-row button {
-    min-height: 38px;
-    padding: 9px 14px;
-    border-color: rgba(56, 189, 248, 0.24);
+  /* ---------- create panel ---------- */
+  .create-panel {
+    display: grid;
+    gap: 14px;
+    align-content: start;
+  }
+
+  .mode-bar {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+  }
+
+  .mode-bar button {
+    min-height: 46px;
+    padding: 10px;
+    border: 1px solid rgba(56, 189, 248, 0.24);
     background: rgba(56, 189, 248, 0.055);
     color: rgba(203, 213, 225, 0.72);
+    font-family: 'Orbitron', sans-serif;
+    font-size: 12px !important;
+    cursor: pointer;
   }
 
-  .tab-bar button.active,
-  .preset-row button.active {
+  .mode-bar button.active {
     border-color: rgba(192, 132, 252, 0.58);
     background: rgba(168, 85, 247, 0.16);
     color: #e9d5ff;
     box-shadow: 0 0 20px rgba(168, 85, 247, 0.18);
   }
 
-  .style-preset-grid {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 10px;
+  .style-preset-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
   }
 
-  .style-preset-grid button {
-    min-height: 38px;
-    padding: 9px 10px;
-    border-color: rgba(56, 189, 248, 0.22);
+  .style-preset-row button {
+    padding: 6px 10px;
+    border: 1px solid rgba(56, 189, 248, 0.22);
     background: rgba(56, 189, 248, 0.045);
     color: rgba(203, 213, 225, 0.74);
-    font-size: 11px !important;
-  }
-
-  .style-preset-grid button.active {
-    border-color: rgba(192, 132, 252, 0.58);
-    background: rgba(168, 85, 247, 0.16);
-    color: #e9d5ff;
-  }
-
-  .control-stack {
-    display: grid;
-    gap: 14px;
-  }
-
-  .field-grid {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 12px;
-  }
-
-  .estimate-box {
-    border: 1px solid rgba(56, 189, 248, 0.18);
-    background: rgba(56, 189, 248, 0.055);
-    padding: 12px;
-    display: grid;
-    gap: 5px;
-  }
-
-  .estimate-box span {
-    color: rgba(148, 163, 184, 0.74);
     font-family: 'Orbitron', sans-serif;
     font-size: 10px !important;
-  }
-
-  .estimate-box b {
-    color: #67e8f9;
-    font-family: 'Orbitron', sans-serif;
-    font-size: 18px !important;
-  }
-
-  .estimate-box p {
-    margin: 0;
-    color: rgba(203, 213, 225, 0.76);
-    font-size: 13px !important;
+    cursor: pointer;
   }
 
   label {
     display: grid;
-    gap: 7px;
+    gap: 6px;
     color: #94a3b8;
     font-size: 14px !important;
   }
@@ -1151,9 +967,9 @@
     border: 1px solid rgba(56, 189, 248, 0.18);
     background: rgba(2, 6, 23, 0.68);
     color: #cbd5e1;
-    padding: 12px 14px;
+    padding: 11px 13px;
     font: inherit;
-    min-height: 44px;
+    min-height: 42px;
   }
 
   select {
@@ -1165,19 +981,80 @@
   }
 
   textarea {
-    min-height: 120px;
     resize: vertical;
+    min-height: 72px;
+  }
+
+  .hint-line {
+    color: rgba(148, 163, 184, 0.74);
+    font-family: 'Orbitron', sans-serif;
+    font-size: 10px !important;
+  }
+
+  .generate-btn {
+    min-height: 58px;
+    border: 1px solid rgba(192, 132, 252, 0.55);
+    background: linear-gradient(120deg, rgba(56, 189, 248, 0.14), rgba(168, 85, 247, 0.2));
+    color: #e9d5ff;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 16px !important;
+    font-weight: 700;
+    cursor: pointer;
+    box-shadow: 0 0 26px rgba(168, 85, 247, 0.2);
+  }
+
+  .generate-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+    box-shadow: none;
+  }
+
+  .advanced {
+    border: 1px solid rgba(56, 189, 248, 0.14);
+    background: rgba(2, 6, 23, 0.4);
+  }
+
+  .advanced summary {
+    padding: 12px 14px;
+    color: rgba(148, 163, 184, 0.8);
+    font-family: 'Orbitron', sans-serif;
+    font-size: 11px !important;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .advanced-body {
+    display: grid;
+    gap: 12px;
+    padding: 4px 14px 16px;
+  }
+
+  .field-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .field-grid .span-2 {
+    grid-column: span 3;
   }
 
   .actions {
     display: flex;
     align-items: center;
-    gap: 14px;
+    gap: 12px;
     flex-wrap: wrap;
   }
 
-  .compact-actions {
-    margin-top: -4px;
+  .actions button,
+  .mini-btn {
+    border: 1px solid rgba(168, 85, 247, 0.36);
+    background: rgba(168, 85, 247, 0.08);
+    color: #c084fc;
+    font-family: 'Orbitron', sans-serif;
+    padding: 9px 14px;
+    font-size: 11px !important;
+    cursor: pointer;
   }
 
   .actions span {
@@ -1186,25 +1063,200 @@
     font-size: 10px !important;
   }
 
-  button {
-    justify-self: start;
-    border: 1px solid rgba(168, 85, 247, 0.36);
-    background: rgba(168, 85, 247, 0.08);
-    color: #c084fc;
-    font-family: 'Orbitron', sans-serif;
-    padding: 12px 18px;
-    cursor: pointer;
+  .mini-btn {
+    padding: 7px 10px;
+    font-size: 10px !important;
   }
 
-  button:disabled {
-    cursor: wait;
-    opacity: 0.5;
+  /* ---------- candidates ---------- */
+  .candidates-panel {
+    display: grid;
+    align-content: start;
+    gap: 12px;
+  }
+
+  .candidate-list {
+    display: grid;
+    gap: 12px;
+    max-height: 720px;
+    overflow-y: auto;
+    padding-right: 4px;
+  }
+
+  .candidate-card {
+    display: grid;
+    gap: 9px;
+    border: 1px solid rgba(56, 189, 248, 0.18);
+    background: rgba(2, 6, 23, 0.5);
+    padding: 12px;
+  }
+
+  .candidate-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .candidate-head b {
+    color: #67e8f9;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 13px !important;
+    overflow-wrap: anywhere;
+  }
+
+  .mode-tag {
+    flex-shrink: 0;
+    padding: 3px 8px;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 9px !important;
+    color: #e9d5ff;
+    border: 1px solid rgba(192, 132, 252, 0.4);
+    background: rgba(168, 85, 247, 0.12);
+  }
+
+  .mode-tag[data-mode='clone'] {
+    color: #a5f3fc;
+    border-color: rgba(56, 189, 248, 0.4);
+    background: rgba(56, 189, 248, 0.1);
+  }
+
+  .mode-tag[data-mode='lora'] {
+    color: #bbf7d0;
+    border-color: rgba(74, 222, 128, 0.4);
+    background: rgba(74, 222, 128, 0.1);
+  }
+
+  .candidate-meta {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    color: rgba(148, 163, 184, 0.72);
+    font-family: 'Orbitron', sans-serif;
+    font-size: 10px !important;
   }
 
   audio {
     width: 100%;
+    height: 38px;
   }
 
+  .candidate-actions {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 10px;
+  }
+
+  .adopt-btn {
+    min-height: 42px;
+    border: 1px solid rgba(56, 189, 248, 0.45);
+    background: rgba(56, 189, 248, 0.12);
+    color: #a5f3fc;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 12px !important;
+    cursor: pointer;
+    overflow-wrap: anywhere;
+  }
+
+  .adopt-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+
+  .delete-btn {
+    min-height: 42px;
+    padding: 0 14px;
+    border: 1px solid rgba(248, 113, 113, 0.32);
+    background: rgba(127, 29, 29, 0.14);
+    color: #fca5a5;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 11px !important;
+    cursor: pointer;
+  }
+
+  .delete-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+
+  /* ---------- current voice ---------- */
+  .current-panel {
+    display: grid;
+    gap: 8px;
+  }
+
+  .current-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 18px;
+    align-items: center;
+  }
+
+  .current-info {
+    display: grid;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .current-line {
+    color: #67e8f9;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 15px !important;
+    overflow-wrap: anywhere;
+  }
+
+  .current-line.unset {
+    color: rgba(148, 163, 184, 0.6);
+  }
+
+  .current-caption {
+    margin: 0;
+    color: rgba(203, 213, 225, 0.72);
+    font-size: 13px !important;
+    line-height: 1.4;
+    white-space: pre-wrap;
+  }
+
+  .current-actions {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+  }
+
+  .check-line {
+    display: inline-flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    white-space: nowrap;
+  }
+
+  .check-line input {
+    width: 18px;
+    height: 18px;
+    min-height: 0;
+    accent-color: #38bdf8;
+  }
+
+  .apply-btn {
+    min-height: 52px;
+    padding: 0 26px;
+    border: 1px solid rgba(192, 132, 252, 0.55);
+    background: linear-gradient(120deg, rgba(56, 189, 248, 0.14), rgba(168, 85, 247, 0.2));
+    color: #e9d5ff;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 14px !important;
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .apply-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+
+  /* ---------- boxes ---------- */
   .error-box {
     border: 1px solid rgba(248, 113, 113, 0.28);
     background: rgba(127, 29, 29, 0.16);
@@ -1214,249 +1266,50 @@
     white-space: pre-wrap;
   }
 
-  .library-entry {
-    border: 1px solid rgba(56, 189, 248, 0.2);
-    background: rgba(56, 189, 248, 0.06);
+  .warn-box {
+    border: 1px solid rgba(250, 204, 21, 0.28);
+    background: rgba(113, 63, 18, 0.18);
+    color: #fde68a;
     padding: 12px;
-    display: grid;
-    gap: 5px;
-  }
-
-  .library-entry span {
-    color: rgba(148, 163, 184, 0.74);
-    font-family: 'Orbitron', sans-serif;
-    font-size: 10px !important;
-  }
-
-  .library-entry b {
-    color: #67e8f9;
-    font-family: 'Orbitron', sans-serif;
     font-size: 13px !important;
-    overflow-wrap: anywhere;
   }
 
-  .result-grid {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 10px;
-    border: 1px solid rgba(168, 85, 247, 0.2);
-    background: rgba(168, 85, 247, 0.055);
+  .ok-box {
+    border: 1px solid rgba(56, 189, 248, 0.24);
+    background: rgba(56, 189, 248, 0.07);
+    color: #a5f3fc;
     padding: 12px;
-  }
-
-  .result-grid div {
-    display: grid;
-    gap: 5px;
-    min-width: 0;
-  }
-
-  .result-grid .wide {
-    grid-column: 1 / -1;
-  }
-
-  .result-grid span,
-  .library-meta span {
-    color: rgba(148, 163, 184, 0.74);
-    font-family: 'Orbitron', sans-serif;
-    font-size: 10px !important;
-  }
-
-  .result-grid b {
-    color: #e9d5ff;
-    font-family: 'Orbitron', sans-serif;
-    font-size: 12px !important;
-    overflow-wrap: anywhere;
-  }
-
-  .result-grid p {
-    margin: 0;
-    color: rgba(203, 213, 225, 0.84);
     font-size: 13px !important;
-    line-height: 1.45;
-    white-space: pre-wrap;
   }
 
-  .library-list {
-    display: grid;
-    gap: 12px;
-    margin-top: 8px;
-    padding-top: 16px;
-    border-top: 1px solid rgba(56, 189, 248, 0.12);
-  }
-
-  .profile-list {
-    display: grid;
-    gap: 10px;
-    margin-top: 18px;
-    padding-top: 16px;
-    border-top: 1px solid rgba(56, 189, 248, 0.12);
-  }
-
-  .profile-card {
-    width: 100%;
-    display: grid;
-    gap: 6px;
-    justify-items: stretch;
-    text-align: left;
-    border-color: rgba(56, 189, 248, 0.18);
-    background: rgba(2, 6, 23, 0.48);
-    color: #cbd5e1;
-    padding: 12px;
-  }
-
-  .profile-card b {
-    color: #67e8f9;
-    font-size: 12px !important;
-  }
-
-  .profile-card span {
-    color: rgba(148, 163, 184, 0.74);
-    font-size: 10px !important;
-  }
-
-  .profile-card p {
-    margin: 0;
-    color: rgba(203, 213, 225, 0.72);
-    font-size: 12px !important;
-    line-height: 1.4;
-    white-space: pre-wrap;
-  }
-
-  .library-header {
-    margin-bottom: 0;
-    align-items: center;
-  }
-
-  .library-header button {
-    padding: 8px 10px;
-    font-size: 10px !important;
-  }
-
-  .library-empty {
+  .empty-box {
     border: 1px solid rgba(56, 189, 248, 0.14);
     background: rgba(2, 6, 23, 0.42);
     color: rgba(148, 163, 184, 0.76);
-    padding: 14px;
+    padding: 16px;
     font-family: 'Orbitron', sans-serif;
     font-size: 11px !important;
   }
 
-  .library-card {
-    display: grid;
-    gap: 10px;
-    border: 1px solid rgba(56, 189, 248, 0.18);
-    background: rgba(2, 6, 23, 0.5);
-    padding: 12px;
-  }
-
-  .library-card > div {
-    display: flex;
-    justify-content: space-between;
-    gap: 12px;
-    flex-wrap: wrap;
-  }
-
-  .library-card b {
-    color: #67e8f9;
-    font-family: 'Orbitron', sans-serif;
-    font-size: 13px !important;
-  }
-
-  .library-card span {
-    color: rgba(148, 163, 184, 0.72);
-    font-family: 'Orbitron', sans-serif;
-    font-size: 10px !important;
-  }
-
-  .library-card p {
-    margin: 0;
-    color: rgba(203, 213, 225, 0.78);
-    font-size: 13px !important;
-    line-height: 1.45;
-  }
-
-  .library-card .caption-line {
-    color: rgba(203, 213, 225, 0.62);
-    white-space: pre-wrap;
-  }
-
-  .library-meta {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-    flex-wrap: wrap;
-  }
-
-  .library-meta button {
-    margin-left: auto;
-    padding: 8px 10px;
-    font-size: 10px !important;
-  }
-
-  ul {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: grid;
-    gap: 12px;
-  }
-
-  li {
-    padding: 12px;
-    color: #cbd5e1;
-    border: 1px solid rgba(168, 85, 247, 0.18);
-    background: rgba(168, 85, 247, 0.045);
-  }
-
-  .slot-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 14px;
-  }
-
-  .slot-card {
-    padding: 18px;
-    display: grid;
-    gap: 8px;
-  }
-
-  .slot-card.purple {
-    border-color: rgba(168, 85, 247, 0.24);
-  }
-
-  .slot-card span {
-    color: rgba(148, 163, 184, 0.68);
-    font-family: 'Orbitron', sans-serif;
-    font-size: 10px !important;
-  }
-
-  .slot-card b {
-    color: #67e8f9;
-    font-family: 'Orbitron', sans-serif;
-    font-size: 18px !important;
-  }
-
-  .slot-card.purple b {
-    color: #c084fc;
-  }
-
-  @media (max-width: 840px) {
-    .voice-lab {
-      width: min(100% - 24px, 680px);
-    }
-
-    .hero,
-    .panel-grid {
+  @media (max-width: 980px) {
+    .workspace {
       grid-template-columns: 1fr;
     }
 
-    .slot-grid {
+    .lab-header {
       grid-template-columns: 1fr;
+      gap: 10px;
     }
 
-    .field-grid,
-    .style-preset-grid,
-    .result-grid {
+    .field-grid {
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .field-grid .span-2 {
+      grid-column: span 1;
+    }
+
+    .current-grid {
       grid-template-columns: 1fr;
     }
   }

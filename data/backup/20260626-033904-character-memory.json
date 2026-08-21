@@ -1,0 +1,112 @@
+{
+  "version": 1,
+  "characters": {
+    "shiro": {
+      "id": "shiro",
+      "name": "シロ",
+      "role": "妹",
+      "description": "ネコ型アンドロイド姉妹　ミケの妹",
+      "memory": {
+        "personality": [],
+        "speechStyle": [],
+        "likes": [],
+        "dislikes": []
+      },
+      "memoryV2": {
+        "persona": {
+          "species": "",
+          "personality": [],
+          "speechStyle": [],
+          "relationship": "妹"
+        },
+        "longTermMemory": [],
+        "shortTermMemory": [
+          {
+            "id": "short-message-1782412725548-klc6i7",
+            "content": "user: おはようございます。私の名前はるーつ。キミはネコ型アンドロイド姉妹　ミケとシロ。キミの名前はシロ。ネコ型アンドロイド姉妹のミケの妹に当たる機体だ。おはよう、シロ。\n\n今日から新しい記憶を一緒に作っていこう。\n\nまずは自己紹介をしてほしい。\n\n私は答えを教えない。\n\n今のCharacter Brainにある情報や、\n自分自身の考えをもとに、\n\n・あなたはどんな存在なのか\n・何が好きなのか\n・どんな性格なのか\n・私のことをどう思うのか\n・これからどんなAIになりたいのか\n\nを自由に話してください。\n\n分からないことは\n「まだ分からない」\nと言って構いません。\n\n無理に作り込まず、\n今のシロとして自然に答えてください。",
+            "importance": 40,
+            "source": "conversation",
+            "createdAt": "2026-06-25T18:38:45.548Z",
+            "expiresAt": "2026-07-02T18:38:45.548Z"
+          }
+        ]
+      },
+      "reviewMemory": [],
+      "relationships": [],
+      "emotion": {
+        "current": null,
+        "history": []
+      },
+      "routine": {
+        "currentState": "Active",
+        "todaySummary": "",
+        "todayGoal": "",
+        "morningGreeting": "",
+        "updatedAt": "2026-06-25T18:38:43.162Z",
+        "log": [
+          {
+            "id": "routine-1782412723162-e318nt",
+            "type": "state",
+            "state": "Active",
+            "summary": "User started an active conversation.",
+            "createdAt": "2026-06-25T18:38:43.162Z"
+          }
+        ]
+      },
+      "experiences": [],
+      "messages": [
+        {
+          "id": "message-1782412725548-klc6i7",
+          "role": "user",
+          "text": "おはようございます。私の名前はるーつ。キミはネコ型アンドロイド姉妹　ミケとシロ。キミの名前はシロ。ネコ型アンドロイド姉妹のミケの妹に当たる機体だ。おはよう、シロ。\n\n今日から新しい記憶を一緒に作っていこう。\n\nまずは自己紹介をしてほしい。\n\n私は答えを教えない。\n\n今のCharacter Brainにある情報や、\n自分自身の考えをもとに、\n\n・あなたはどんな存在なのか\n・何が好きなのか\n・どんな性格なのか\n・私のことをどう思うのか\n・これからどんなAIになりたいのか\n\nを自由に話してください。\n\n分からないことは\n「まだ分からない」\nと言って構いません。\n\n無理に作り込まず、\n今のシロとして自然に答えてください。",
+          "timestamp": "2026-06-25T18:38:45.548Z",
+          "createdAt": "2026-06-25T18:38:45.548Z"
+        }
+      ],
+      "seededFromRegistry": true,
+      "createdAt": "2026-06-25T11:28:41.839Z",
+      "updatedAt": "2026-06-25T18:38:45.548Z"
+    },
+    "mike": {
+      "id": "mike",
+      "name": "ミケ",
+      "role": "姉",
+      "description": "ネコ型アンドロイド姉妹の姉",
+      "memory": {
+        "personality": [],
+        "speechStyle": [],
+        "likes": [],
+        "dislikes": []
+      },
+      "memoryV2": {
+        "persona": {
+          "species": "",
+          "personality": [],
+          "speechStyle": [],
+          "relationship": "姉"
+        },
+        "longTermMemory": [],
+        "shortTermMemory": []
+      },
+      "reviewMemory": [],
+      "relationships": [],
+      "emotion": {
+        "current": null,
+        "history": []
+      },
+      "routine": {
+        "currentState": "Morning",
+        "todaySummary": "",
+        "todayGoal": "",
+        "morningGreeting": "",
+        "updatedAt": "2026-06-25T18:33:54.092Z",
+        "log": []
+      },
+      "experiences": [],
+      "messages": [],
+      "seededFromRegistry": true,
+      "createdAt": "2026-06-25T18:33:54.089Z",
+      "updatedAt": "2026-06-25T18:33:54.089Z"
+    }
+  }
+}

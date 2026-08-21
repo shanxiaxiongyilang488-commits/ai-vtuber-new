@@ -15,7 +15,10 @@
       "WebFetch(domain:vrm.dev)",
       "Bash(powershell *)",
       "Bash(mkdir -p E:/Dev/ai-vtuber/server)",
-      "Bash(mkdir -p E:/Dev/ai-vtuber/src/lib/ws)"
+      "Bash(mkdir -p E:/Dev/ai-vtuber/src/lib/ws)",
+      "Skill(update-config)",
+      "Skill(update-config:*)",
+      "PowerShell(Get-Content \"E:\\\\TEMP\\\\claude\\\\e--Dev-ai-vtuber\\\\bd3e430c-c29c-4700-a93b-ef490e1049bc\\\\scratchpad\\\\dev-server.log\" | Select-String -Pattern \"VISUAL_MEMORY_IMAGE_VALIDATION_ERROR|MODEL_FINISH\" -Context 0,12 | ForEach-Object { $_.Line; $_.Context.PostContext })"
     ]
   }
 }

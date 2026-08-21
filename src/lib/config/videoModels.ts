@@ -19,7 +19,7 @@ export type VideoPricing = {
 
 export type VideoProviderModel = {
   id: string;
-  family: 'kling' | 'vidu' | 'seedance' | 'hailuo' | 'pixverse';
+  family: 'kling' | 'vidu' | 'seedance' | 'hailuo' | 'pixverse' | 'sora';
   label: string;
   provider: 'fal';
   availability: VideoModelAvailability;
@@ -152,6 +152,46 @@ export const FAL_VIDEO_PROVIDER_MODELS: readonly VideoProviderModel[] = [
     notes: 'Best fit in this list for multiple character/reference images.',
   },
   {
+    id: 'fal-ai/sora-2/text-to-video',
+    family: 'sora',
+    label: 'Sora 2 - Text to Video',
+    provider: 'fal',
+    availability: 'available',
+    endpoint: 'fal-ai/sora-2/text-to-video',
+    mode: 'text-to-video',
+    textToVideo: true,
+    imageToVideo: false,
+    inputImages: { min: 0, max: 0, field: null },
+    durations: ['4 seconds', '8 seconds', '12 seconds', '16 seconds', '20 seconds'],
+    resolutions: ['720p'],
+    pricing: {
+      unit: 'second',
+      summary: 'FAL Sora 2 endpoint pricing; see provider billing page.',
+    },
+    docsUrl: 'https://fal.ai/models/fal-ai/sora-2/text-to-video/api',
+    notes: 'OpenAI Sora 2 through FAL queue API; supports native audio.',
+  },
+  {
+    id: 'fal-ai/sora-2/image-to-video',
+    family: 'sora',
+    label: 'Sora 2 - Image to Video',
+    provider: 'fal',
+    availability: 'available',
+    endpoint: 'fal-ai/sora-2/image-to-video',
+    mode: 'image-to-video',
+    textToVideo: false,
+    imageToVideo: true,
+    inputImages: { min: 1, max: 1, field: 'image_url', note: 'One first-frame image is required.' },
+    durations: ['4 seconds', '8 seconds', '12 seconds', '16 seconds', '20 seconds'],
+    resolutions: ['auto', '720p'],
+    pricing: {
+      unit: 'second',
+      summary: 'FAL Sora 2 endpoint pricing; see provider billing page.',
+    },
+    docsUrl: 'https://fal.ai/models/fal-ai/sora-2/image-to-video/api',
+    notes: 'OpenAI Sora 2 through FAL queue API; supports native audio.',
+  },
+  {
     id: 'fal-ai/minimax/hailuo-02/standard/text-to-video',
     family: 'hailuo',
     label: 'Hailuo-02 Standard - Text to Video',
@@ -260,3 +300,35 @@ export const AVAILABLE_FAL_VIDEO_PROVIDER_MODELS = FAL_VIDEO_PROVIDER_MODELS.fil
   (model) => model.availability === 'available',
 );
 
+export type VideoModelConfig = {
+  id: string;
+  label: string;
+  provider: string;
+  mode: 'i2v' | 't2v' | 'r2v' | 'edit';
+  videoMode?: 'draft' | 'production';
+  falModel: string;
+  enabled: boolean;
+  description?: string;
+  imageField?: 'image_url' | 'start_image_url' | 'image_urls';
+  videoField?: 'video_url';
+};
+
+/** Editable video-generation menu. Add one entry here to expose a new FAL model. */
+export const VIDEO_MODELS: readonly VideoModelConfig[] = [
+  { id: 'gemini-omni-flash-reference', label: 'Gemini Omni Flash Reference', provider: 'gemini-omni-flash', mode: 'r2v', falModel: 'google/gemini-omni-flash/reference-to-video', enabled: true, imageField: 'image_urls', description: 'Direct multimodal reference-to-video. Supports 1-10 reference images.' },
+  { id: 'gemini-omni-flash-image', label: 'Gemini Omni Flash Image', provider: 'gemini-omni-flash', mode: 'i2v', falModel: 'google/gemini-omni-flash/image-to-video', enabled: true, imageField: 'image_url', description: 'Direct single-image animation.' },
+  { id: 'gemini-omni-flash-edit', label: 'Gemini Omni Flash Edit', provider: 'gemini-omni-flash', mode: 'edit', falModel: 'google/gemini-omni-flash/edit', enabled: true, videoField: 'video_url', description: 'Edits an existing video with a natural-language instruction.' },
+  { id: 'grok-i2v', label: 'Grok — Image to Video', provider: 'grok', mode: 'i2v', falModel: 'xai/grok-imagine-video/image-to-video', enabled: true, imageField: 'image_url' },
+  { id: 'grok-t2v', label: 'Grok — Text to Video', provider: 'grok', mode: 't2v', falModel: 'xai/grok-imagine-video/text-to-video', enabled: true },
+  { id: 'kling-v3-standard-i2v', label: 'Kling v3 Standard — Image to Video', provider: 'kling', mode: 'i2v', falModel: 'fal-ai/kling-video/v3/standard/image-to-video', enabled: true, imageField: 'start_image_url' },
+  { id: 'kling-v3-standard-t2v', label: 'Kling v3 Standard — Text to Video', provider: 'kling', mode: 't2v', falModel: 'fal-ai/kling-video/v3/standard/text-to-video', enabled: true },
+  { id: 'vidu-q1-i2v', label: 'Vidu Q1 — Image to Video', provider: 'vidu', mode: 'i2v', falModel: 'fal-ai/vidu/q1/image-to-video', enabled: true, imageField: 'image_url' },
+  { id: 'vidu-q1-t2v', label: 'Vidu Q1 — Text to Video', provider: 'vidu', mode: 't2v', falModel: 'fal-ai/vidu/q1/text-to-video', enabled: true },
+  { id: 'seedance-2-i2v', label: 'Seedance 2.0 — Image to Video', provider: 'seedance', mode: 'i2v', falModel: 'bytedance/seedance-2.0/image-to-video', enabled: true, imageField: 'image_url' },
+  { id: 'seedance-2-mini-reference', label: 'Seedance2 Mini（実験用）', provider: 'seedance', mode: 'r2v', videoMode: 'draft', falModel: 'bytedance/seedance-2.0/mini/reference-to-video', enabled: true, imageField: 'image_urls', description: '低コスト実験用。StoryCard確認、アニメシート解釈確認、MotionPrompt検証、本番生成前のプレビュー用途。' },
+  { id: 'seedance-2-reference', label: 'Seedance2（本番）', provider: 'seedance', mode: 'r2v', videoMode: 'production', falModel: 'bytedance/seedance-2.0/reference-to-video', enabled: true, imageField: 'image_urls' },
+  { id: 'sora-2-t2v', label: 'Sora 2 Video Engine - Text to Video', provider: 'sora', mode: 't2v', falModel: 'fal-ai/sora-2/text-to-video', enabled: true, description: 'FAL Sora 2 text-to-video. Durations are normalized to Sora-supported values.' },
+  { id: 'sora-2-i2v', label: 'Sora 2 Video Engine - Image to Video', provider: 'sora', mode: 'i2v', falModel: 'fal-ai/sora-2/image-to-video', enabled: true, imageField: 'image_url', description: 'FAL Sora 2 image-to-video with one first-frame image.' },
+  { id: 'seedream-i2v', label: 'Seedream — Image to Video（準備中）', provider: 'seedream', mode: 'i2v', falModel: '', enabled: false, description: 'Official FAL image-to-video endpoint is not configured.' },
+  { id: 'seedream-t2v', label: 'Seedream — Text to Video（準備中）', provider: 'seedream', mode: 't2v', falModel: '', enabled: false, description: 'Official FAL text-to-video endpoint is not configured.' },
+];

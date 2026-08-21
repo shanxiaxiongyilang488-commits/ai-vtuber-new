@@ -38,6 +38,15 @@ export const AVAILABLE_MEDIA_MODELS: MediaModelInfo[] = [
     ],
   },
   {
+    id: 'nanobanana-2-lite',
+    label: 'NanoBanana 2 Lite',
+    provider: 'fal',
+    apiModel: 'google/nano-banana-2-lite',
+    kind: 'image',
+    estimatedCost: null,
+    aliases: ['nano-banana-2-lite', 'NanoBanana 2 Lite', 'Nano Banana 2 Lite', 'google/nano-banana-2-lite'],
+  },
+  {
     id: 'nano-banana-pro',
     label: 'Nano Banana Pro',
     provider: 'fal',
@@ -216,6 +225,27 @@ export function resolveMediaModel(model?: string): MediaModelInfo {
   return fallback;
 }
 
+function imageRefDigest(value: string): string {
+  let hash = 0;
+  const step = Math.max(1, Math.floor(value.length / 64));
+  for (let i = 0; i < value.length; i += step) {
+    hash = ((hash << 5) - hash + value.charCodeAt(i)) >>> 0;
+  }
+  return `${value.length}:${hash.toString(16)}`;
+}
+
+function imageRefMeta(value: string, index: number, source = 'unknown') {
+  return {
+    index,
+    source,
+    kind: value.startsWith('data:') ? 'data-url' : (value.startsWith('http') ? 'url' : 'unknown'),
+    mime: value.match(/^data:([^;]+);/)?.[1] ?? null,
+    length: value.length,
+    approxKB: Math.round(value.length / 1024),
+    digest: imageRefDigest(value),
+  };
+}
+
 export async function generateMediaImage(
   input: Omit<ImageGenerationInput, 'model'> & { selectedModelId: string; flowId?: string },
 ): Promise<{ images: GeneratedImage[]; model: MediaModelInfo }> {
@@ -241,6 +271,12 @@ export async function generateMediaImage(
     provider: model.provider,
     model: model.apiModel,
     editMode: input.editMode,
+  });
+  console.log('[IMAGE_REFS_MEDIA_PROVIDER_INPUT]', {
+    flowId: flowId ?? null,
+    provider: model.provider,
+    model: model.endpoint ?? model.apiModel,
+    refs: generationInput.refImages.map((ref, index) => imageRefMeta(ref, index, 'mediaProviders/registry')),
   });
 
   if (model.provider === 'fal') {

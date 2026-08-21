@@ -1,0 +1,88 @@
+{
+  "title": "5秒のおはよう動画",
+  "duration": 5,
+  "cuts": [
+    {
+      "id": "CUT01",
+      "start": "0:00",
+      "end": "0:01",
+      "title": "開始",
+      "description": "朝の窓辺を背景に、SHIROが全身寄りのミディアムショットで立ち、HEAD_UNIT_01が小さく起き上がり、TAIL_UNIT_02が自然に遅れて揺れる。",
+      "requiredUnits": [
+        "SHIRO",
+        "白い分割装甲",
+        "黒い内部フレーム",
+        "シアン発光ライン",
+        "HEAD_UNIT_01",
+        "TAIL_UNIT_02",
+        "肉球ヘアアクセサリー",
+        "朝の窓",
+        "朝日",
+        "shiro-official-identity",
+        "shiro-official-mood"
+      ]
+    },
+    {
+      "id": "CUT02",
+      "start": "0:01",
+      "end": "0:03",
+      "title": "おはよう挨拶",
+      "description": "ミディアムショットでSHIROが青い瞳を開き、片手を上げて明るく手を振り、シアン発光ラインが軽く明滅する。",
+      "requiredUnits": [
+        "SHIRO",
+        "白い分割装甲",
+        "黒い内部フレーム",
+        "シアン発光ライン",
+        "HEAD_UNIT_01",
+        "TAIL_UNIT_02",
+        "肉球ヘアアクセサリー",
+        "朝の窓",
+        "朝日",
+        "shiro-official-identity",
+        "shiro-official-expression"
+      ]
+    },
+    {
+      "id": "CUT03",
+      "start": "0:03",
+      "end": "0:04",
+      "title": "挨拶確認",
+      "description": "腰上の広めフレームでSHIROの横に小さなホログラム文字『おはよう』が点灯し、SHIROがそれを見てうなずく。",
+      "requiredUnits": [
+        "SHIRO",
+        "白い分割装甲",
+        "黒い内部フレーム",
+        "シアン発光ライン",
+        "HEAD_UNIT_01",
+        "TAIL_UNIT_02",
+        "肉球ヘアアクセサリー",
+        "おはようホログラム",
+        "朝の窓",
+        "朝日",
+        "shiro-official-identity",
+        "shiro-official-expression"
+      ]
+    },
+    {
+      "id": "CUT04",
+      "start": "0:04",
+      "end": "0:05",
+      "title": "終了",
+      "description": "全身寄りのミディアムショットでSHIROが手を下ろして軽く会釈し、TAIL_UNIT_02が重力に従って遅れて収まり、画面が明るくフェードする。",
+      "requiredUnits": [
+        "SHIRO",
+        "白い分割装甲",
+        "黒い内部フレーム",
+        "シアン発光ライン",
+        "HEAD_UNIT_01",
+        "TAIL_UNIT_02",
+        "肉球ヘアアクセサリー",
+        "おはようホログラム",
+        "朝の窓",
+        "朝日",
+        "shiro-official-identity",
+        "shiro-official-expression"
+      ]
+    }
+  ]
+}

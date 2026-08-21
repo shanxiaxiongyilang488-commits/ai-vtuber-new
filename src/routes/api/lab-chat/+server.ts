@@ -1,29 +1,19 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { env } from '$env/dynamic/private';
-import { buildMemoryContext, recordMemoryCoreTurn, type BuiltMemoryPrompt, type MemoryCoreRequest } from '$lib/ai/memory-core/memoryCore';
-import { chatClaude, CLAUDE_DEFAULT_MODEL } from '$lib/providers/claude';
-import { chatColabOllama } from '$lib/providers/colab';
-import { chatGemini, GEMINI_DEFAULT_MODEL } from '$lib/providers/gemini';
-import { chatLMStudio, LM_STUDIO_DEFAULT_MODEL as PROVIDER_LM_STUDIO_DEFAULT_MODEL } from '$lib/providers/lmstudio';
-import { chatOllama, OLLAMA_DEFAULT_MODEL } from '$lib/providers/ollama';
-import { chatOpenAI, OPENAI_DEFAULT_MODEL } from '$lib/providers/openai';
-import { extractReplyText, logEmptyReply } from '$lib/providers/types';
-import { readSettings } from '$lib/server/settings';
+import { buildMemoryContext, filterUnapprovedMemoryClaims, isExplicitMemoryRecall, recordMemoryCoreTurn, type BuiltMemoryPrompt, type MemoryCoreRequest } from '$lib/ai/memory-core/memoryCore';
+import { runCharacterAi } from '$lib/server/characterAiRouter';
+import { buildCharacterTimeTonePrompt, buildEnergyPrompt, buildTimeCorePrompt, getTimeCore } from '../../../core/timeCore';
 
-type Provider = 'openai' | 'gemini' | 'claude' | 'ollama' | 'lmstudio' | 'colab-ollama';
+type Provider = 'openai' | 'gemini';
 type LabChatRoute =
   | 'chat'
   | 'yaml_generate'
   | 'character_discussion'
   | 'image_analysis'
   | 'story_generate';
-const LM_STUDIO_BASE_URL = 'http://127.0.0.1:1234/v1';
-const LM_STUDIO_API_KEY = 'lm-studio';
-const LM_STUDIO_DEFAULT_MODEL = 'qwen/qwen3-4b';
-const OLLAMA_TIMEOUT_MS = 120000;
 
 interface LabChatRequest {
+  characterId?: string;
   requestId?: string;
   route?: LabChatRoute;
   provider?: Provider;
@@ -195,6 +185,7 @@ async function parseRequest(request: Request): Promise<{ body: LabChatRequest; i
     const providerValue = fd.get('provider');
     const conversationHistory = parseConversationHistory(parseFormJson(fd.get('conversationHistory')));
     const body: LabChatRequest = {
+      characterId: typeof fd.get('characterId') === 'string' ? String(fd.get('characterId')) : undefined,
       requestId: typeof fd.get('requestId') === 'string' ? String(fd.get('requestId')) : undefined,
       route:        isLabChatRoute(fd.get('route')) ? fd.get('route') as LabChatRoute : undefined,
       provider:     typeof providerValue === 'string' && providerValue ? providerValue as Provider : undefined,
@@ -205,6 +196,7 @@ async function parseRequest(request: Request): Promise<{ body: LabChatRequest; i
       internalDiscussion: fd.get('internalDiscussion') === 'true',
       speaker: typeof fd.get('speaker') === 'string' ? String(fd.get('speaker')) : undefined,
       characterBible: parseFormJson(fd.get('characterBible')),
+      memory: parseFormJson(fd.get('memory')) as MemoryCoreRequest | undefined,
       conversationHistory,
       systemPrompt: (fd.get('systemPrompt') as string) ?? '',
       userMessage:  (fd.get('userMessage') as string) ?? '',
@@ -278,130 +270,6 @@ function logVisionText(provider: string, images: ImageInput[], text: string): vo
     console.log(`[vision] preview=${preview}`);
   });
   console.log(`[lab-chat] ${provider} vision ok (${text.length} chars) preview=${preview}`);
-}
-
-function localMessages(systemPrompt: string, userMessage: string) {
-  return [
-    { role: 'system', content: systemPrompt },
-    { role: 'user', content: userMessage },
-  ];
-}
-
-function isOllamaTimeout(err: unknown): boolean {
-  if (!(err instanceof Error)) return false;
-  const cause = err.cause as { code?: unknown; name?: unknown } | undefined;
-  return (
-    err.name === 'TimeoutError' ||
-    cause?.name === 'HeadersTimeoutError' ||
-    cause?.code === 'UND_ERR_HEADERS_TIMEOUT'
-  );
-}
-
-async function callOllama(systemPrompt: string, userMessage: string, model?: string): Promise<string> {
-  const actualModel = model || 'qwen2.5:3b';
-  console.log('[OLLAMA REQUEST START]');
-
-  try {
-    const res = await fetch('http://127.0.0.1:11434/api/chat', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal: AbortSignal.timeout(OLLAMA_TIMEOUT_MS),
-      body:    JSON.stringify({ model: actualModel, messages: localMessages(systemPrompt, userMessage), stream: false }),
-    });
-    if (!res.ok) {
-      const msg = await res.text().catch(() => `HTTP ${res.status}`);
-      throw new Error(`Ollama API error: ${msg}`);
-    }
-    const data = await res.json();
-    console.log('[OLLAMA RESPONSE OK]');
-    const replyText = extractReplyText(data);
-    if (!replyText.trim()) logEmptyReply('OLLAMA_LEGACY', data);
-    return replyText;
-  } catch (err) {
-    if (isOllamaTimeout(err)) {
-      console.log('[OLLAMA TIMEOUT]');
-      return '生成中...';
-    }
-
-    throw err;
-  }
-}
-
-async function callLMStudio(
-  systemPrompt: string,
-  userMessage: string,
-  model?: string,
-  temperature = 0.7,
-  maxTokens = 2048,
-): Promise<string> {
-  const actualModel = model || LM_STUDIO_DEFAULT_MODEL;
-  const res = await fetch(`${LM_STUDIO_BASE_URL}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${LM_STUDIO_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: actualModel,
-      messages: localMessages(systemPrompt, userMessage),
-      temperature,
-      max_tokens: maxTokens,
-      stream: false,
-    }),
-  });
-
-  if (!res.ok) {
-    const msg = await res.text().catch(() => `HTTP ${res.status}`);
-    throw new Error(`LM Studio API error: ${msg}`);
-  }
-
-  const data = await res.json();
-  const replyText = extractReplyText(data);
-  if (!replyText.trim()) logEmptyReply('LM_STUDIO_LEGACY', data);
-  return replyText;
-}
-
-async function callColabOllama(systemPrompt: string, userMessage: string, model?: string): Promise<string> {
-  const baseUrl = env.COLAB_OLLAMA_URL?.replace(/\/+$/, '');
-  const actualModel = model || env.COLAB_OLLAMA_MODEL;
-
-  if (!baseUrl) throw new Error('COLAB_OLLAMA_URL が未設定');
-  if (!actualModel) throw new Error('COLAB_OLLAMA_MODEL が未設定');
-
-  const res = await fetch(`${baseUrl}/v1/chat/completions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: actualModel,
-      messages: localMessages(systemPrompt, userMessage),
-    }),
-  });
-  if (!res.ok) {
-    const msg = await res.text().catch(() => `HTTP ${res.status}`);
-    throw new Error(`Colab Ollama API error: ${msg}`);
-  }
-  const data = await res.json();
-  const replyText = extractReplyText(data);
-  if (!replyText.trim()) logEmptyReply('COLAB_OLLAMA_LEGACY', data);
-  return replyText;
-}
-
-// ================================================================
-// Claude — Vision content builder
-// ================================================================
-function claudeUserContent(userMessage: string, images: ImageInput[]) {
-  if (images.length === 0) return userMessage;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const parts: any[] = images.map(img => ({
-    type:   'image',
-    source: {
-      type:       'base64',
-      media_type: img.dataUrl.match(/^data:(.*?);/)?.[1] ?? 'image/jpeg',
-      data:       img.dataUrl.split(',')[1] ?? '',
-    },
-  }));
-  parts.push({ type: 'text', text: userMessage });
-  return parts;
 }
 
 function parseStructuredChatReply(text: string): StructuredChatReply {
@@ -496,12 +364,18 @@ export const POST: RequestHandler = async ({ request }) => {
   const { body, images, enableMemoryByDefault } = parsed;
   const route = resolveLabChatRoute(body);
   console.log("ROUTE", route);
-  const settings = await readSettings();
-  const provider = body.provider ?? settings.chatConfig.provider;
-  const { model, systemPrompt, userMessage } = body;
-  const taskSystemPrompt = route === 'chat'
+  const { systemPrompt, userMessage } = body;
+  const requestedSystemPrompt = route === 'chat'
     ? systemPrompt
     : stripNightModeInstructions(systemPrompt);
+  // Server-side injection keeps this authoritative even when a UI sends an old prompt.
+  const timeCore = getTimeCore();
+  const taskSystemPrompt = [
+    requestedSystemPrompt,
+    buildTimeCorePrompt(timeCore),
+    buildEnergyPrompt(timeCore, requestedSystemPrompt),
+    buildCharacterTimeTonePrompt(timeCore, requestedSystemPrompt),
+  ].filter(Boolean).join('\n\n');
   const strictVisionPrompt = [
     'VISION STRICT MODE IS ACTIVE.',
     'Output only directly visible facts in these categories: people, clothing, colors, poses, background.',
@@ -511,17 +385,13 @@ export const POST: RequestHandler = async ({ request }) => {
   const guardedSystemPrompt = body.visionMode === 'strict'
     ? `${strictVisionPrompt}\n\n${taskSystemPrompt}`
     : taskSystemPrompt;
-  const openaiApiKey = settings.openai.key;
-  const geminiApiKey = settings.gemini.key;
-  const anthropicApiKey = settings.anthropic.key;
-  const temperature = Number.isFinite(body.temperature) ? body.temperature : 0.7;
   const maxTokens = Number.isFinite(body.max_tokens) ? body.max_tokens : 2048;
   const memory = body.visionMode === 'strict'
     || route === 'yaml_generate'
     || route === 'image_analysis'
     || route === 'story_generate'
     ? { enabled: false }
-    : (body.memory ?? { enabled: enableMemoryByDefault });
+    : (body.memory ?? { enabled: enableMemoryByDefault, autoRecall: false, recallThreshold: 0.75 });
   const discussionBaseSystemPrompt = [
     'あなたは character_discussion 専用の人格会議生成器です。',
     '通常チャットの人格プロンプト、ナイトモード、感情テンプレート、口癖、語尾指定を継承しないでください。',
@@ -577,7 +447,7 @@ export const POST: RequestHandler = async ({ request }) => {
   }
   const memoryDebug: BuiltMemoryPrompt['debug'] | undefined = memory.enabled ? memoryContext.debug : undefined;
   const withMemory = async (response: Record<string, unknown>, text: string) => {
-    const cleanedText = stripLeakedReasoning(text);
+    const cleanedText = filterUnapprovedMemoryClaims(stripLeakedReasoning(text), isExplicitMemoryRecall(userMessage));
     console.log('[MESSAGE_LENGTH_STAGE]', 'server_receive');
     console.log('[MESSAGE_LENGTH]', text.length, cleanedText.length);
     console.log('[MESSAGE_SYMBOLS]', {
@@ -613,173 +483,23 @@ export const POST: RequestHandler = async ({ request }) => {
     return memoryDebug ? { ...compatibleResponse, memory: memoryDebug } : compatibleResponse;
   };
 
-  console.log('[CHAT_PROVIDER]', provider);
-  console.log('[CHAT_MODEL]', model || (provider === settings.chatConfig.provider ? settings.chatConfig.model : '(default)'));
-  console.log('[PROVIDER]', provider);
-  console.log('[FINAL MODEL]', model || '(default)');
-  console.log(`[lab-chat] provider=${provider} model=${model || '(default)'} images=${images.length}`);
-
-  // ================================================================
-  // OpenAI
-  // ================================================================
-  if (provider === 'openai') {
-    if (!openaiApiKey) throw error(500, 'OpenAI API key が未設定');
-    const actualModel = model || (provider === settings.chatConfig.provider ? settings.chatConfig.model : settings.openai.model) || OPENAI_DEFAULT_MODEL;
-    const apiKey = openaiApiKey;
-    console.log('[OPENAI KEY SOURCE]', 'settings.json');
-    console.log('[OPENAI KEY CONFIGURED]', Boolean(apiKey));
-    console.log('[OPENAI MODEL]', actualModel);
-    try {
-      const text = await chatOpenAI({
-        requestId: body.requestId,
-        apiKey,
-        systemPrompt: effectiveSystemPrompt,
-        userMessage,
-        model: actualModel,
-        images,
-        maxTokens,
-      });
-      console.log(`[lab-chat] openai ok (${text.length} chars)`);
-      logVisionText('openai', images, text);
-      return json(await withMemory({ text, provider: 'openai', actualModel }, text));
-    } catch (caughtError) {
-      const message = caughtError instanceof Error ? caughtError.message : String(caughtError);
-      console.error('[LAB_CHAT_API_ERROR]', {
-        provider: 'openai',
-        model: actualModel,
-        message,
-      });
-      return json({
-        error: {
-          provider: 'openai',
-          model: actualModel,
-          message,
-        },
-      }, { status: 502 });
-    }
-  }
-
-  // ================================================================
-  // Ollama / LM Studio
-  // ================================================================
-  if (provider === 'ollama' || provider === 'lmstudio') {
-    if (images.length > 0) {
-      console.warn(`[lab-chat] ${provider} selected with ${images.length} image(s); local text endpoint will ignore images`);
-    }
-    try {
-      const actualModel = model || (provider === settings.chatConfig.provider ? settings.chatConfig.model : '') || (provider === 'ollama' ? OLLAMA_DEFAULT_MODEL : settings.local.model || PROVIDER_LM_STUDIO_DEFAULT_MODEL);
-      const text = provider === 'ollama'
-        ? await chatOllama({ systemPrompt: effectiveSystemPrompt, userMessage, model: actualModel, maxTokens })
-        : await chatLMStudio({ systemPrompt: effectiveSystemPrompt, userMessage, model: actualModel, temperature, maxTokens });
-      const replyText = typeof text === 'string' ? text : String(text ?? '');
-      console.log(`[lab-chat] ${provider} ok (${replyText.length} chars)`);
-      return json(await withMemory({ text: replyText, replyText, provider, actualModel }, replyText));
-    } catch (e) {
-      console.error(`[lab-chat] ${provider} error:`, e);
-      throw error(503, provider === 'lmstudio'
-        ? 'LM Studio Offline'
-        : 'Ollama への接続に失敗しました。ローカルサーバーを確認してください。');
-    }
-  }
-
-  // ================================================================
-  // Colab Ollama (OpenAI互換)
-  // ================================================================
-  if (provider === 'colab-ollama') {
-    if (images.length > 0) {
-      console.warn(`[lab-chat] ${provider} selected with ${images.length} image(s); OpenAI-compatible Colab endpoint will ignore images`);
-    }
-    try {
-      const actualModel = model || env.COLAB_OLLAMA_MODEL;
-      const text = await chatColabOllama({
-        baseUrl: env.COLAB_OLLAMA_URL,
-        systemPrompt: effectiveSystemPrompt,
-        userMessage,
-        model: actualModel,
-        maxTokens,
-      });
-      const replyText = typeof text === 'string' ? text : String(text ?? '');
-      console.log(`[lab-chat] ${provider} ok (${replyText.length} chars)`);
-      return json(await withMemory({ text: replyText, replyText, provider, actualModel }, replyText));
-    } catch (e) {
-      console.error(`[lab-chat] ${provider} error:`, e);
-      throw error(503, 'Colab Ollama への接続に失敗しました。COLAB_OLLAMA_URL / COLAB_OLLAMA_MODEL と Colab 側の公開URLを確認してください。');
-    }
-  }
-
-  // ================================================================
-  // Gemini（失敗時は OpenAI へフェイルオーバー）
-  // ================================================================
-  if (provider === 'gemini') {
-    let geminiFailReason: string | null = null;
-
-    if (geminiApiKey) {
-      console.log('[GEMINI KEY SOURCE]', 'settings.json');
-      try {
-        const geminiModel = model || (provider === settings.chatConfig.provider ? settings.chatConfig.model : settings.gemini.model) || GEMINI_DEFAULT_MODEL;
-        const text = await chatGemini({
-          apiKey: geminiApiKey,
-          systemPrompt: effectiveSystemPrompt,
-          userMessage,
-          model: geminiModel,
-          images,
-          maxTokens,
-        });
-        console.log(`[lab-chat] gemini ok (${text.length} chars)`);
-        logVisionText('gemini', images, text);
-        return json(await withMemory({ text, provider: 'gemini', actualModel: geminiModel }, text));
-      } catch (e) {
-        geminiFailReason = String(e);
-      }
-    } else {
-      geminiFailReason = 'no API key';
-    }
-
-    console.warn(`[lab-chat] gemini failed (${geminiFailReason}) — trying OpenAI fallback`);
-
-    try {
-      const fallbackModel = settings.openai.model || OPENAI_DEFAULT_MODEL;
-      const apiKey = openaiApiKey;
-      if (!apiKey) throw error(500, 'OpenAI API key が未設定');
-      console.log('[OPENAI KEY SOURCE]', 'settings.json');
-      console.log('[OPENAI KEY CONFIGURED]', Boolean(apiKey));
-      console.log('[OPENAI MODEL]', fallbackModel);
-      const text = await chatOpenAI({
-        requestId: body.requestId,
-        apiKey,
-        systemPrompt: effectiveSystemPrompt,
-        userMessage,
-        model: fallbackModel,
-        images,
-        maxTokens,
-      });
-      console.log(`[lab-chat] openai fallback ok (${text.length} chars)`);
-      logVisionText('openai fallback', images, text);
-      return json(await withMemory({ text, failover: true, provider: 'openai', actualModel: fallbackModel }, text));
-    } catch (fallbackErr) {
-      console.error('[lab-chat] openai fallback also failed:', fallbackErr);
-      throw error(503, `Gemini と OpenAI の両方が失敗しました。時間をおいて再試行してください。`);
-    }
-  }
-
-  // ================================================================
-  // Claude
-  // ================================================================
-  if (provider === 'claude') {
-    if (!anthropicApiKey) throw error(500, 'Anthropic API key が未設定');
-    const claudeModel = model || settings.anthropic.model || CLAUDE_DEFAULT_MODEL;
-    console.log('[ANTHROPIC KEY SOURCE]', 'settings.json');
-    const text = await chatClaude({
-      apiKey: anthropicApiKey,
+  const configuredRole = route === 'image_analysis' ? 'characterAnalysis'
+    : route === 'story_generate' ? 'storyCard'
+    : 'conversation';
+  try {
+    const configured = await runCharacterAi({
+      characterId: body.characterId ?? memory.characterId,
+      role: configuredRole,
       systemPrompt: effectiveSystemPrompt,
       userMessage,
-      model: claudeModel,
       images,
       maxTokens,
     });
-    console.log(`[lab-chat] claude ok (${text.length} chars)`);
-    return json(await withMemory({ text, provider: 'claude', actualModel: claudeModel }, text));
+    console.log('[CHARACTER_AI_ROLE_RESOLVED]', { characterId: body.characterId ?? memory.characterId, role: configuredRole, ...configured });
+    return json(await withMemory({ text: configured.text, provider: configured.provider, actualModel: configured.model }, configured.text));
+  } catch (caughtError) {
+    const message = caughtError instanceof Error ? caughtError.message : String(caughtError);
+    console.error('[CHARACTER_AI_ROLE_ERROR]', { role: configuredRole, characterId: body.characterId ?? memory.characterId, message });
+    return json({ message }, { status: 502 });
   }
-
-  throw error(400, `Unknown provider: ${provider}`);
 };

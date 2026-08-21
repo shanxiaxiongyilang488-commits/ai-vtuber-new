@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 export const SHORT_TERM_LIMIT = 30;
+export const TIMELINE_LOG_LIMIT = 500;
 const MEMORY_DIR = join(process.cwd(), 'data', 'memory');
 const SHORT_TERM_FILE = join(MEMORY_DIR, 'short-term.json');
 
@@ -40,30 +41,38 @@ export function trimShortTermMessages(
 }
 
 export function loadShortTermMessages(characterId?: string): ShortTermMessage[] {
+  return loadTimelineMessages(characterId).slice(-SHORT_TERM_LIMIT);
+}
+
+/** Timestamped archive for Timeline Core. It is never injected as session context. */
+export function loadTimelineMessages(characterId?: string): ShortTermMessage[] {
   try {
     if (!existsSync(SHORT_TERM_FILE)) return [];
     const parsed = JSON.parse(readFileSync(SHORT_TERM_FILE, 'utf-8')) as ShortTermMessage[];
     if (!Array.isArray(parsed)) return [];
 
-    return trimShortTermMessages(
-      parsed
-        .map(normalizeShortTermMessage)
-        .filter((message) => !characterId || message.characterId === characterId)
-    );
+    return parsed
+      .map(normalizeShortTermMessage)
+      .filter((message) => !characterId || message.characterId === characterId)
+      .filter((message) => message.content.trim().length > 0)
+      .slice(-TIMELINE_LOG_LIMIT);
   } catch {
     return [];
   }
 }
 
 export function saveShortTermMessages(messages: ShortTermMessage[]): ShortTermMessage[] {
-  const next = trimShortTermMessages(messages).map(normalizeShortTermMessage);
+  const next = messages
+    .filter((message) => message.content.trim().length > 0)
+    .slice(-TIMELINE_LOG_LIMIT)
+    .map(normalizeShortTermMessage);
   ensureMemoryDir();
   writeFileSync(SHORT_TERM_FILE, JSON.stringify(next, null, 2));
   return next;
 }
 
 export function appendShortTermMessages(messages: ShortTermMessage[]): ShortTermMessage[] {
-  return saveShortTermMessages([...loadShortTermMessages(), ...messages]);
+  return saveShortTermMessages([...loadTimelineMessages(), ...messages]);
 }
 
 export function formatShortTermMessages(messages: ShortTermMessage[]): string {

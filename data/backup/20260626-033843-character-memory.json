@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "characters": {
+    "shiro": {
+      "id": "shiro",
+      "name": "シロ",
+      "role": "妹",
+      "description": "ネコ型アンドロイド姉妹　ミケの妹",
+      "memory": {
+        "personality": [],
+        "speechStyle": [],
+        "likes": [],
+        "dislikes": []
+      },
+      "memoryV2": {
+        "persona": {
+          "species": "",
+          "personality": [],
+          "speechStyle": [],
+          "relationship": "妹"
+        },
+        "longTermMemory": [],
+        "shortTermMemory": []
+      },
+      "reviewMemory": [],
+      "relationships": [],
+      "emotion": {
+        "current": null,
+        "history": []
+      },
+      "routine": {
+        "currentState": "Morning",
+        "todaySummary": "",
+        "todayGoal": "",
+        "morningGreeting": "",
+        "updatedAt": "2026-06-25T18:33:54.087Z",
+        "log": []
+      },
+      "experiences": [],
+      "messages": [],
+      "seededFromRegistry": true,
+      "createdAt": "2026-06-25T11:28:41.839Z",
+      "updatedAt": "2026-06-25T11:28:41.839Z"
+    },
+    "mike": {
+      "id": "mike",
+      "name": "ミケ",
+      "role": "姉",
+      "description": "ネコ型アンドロイド姉妹の姉",
+      "memory": {
+        "personality": [],
+        "speechStyle": [],
+        "likes": [],
+        "dislikes": []
+      },
+      "memoryV2": {
+        "persona": {
+          "species": "",
+          "personality": [],
+          "speechStyle": [],
+          "relationship": "姉"
+        },
+        "longTermMemory": [],
+        "shortTermMemory": []
+      },
+      "reviewMemory": [],
+      "relationships": [],
+      "emotion": {
+        "current": null,
+        "history": []
+      },
+      "routine": {
+        "currentState": "Morning",
+        "todaySummary": "",
+        "todayGoal": "",
+        "morningGreeting": "",
+        "updatedAt": "2026-06-25T18:33:54.092Z",
+        "log": []
+      },
+      "experiences": [],
+      "messages": [],
+      "seededFromRegistry": true,
+      "createdAt": "2026-06-25T18:33:54.089Z",
+      "updatedAt": "2026-06-25T18:33:54.089Z"
+    }
+  }
+}

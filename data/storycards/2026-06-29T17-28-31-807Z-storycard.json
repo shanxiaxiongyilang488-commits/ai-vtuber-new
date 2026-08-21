@@ -1,0 +1,87 @@
+{
+  "title": "ミケ 研究室起動アニメ",
+  "duration": 15,
+  "cuts": [
+    {
+      "id": "CUT01",
+      "start": "0:00",
+      "end": "0:04",
+      "title": "研究室全景",
+      "description": "未来的な研究所の広い引き画、中央の充電ポッド内に完成状態のミケが全身で横たわり、青い照明と研究設備が静かに点灯している。",
+      "requiredUnits": [
+        "ミケ",
+        "HEAD_UNIT_01",
+        "TAIL_UNIT_02",
+        "白黒メカスーツ",
+        "青色発光パーツ",
+        "肉球アクセサリー",
+        "充電ポッド",
+        "研究所背景",
+        "研究設備",
+        "mike:registry-reference",
+        "attachment-1",
+        "attachment-2"
+      ]
+    },
+    {
+      "id": "CUT02",
+      "start": "0:04",
+      "end": "0:08",
+      "title": "起動",
+      "description": "充電ポッドの寄り気味ショット、ミケが目を開き、HEAD_UNIT_01のLEDが点灯して猫耳が小さく動き、上体を起こして伸びをする。",
+      "requiredUnits": [
+        "ミケ",
+        "HEAD_UNIT_01",
+        "TAIL_UNIT_02",
+        "白黒メカスーツ",
+        "青色発光パーツ",
+        "肉球アクセサリー",
+        "充電ポッド",
+        "研究所背景",
+        "mike:registry-reference",
+        "attachment-1",
+        "attachment-2"
+      ]
+    },
+    {
+      "id": "CUT03",
+      "start": "0:08",
+      "end": "0:11",
+      "title": "モニター確認",
+      "description": "背後寄りの中景、ミケがホログラムモニター前に立ち、指で端末を操作し、ミッション準備完了のステータス表示を確認する。",
+      "requiredUnits": [
+        "ミケ",
+        "HEAD_UNIT_01",
+        "TAIL_UNIT_02",
+        "白黒メカスーツ",
+        "青色発光パーツ",
+        "肉球アクセサリー",
+        "ホログラムモニター",
+        "研究所背景",
+        "研究設備",
+        "mike:registry-reference",
+        "attachment-1",
+        "attachment-2"
+      ]
+    },
+    {
+      "id": "CUT04",
+      "start": "0:11",
+      "end": "0:15",
+      "title": "終了",
+      "description": "正面寄りの中景、ミケが笑顔でこちらに手を振り、HEAD_UNIT_01が軽く反応し、TAIL_UNIT_02がゆっくり揺れて研究所内で出発姿勢になる。",
+      "requiredUnits": [
+        "ミケ",
+        "HEAD_UNIT_01",
+        "TAIL_UNIT_02",
+        "白黒メカスーツ",
+        "青色発光パーツ",
+        "肉球アクセサリー",
+        "研究所背景",
+        "mike:registry-reference",
+        "attachment-1",
+        "attachment-2"
+      ]
+    }
+  ]
+}

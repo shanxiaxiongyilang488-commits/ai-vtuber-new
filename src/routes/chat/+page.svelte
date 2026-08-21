@@ -2,13 +2,27 @@
 import Sidebar from '$lib/components/chat/Sidebar.svelte';
 import ControlPanel from '$lib/components/chat/ControlPanel.svelte';
 import CharacterSettingsModal from '$lib/components/CharacterSettingsModal.svelte';
+import ChatMediaCard from '$lib/components/chat/ChatMediaCard.svelte';
 import type { Character } from '$lib/types/character';
+import type { MediaEngineAction } from '$lib/mediaEngine';
+import { runMediaEngineAction } from '$lib/mediaEngine';
 import { speakIrodoriText } from '$lib/tts/irodori';
 import { tick } from 'svelte';
 
+// TODO: Common Media Engine - 共通メディア生成エンジン
+// 両ページ（AI Personality Lab + MEMORYCORE）で利用可能な共通型定義
 type Message = {
   speaker: string;
   text: string;
+  // TODO: VIDEO LAB & inline media generation (共通Media Engine)
+  // 漫画化、アニメ化、ボイス化、BGM化の結果をチャット内に直接表示
+  media?: {
+    type: 'image' | 'video' | 'audio' | 'storyboard' | 'yaml';
+    url?: string;
+    title?: string;
+    prompt?: string;
+    metadata?: Record<string, unknown>;
+  };
 };
 
 import { marked } from 'marked';
@@ -40,6 +54,7 @@ let messages = $state<Message[]>([]);
 let selectedEngine = $state<"openai" | "gemini" | "claude">("openai");
 let speakingMessageKey = $state<string | null>(null);
 let speechError = $state<string | null>(null);
+let mediaEngineBusy = $state<string | null>(null);
 // 長文モード：true のとき bubble 幅を拡張し pre-wrap を強制する
 let longMode = $state(false);
 
@@ -83,6 +98,7 @@ function loadChar(id: string, fallback: Character): Character {
 
 let char1 = $state<Character>(loadChar('char1', defaultChar1));
 let char2 = $state<Character>(loadChar('char2', defaultChar2));
+let activeChatCharacter = $state<Character>(char1);
 
 const characters = [char1, char2];
 let leftSpeaker = char1.name;
@@ -93,6 +109,11 @@ let leftSpeaker = char1.name;
 function handleCharacterClick(char: Character) {
   selectedCharacter = char;
   modalOpen = true;
+}
+
+function selectChatCharacter(char: Character): void {
+  activeChatCharacter = char;
+  leftSpeaker = char.name;
 }
 
 function handleModalClose() {
@@ -275,7 +296,33 @@ function generateYAML() {
   downloadText(content, 'discussion.yaml');
 }
 
-// AIに資料生成を依頼する（既存の discussion フローを再利用）
+async function runCommonMediaAction(msg: Message, index: number, action: MediaEngineAction) {
+  if (mediaEngineBusy) return;
+  const key = `${index}:${action}`;
+  mediaEngineBusy = key;
+  speechError = null;
+  try {
+    const mediaItems = await runMediaEngineAction(action, {
+      text: msg.text,
+      title: topic || msg.speaker,
+      source: 'memorycore',
+      speaker: msg.speaker,
+    });
+    const label = action === 'manga' ? 'Manga' : action === 'anime' ? 'Anime' : action === 'voice' ? 'Voice' : 'BGM';
+    messages = [
+      ...messages,
+      ...mediaItems.map((media) => ({
+        speaker: 'Media Engine',
+        text: `${label}: ${media.title ?? media.type}`,
+        media,
+      })),
+    ];
+  } catch (error) {
+    speechError = error instanceof Error ? error.message : String(error);
+  } finally {
+    mediaEngineBusy = null;
+  }
+}
 async function generateDocFlow() {
   const basePrompt = topic.trim()
     ? `「${topic}」について、以下の構成でMarkdown資料を作成してください。\n\n## 概要\n## 背景・目的\n## 主なポイント（箇条書き）\n## まとめ`
@@ -305,7 +352,13 @@ async function generateDocFlow() {
 <!-- Root shell -->
 <div class="shell">
   <!-- Left Sidebar -->
-  <Sidebar {char1} {char2} oncharacterclick={handleCharacterClick} />
+  <Sidebar
+    {char1}
+    {char2}
+    activeCharacterName={activeChatCharacter.name}
+    oncharacterselect={selectChatCharacter}
+    oncharacterclick={handleCharacterClick}
+  />
 
   <!-- Character Settings Modal -->
   <CharacterSettingsModal
@@ -390,16 +443,23 @@ async function generateDocFlow() {
   <div class="markdown" style="white-space: pre-wrap;">
     {@html renderMessage(msg.text)}
   </div>
+  {#if msg.media}
+    <ChatMediaCard media={msg.media} />
+  {/if}
 </div>
 
 <div class="action-buttons">
   <button
     class:speaking={speakingMessageKey === `${index}:${msg.speaker}`}
-    disabled={speakingMessageKey !== null}
+    disabled={speakingMessageKey !== null || mediaEngineBusy !== null}
     onclick={() => handleSpeakMessage(msg, index)}
-  >{speakingMessageKey === `${index}:${msg.speaker}` ? '🔊 Speaking...' : '🔊 Speak'}</button>
-  <button onclick={() => copyText(msg.text)}>📋 COPY</button>
-  <button onclick={() => downloadText(msg.text)}>💾 DL</button>
+  >{speakingMessageKey === `${index}:${msg.speaker}` ? 'Speaking...' : 'Speak'}</button>
+  <button onclick={() => copyText(msg.text)} disabled={mediaEngineBusy !== null}>COPY</button>
+  <button onclick={() => downloadText(msg.text)} disabled={mediaEngineBusy !== null}>DL</button>
+  <button onclick={() => runCommonMediaAction(msg, index, 'manga')} disabled={mediaEngineBusy !== null}>&#x1F5BC;&#xFE0F; &#x6F2B;&#x753B;&#x5316;</button>
+  <button onclick={() => runCommonMediaAction(msg, index, 'anime')} disabled={mediaEngineBusy !== null}>&#x1F3AC; &#x30A2;&#x30CB;&#x30E1;&#x5316;</button>
+  <button onclick={() => runCommonMediaAction(msg, index, 'voice')} disabled={mediaEngineBusy !== null}>&#x1F399;&#xFE0F; &#x30DC;&#x30A4;&#x30B9;&#x5316;</button>
+  <button onclick={() => runCommonMediaAction(msg, index, 'bgm')} disabled={mediaEngineBusy !== null}>&#x1F3B5; BGM&#x5316;</button>
 </div>
 </div>
 

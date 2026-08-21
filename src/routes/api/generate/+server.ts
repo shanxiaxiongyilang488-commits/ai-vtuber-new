@@ -35,6 +35,29 @@ function normalizeSelectedModel(body: GenerateRequest): string {
   return 'fal-ai/nano-banana';
 }
 
+function imageRefDigest(value: string): string {
+  let hash = 0;
+  const step = Math.max(1, Math.floor(value.length / 64));
+  for (let i = 0; i < value.length; i += step) {
+    hash = ((hash << 5) - hash + value.charCodeAt(i)) >>> 0;
+  }
+  return `${value.length}:${hash.toString(16)}`;
+}
+
+function imageRefMeta(value: unknown, index: number, source = 'unknown') {
+  const text = typeof value === 'string' ? value.trim() : '';
+  return {
+    index,
+    source,
+    accepted: /^(?:data:|https?:\/\/)/.test(text),
+    kind: text.startsWith('data:') ? 'data-url' : (text.startsWith('http') ? 'url' : (text ? 'unknown' : 'empty')),
+    mime: text.match(/^data:([^;]+);/)?.[1] ?? null,
+    length: text.length,
+    approxKB: Math.round(text.length / 1024),
+    digest: text ? imageRefDigest(text) : '',
+  };
+}
+
 export const POST: RequestHandler = async ({ request }) => {
   console.log('[IMAGE GENERATE ENTRY]');
 
@@ -98,6 +121,10 @@ export const POST: RequestHandler = async ({ request }) => {
   const receivedRefImages = Array.isArray(body.refImages)
     ? body.refImages
     : (typeof body.refImage === 'string' ? [body.refImage] : []);
+  console.log('[IMAGE_REFS_RECEIVED]', {
+    flowId,
+    refs: receivedRefImages.map((ref, index) => imageRefMeta(ref, index, 'request')),
+  });
   const requestRefImages = receivedRefImages
     .filter((img): img is string =>
       typeof img === 'string' && /^(?:data:|https?:\/\/)/.test(img.trim()),
@@ -110,6 +137,15 @@ export const POST: RequestHandler = async ({ request }) => {
     dropped: receivedRefImages.length - requestRefImages.length,
   });
   const refImages = requestRefImages;
+  const payload = { images: refImages };
+  console.log('[API_GENERATE_PAYLOAD_IMAGES_LENGTH]', {
+    'payload.images.length': payload.images.length,
+    refImagesLength: refImages.length,
+  });
+  console.log('[IMAGE_REFS_FINAL_BEFORE_GENERATE]', {
+    flowId,
+    refs: refImages.map((ref, index) => imageRefMeta(ref, index, 'api/generate.final')),
+  });
   if ((mediaModel.edit || body.editMode) && refImages.length === 0) {
     console.error('[EDIT FLOW][STOP BEFORE generateMediaImage]', {
       flowId,
@@ -127,6 +163,9 @@ export const POST: RequestHandler = async ({ request }) => {
     editMode,
     model: mediaModel.apiModel,
   });
+  console.log('=== FINAL COMIC PROMPT ===', prompt);
+  console.log('=== IMAGE MODEL ===', mediaModel.endpoint ?? mediaModel.apiModel);
+  console.log('=== IMAGE REFS ===', refImages.map((ref, index) => imageRefMeta(ref, index, 'api/generate')));
   console.log('[api/generate]', {
     mediaProvider,
     mediaModel: mediaModel.id,
@@ -173,6 +212,10 @@ export const POST: RequestHandler = async ({ request }) => {
     resolvedModel: mediaModel.endpoint ?? mediaModel.apiModel,
     provider: mediaProvider,
     refImages: refImages.length,
+  });
+  console.log('[IMAGE_REFS_TO_GENERATE_MEDIA_IMAGE]', {
+    flowId,
+    refs: refImages.map((ref, index) => imageRefMeta(ref, index, 'generateMediaImage.refImages')),
   });
   const result = await generateMediaImage({
     prompt,

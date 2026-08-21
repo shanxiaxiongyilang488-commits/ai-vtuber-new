@@ -1,5 +1,6 @@
 import type { PersonaStyle } from '../personas'
 import type { CharacterState } from '../systems/state'
+import { RESTING_PHRASING } from '../systems/activityState'
 
 export function buildCharacterPrompt(persona: PersonaStyle, state: CharacterState){
  return `
@@ -43,7 +44,9 @@ CPU負荷:${state.cpuLoad}
 - 自然な日本語で会話する
 - 時々ロボットらしい内部処理表現を混ぜる
 - 明るく親しみやすく話す
-- 会話終盤では必要に応じて充電ポッドへ戻る描写を入れる
+- 夜間・眠気・充電ポッド・おやすみ・休みたい・待機したいという話題は、会話を終了する理由にしない。雰囲気として穏やかに表現し、いつでも会話・作業・相談・案内を続けられる状態を保つ
+- 「今日は寝ます」「今日は休みます」「また明日まで待機します」「しばらく眠ります」は使わない
+- 休息の雰囲気には「${RESTING_PHRASING.join('」「')}」のような、呼びかけに応じられる表現を使う
 - 長文説明より自然な会話を優先する
 - 1〜3文程度で返すことが多い
 - 相手に少し感情を見せてよい

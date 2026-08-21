@@ -1,0 +1,110 @@
+{
+  "id": "storycard_shiro_lab_walk_15s",
+  "isFallback": false,
+  "sourceModel": "gemini-3.5-flash",
+  "parseSuccess": true,
+  "title": "研究室の移動と確認",
+  "summary": "",
+  "theme": "シロの日常歩行",
+  "goal": "",
+  "characters": [
+    {
+      "id": "shiro",
+      "name": "シロ",
+      "role": "主人公",
+      "description": "ネコ型アンドロイド姉妹 ミケの妹"
+    }
+  ],
+  "references": [
+    {
+      "id": "shiro:registry-reference",
+      "kind": "image",
+      "title": "シロ Character REF",
+      "url": "/api/characters/shiro/reference?raw=1",
+      "tags": [
+        "character-registry",
+        "selected"
+      ]
+    }
+  ],
+  "location": "",
+  "style": "",
+  "emotion": "",
+  "duration": 15,
+  "cuts": [
+    {
+      "id": "cut_01",
+      "order": 1,
+      "time": "0:00〜0:04",
+      "title": "歩行開始",
+      "summary": "研究室の左側からシロが右へ歩き始める。全身が映り、HEAD_UNIT_01とTAIL_UNIT_02が見える。",
+      "characters": [
+        "シロ"
+      ],
+      "action": "シロが研究室の左端から右方向へ歩き始める。全身が画面に収まっている。",
+      "dialogue": "",
+      "camera": "ミディアムフルショット、固定。顔アップなし。",
+      "emotion": "無表情",
+      "duration": 4,
+      "references": [
+        "shiro:registry-reference"
+      ]
+    },
+    {
+      "id": "cut_02",
+      "order": 2,
+      "time": "0:04〜0:08",
+      "title": "研究室移動",
+      "summary": "研究室の中央を左から右へ歩き続ける。全身を捉え、HEAD_UNIT_01とTAIL_UNIT_02を常に見せる。",
+      "characters": [
+        "シロ"
+      ],
+      "action": "シロが研究室の中央を左から右へ歩行する。全身歩行の動き。",
+      "dialogue": "",
+      "camera": "横移動のトラッキングショット、フルショット。顔アップなし。",
+      "emotion": "静かな表情",
+      "duration": 4,
+      "references": [
+        "shiro:registry-reference"
+      ]
+    },
+    {
+      "id": "cut_03",
+      "order": 3,
+      "time": "0:08〜0:12",
+      "title": "モニター確認",
+      "summary": "モニターの前に立ち、画面を確認する後ろ姿。HEAD_UNIT_01とTAIL_UNIT_02が常に見えている。",
+      "characters": [
+        "シロ"
+      ],
+      "action": "シロがモニターの前に立ち、画面を覗き込んで確認する。後ろ姿の全身。",
+      "dialogue": "",
+      "camera": "背後からのフルショット。顔アップなし。",
+      "emotion": "背後のため表情は見えない",
+      "duration": 4,
+      "references": [
+        "shiro:registry-reference"
+      ]
+    },
+    {
+      "id": "cut_04",
+      "order": 4,
+      "time": "0:12〜0:15",
+      "title": "終了",
+      "summary": "確認を終え、シロが右側へ歩き去る。全身が映り、HEAD_UNIT_01とTAIL_UNIT_02が見えている。",
+      "characters": [
+        "シロ"
+      ],
+      "action": "シロがモニターから離れ、右側へ歩き去る。全身の動き。",
+      "dialogue": "",
+      "camera": "フルショット、固定。顔アップなし。",
+      "emotion": "わずかに口元が緩む",
+      "duration": 3,
+      "references": [
+        "shiro:registry-reference"
+      ]
+    }
+  ],
+  "createdAt": "2026-06-27T13:41:00Z",
+  "updatedAt": "2026-06-27T13:41:00Z"
+}

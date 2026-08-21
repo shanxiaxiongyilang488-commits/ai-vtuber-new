@@ -9,11 +9,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsndfile1 tini \
     && rm -rf /var/lib/apt/lists/*
 
-# ComfyUI and its HTTP bridge run in the image's Python environment.  Pinning
-# the release makes a newly migrated Pod behave like the previous Pod.
+# ComfyUI and its HTTP bridge run in the image's Python environment. Pinning
+# the release makes a newly migrated Pod behave like the previous Pod. The
+# RunPod base image also ships a Debian-managed cryptography package without
+# pip RECORD metadata, so a pip-owned copy is installed before requirements.
 RUN git clone --filter=blob:none https://github.com/Comfy-Org/ComfyUI.git /opt/ComfyUI \
     && cd /opt/ComfyUI \
     && git checkout "${COMFYUI_REF}" \
+    && python -m pip install --no-cache-dir --ignore-installed "cryptography>=43,<47" \
     && python -m pip install --no-cache-dir -r requirements.txt \
     && python -m pip install --no-cache-dir \
        "fastapi>=0.115,<1" "uvicorn[standard]>=0.34,<1" \

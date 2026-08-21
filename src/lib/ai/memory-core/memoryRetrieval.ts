@@ -3,6 +3,7 @@ import type { LongTermMemory, MemorySearchInput, MemorySearchResult } from './ty
 const TOKEN_RE = /[\p{L}\p{N}_ーぁ-んァ-ヶ一-龠]+/gu;
 const JAPANESE_RE = /[ぁ-んァ-ヶ一-龠ー]/u;
 const MIN_RELEVANCE_SCORE = 12;
+export const DEFAULT_RECALL_THRESHOLD = 0.75;
 
 type QueryTerm = {
   text: string;
@@ -91,9 +92,9 @@ export function searchMemories(input: MemorySearchInput): MemorySearchResult[] {
   const queryTerms = buildQueryTerms(input.query);
   const limit = Math.max(1, Math.min(5, input.limit ?? 5));
   const candidates = [
-    ...input.sharedMemories.filter((memory) => memory.scope === 'shared'),
+    ...input.sharedMemories.filter((memory) => memory.scope === 'shared' && (input.includeAssets || memory.layer !== 'assetMemory')),
     ...input.characterMemories.filter(
-      (memory) => memory.scope === 'character' && (!input.characterId || memory.characterId === input.characterId)
+      (memory) => memory.scope === 'character' && (input.includeAssets || memory.layer !== 'assetMemory') && (!input.characterId || memory.characterId === input.characterId)
     ),
   ];
 

@@ -1,0 +1,15 @@
+{
+  "video_id": "video_2026-06-24T05-49-35-397Z_0e286a13",
+  "duration": 5.062,
+  "fps": 24,
+  "resolution": "960x960",
+  "emotion": "未解析",
+  "camera": "未解析",
+  "motion": "未解析",
+  "speech": "音声抽出済み（audio.wav）",
+  "issues": [],
+  "recommendation": [],
+  "frame_count": 8,
+  "frame_directory": "/data/video_frames/video_2026-06-24T05-49-35-397Z_0e286a13/",
+  "audio_path": "/temporary/audio/video_2026-06-24T05-49-35-397Z_0e286a13/audio.wav"
+}

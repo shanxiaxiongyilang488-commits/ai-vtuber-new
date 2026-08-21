@@ -1,0 +1,95 @@
+{
+  "id": "sc-01j1z9y8x7w6v5u4t3s2r1q0p9",
+  "isFallback": false,
+  "sourceModel": "gemini-3.5-flash",
+  "parseSuccess": true,
+  "title": "シロの端末操作",
+  "summary": "シロが椅子に座り、端末を操作して作業を完了するまでの15秒のシーケンス。",
+  "theme": "日常の作業風景",
+  "goal": "",
+  "characters": [
+    {
+      "id": "char-shiro",
+      "name": "シロ",
+      "role": "主人公",
+      "description": "白い服を着たキャラクター"
+    }
+  ],
+  "references": [],
+  "location": "",
+  "style": "",
+  "emotion": "",
+  "duration": 15,
+  "cuts": [
+    {
+      "id": "cut-1",
+      "order": 1,
+      "time": "0:00〜0:04",
+      "title": "椅子に座る",
+      "summary": "シロが椅子の前に立ち、ゆっくりと腰を下ろして着席する。",
+      "visual": "シロが正面を向いたまま椅子に着席する様子",
+      "characters": [
+        "シロ"
+      ],
+      "action": "椅子の前に立った状態から、ゆっくりと椅子に腰を下ろす。歩く動作は行わない。",
+      "dialogue": "",
+      "camera": "正面からのミディアムショット。後ろ姿は見せない。",
+      "emotion": "真剣な表情",
+      "duration": 4,
+      "references": []
+    },
+    {
+      "id": "cut-2",
+      "order": 2,
+      "time": "0:04〜0:08",
+      "title": "端末操作",
+      "summary": "シロが机の上の端末に手を伸ばし、画面を操作する。",
+      "visual": "端末の画面を操作するシロの手元と表情",
+      "characters": [
+        "シロ"
+      ],
+      "action": "机の上の端末に手を伸ばし、画面をタップして操作を開始する。",
+      "dialogue": "",
+      "camera": "斜め前方からのクローズアップ。手元と顔を捉える。",
+      "emotion": "集中している目元",
+      "duration": 4,
+      "references": []
+    },
+    {
+      "id": "cut-3",
+      "order": 3,
+      "time": "0:08〜0:12",
+      "title": "画面確認",
+      "summary": "端末の画面に処理完了が表示され、シロがそれを確認する。",
+      "visual": "画面の光が顔に反射し、確認して小さく頷くシロ",
+      "characters": [
+        "シロ"
+      ],
+      "action": "画面に表示された結果を目線で追い、操作が成功したことを確認する。",
+      "dialogue": "",
+      "camera": "正面やや煽りのバストショット。",
+      "emotion": "満足げな表情",
+      "duration": 4,
+      "references": []
+    },
+    {
+      "id": "cut-4",
+      "order": 4,
+      "time": "0:12〜0:15",
+      "title": "終了",
+      "summary": "操作を終えたシロが手を引き、一息つく。",
+      "visual": "作業を終えてリラックスした表情のシロ",
+      "characters": [
+        "シロ"
+      ],
+      "action": "端末から手を引き、背もたれに少し体を預けて一息つく。",
+      "dialogue": "",
+      "camera": "正面からのミディアムショット。",
+      "emotion": "穏やかな笑顔",
+      "duration": 3,
+      "references": []
+    }
+  ],
+  "createdAt": "2026-06-27T21:58:00Z",
+  "updatedAt": "2026-06-27T21:58:00Z"
+}

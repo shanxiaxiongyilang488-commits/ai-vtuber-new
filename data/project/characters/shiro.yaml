@@ -1,0 +1,13 @@
+version: 1
+unit_id: "shiro"
+source: "character_ref_vision"
+characters:
+  - id: "shiro"
+    hair_color: "white"
+    eye_color: "blue"
+    ears: "white cat ears with pink inner detail"
+    tail: "white cat tail"
+    android_parts: "white and black robotic/android body with blue accents and panel lines, visible on torso, shoulders, and arms. Includes a blue paw print and '02' on the left shoulder."
+    outfit: "white and black futuristic armored bodysuit/integrated robotic body with blue accent lines"
+    accessories: "black rectangular device with a glowing blue paw print symbol on the left side of the head"
+    appearance: "The character has short white hair and blue eyes. They possess white cat ears with pink inner detail and a white cat tail. The character's body appears to be robotic or android, colored white and black with bright blue accent lines, forming an armored look over the torso, shoulders, and arms. A blue paw print and the number '02' are visible on the left shoulder. On the left side of the head, there is a black rectangular device featuring a glowing blue paw print symbol."

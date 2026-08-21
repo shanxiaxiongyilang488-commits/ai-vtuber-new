@@ -1,0 +1,95 @@
+{
+  "id": "sc-shiro-terminal-001",
+  "isFallback": false,
+  "sourceModel": "gemini-3.5-flash",
+  "parseSuccess": true,
+  "title": "シロの端末操作",
+  "summary": "椅子に座ったシロが、歩くことなく正面から端末を操作する15秒の映像設計シート。",
+  "theme": "座った状態での端末操作",
+  "goal": "",
+  "characters": [
+    {
+      "id": "char-shiro",
+      "name": "シロ",
+      "role": "主人公",
+      "description": "白い髪のキャラクター"
+    }
+  ],
+  "references": [],
+  "location": "",
+  "style": "",
+  "emotion": "",
+  "duration": 15,
+  "cuts": [
+    {
+      "id": "cut-001",
+      "order": 1,
+      "time": "0:00〜0:04",
+      "title": "端末の起動",
+      "summary": "椅子に座ったシロが、目の前の端末を起動する。",
+      "visual": "起動した端末の光がシロの顔を照らす。",
+      "characters": [
+        "シロ"
+      ],
+      "action": "椅子に深く腰掛けた状態で、デスク上のホログラム端末のスイッチを入れる。",
+      "dialogue": "",
+      "camera": "正面、ミディアムショット。後ろ姿は映さない。",
+      "emotion": "真剣な表情、静かな集中",
+      "duration": 4,
+      "references": []
+    },
+    {
+      "id": "cut-002",
+      "order": 2,
+      "time": "0:04〜0:08",
+      "title": "軽快な操作",
+      "summary": "シロが指先で端末の画面を操作する。",
+      "visual": "指先の動きに合わせてホログラムが変化する。",
+      "characters": [
+        "シロ"
+      ],
+      "action": "座ったまま、空中に浮かぶ画面を指先で軽快にタップし、データをスクロールする。",
+      "dialogue": "",
+      "camera": "斜め前方からのバストアップ。手元と顔を捉える。",
+      "emotion": "興味深そうな目、軽い微笑み",
+      "duration": 4,
+      "references": []
+    },
+    {
+      "id": "cut-003",
+      "order": 3,
+      "time": "0:08〜0:11",
+      "title": "操作の完了",
+      "summary": "操作が完了し、画面に成功のインジケータが表示される。",
+      "visual": "画面の青い光がシロの瞳に反射している。",
+      "characters": [
+        "シロ"
+      ],
+      "action": "最後のタップを行い、画面に表示された完了マークを見つめる。",
+      "dialogue": "",
+      "camera": "正面、クローズアップ。表情の変化を強調する。",
+      "emotion": "ほっとした表情、嬉しそうな瞳",
+      "duration": 3,
+      "references": []
+    },
+    {
+      "id": "cut-004",
+      "order": 4,
+      "time": "0:11〜0:15",
+      "title": "満足の結び",
+      "summary": "シロが端末を閉じ、満足そうに息を吐く。",
+      "visual": "端末が消え、リラックスしたシロの姿でフェードアウト。",
+      "characters": [
+        "シロ"
+      ],
+      "action": "座った姿勢のまま端末をスワイプして閉じ、背もたれに少し体を預ける。",
+      "dialogue": "",
+      "camera": "正面、ミディアムショット。最後まで後ろ姿は見せない。",
+      "emotion": "満足げな笑顔、達成感",
+      "duration": 4,
+      "references": []
+    }
+  ],
+  "createdAt": "2026-06-27T21:58:00Z",
+  "updatedAt": "2026-06-27T21:58:00Z"
+}

@@ -1,0 +1,112 @@
+{
+  "title": "シロの朝のおはようアニメーション",
+  "duration": 15,
+  "cuts": [
+    {
+      "id": "SCENE01",
+      "start": "0:00",
+      "end": "0:03",
+      "title": "目覚め",
+      "description": "朝の柔らかな光が差し込む窓辺で、白髪ショートボブのシロがゆっくりと目を覚ます。白い分割装甲とシアンの発光ラインが朝日に照らされている。",
+      "duration": 3,
+      "camera": "ミディアムショット、アイレベル、右方向への緩やかなパン",
+      "motion": "HEAD_UNIT_01が起動音とともに小さくピクリと動き、腰部のTAIL_UNIT_02は床の上で自然に遅れて揺れる。",
+      "dialogue": "ふあ……朝にゃ。光が温かいですにゃ。",
+      "requiredUnits": [
+        "シロ",
+        "HEAD_UNIT_01",
+        "TAIL_UNIT_02",
+        "shiro-official-identity",
+        "shiro-official-mood",
+        "CONNECTION_PORT",
+        "白い分割装甲",
+        "黒い内部フレーム",
+        "シアン発光ライン"
+      ]
+    },
+    {
+      "id": "SCENE02",
+      "start": "0:03",
+      "end": "0:06",
+      "title": "立ち上がり",
+      "description": "窓辺の席からシロが立ち上がり、カメラの方向を静かに見つめる。黒い内部フレームと関節の機械構造が露出している。",
+      "duration": 3,
+      "camera": "フルショット、ローアングル、固定",
+      "motion": "スムーズに立ち上がる。TAIL_UNIT_02は重力に従い、ワンテンポ遅れてゆったりと左右に揺れる。",
+      "dialogue": "るーつさん、おはようございますにゃ。",
+      "requiredUnits": [
+        "シロ",
+        "HEAD_UNIT_01",
+        "TAIL_UNIT_02",
+        "shiro-official-identity",
+        "CONNECTION_PORT",
+        "白い分割装甲",
+        "黒い内部フレーム",
+        "シアン発光ライン"
+      ]
+    },
+    {
+      "id": "SCENE03",
+      "start": "0:06",
+      "end": "0:09",
+      "title": "モニター確認",
+      "description": "シロが自身の掌を見つめ、毎朝のシステム稼働状態を確認する。シアンの発光ラインが明滅する。",
+      "duration": 3,
+      "camera": "ルーズクローズアップ（胸元まで）、ハイアングル、固定",
+      "motion": "HEAD_UNIT_01が感情に連動して内側に少し伏せられ、TAIL_UNIT_02は背後で小さく弧を描くように揺れる。",
+      "dialogue": "今日もシステム起動、正常。シロの心も、準備万端ですにゃ。",
+      "requiredUnits": [
+        "シロ",
+        "HEAD_UNIT_01",
+        "TAIL_UNIT_02",
+        "shiro-official-identity",
+        "CONNECTION_PORT",
+        "白い分割装甲",
+        "黒い内部フレーム",
+        "シアン発光ライン"
+      ]
+    },
+    {
+      "id": "SCENE04",
+      "start": "0:09",
+      "end": "0:12",
+      "title": "歩み寄り",
+      "description": "カメラに向かってシロが静かに数歩歩み寄り、穏やかで安心感のある微笑みを浮かべる。",
+      "duration": 3,
+      "camera": "ニーショット、後退するトラッキングショット",
+      "motion": "落ち着いた動作で歩く。TAIL_UNIT_02は歩行の慣性に合わせて左右にしなやかに遅れてスイングする。",
+      "dialogue": "今日はどんな一日にしますか？ シロも、ずっとそばにいますにゃ。",
+      "requiredUnits": [
+        "シロ",
+        "HEAD_UNIT_01",
+        "TAIL_UNIT_02",
+        "shiro-official-expression",
+        "CONNECTION_PORT",
+        "白い分割装甲",
+        "黒い内部フレーム",
+        "シアン発光ライン"
+      ]
+    },
+    {
+      "id": "SCENE05",
+      "start": "0:12",
+      "end": "0:15",
+      "title": "終了",
+      "description": "シロがその場に立ち止まり、丁寧かつ穏やかにお辞儀をして、見送るような温かい表情を向ける。",
+      "duration": 3,
+      "camera": "ミディアムショット、アイレベル、緩やかなズームアウト",
+      "motion": "上半身を少し傾けてお辞儀をする。HEAD_UNIT_01が前傾し、TAIL_UNIT_02は動きの終わりに合わせてゆっくりと静止する。",
+      "dialogue": "いってらっしゃい、るーつさん。気をつけてにゃ。",
+      "requiredUnits": [
+        "シロ",
+        "HEAD_UNIT_01",
+        "TAIL_UNIT_02",
+        "shiro-official-expression",
+        "CONNECTION_PORT",
+        "白い分割装甲",
+        "黒い内部フレーム",
+        "シアン発光ライン"
+      ]
+    }
+  ]
+}

@@ -4,18 +4,28 @@
     type CharacterLibraryItem,
   } from '$lib/components/characters/CharacterLibraryCard.svelte';
   import PersonalityEngineModal from '$lib/components/characters/PersonalityEngineModal.svelte';
-  import { sessionStore } from '$lib/stores/sessionStore';
 
   let characters = $state<CharacterLibraryItem[]>([]);
   let loading = $state(true);
   let errorMessage = $state('');
   let editingId = $state('');
   let busyId = $state('');
+  let analysisCandidates = $state<Record<string, string>>({});
 
   // Personality Engine modal (CHARACTER LIBRARY CHAT button)
-  let providerSettings = $state<Record<string, { provider: string }>>({});
+  type StudioProfile = { brainAI?: string; conversationAI?: string; storyCardAI?: string; motionPromptAI?: string; characterAnalysisAI?: string; intentRouterAI?: string; imageAI: string; videoAI: string; voiceAI: string; memoryEnabled: boolean };
+  let providerSettings = $state<Record<string, { provider: string; aiProfile?: StudioProfile }>>({});
   let chatModalCharacter = $state<CharacterLibraryItem | null>(null);
   let chatModalProvider = $state('AUTO');
+  let chatModalConversationAI = $state('INHERIT');
+  let chatModalStoryCardAI = $state('INHERIT');
+  let chatModalMotionPromptAI = $state('INHERIT');
+  let chatModalCharacterAnalysisAI = $state('INHERIT');
+  let chatModalIntentRouterAI = $state('INHERIT');
+  let chatModalImageAI = $state('GPT Image');
+  let chatModalVideoAI = $state('Seedance2');
+  let chatModalVoiceAI = $state('Irodori');
+  let chatModalMemoryEnabled = $state(true);
   let chatModalBusy = $state(false);
   let createOpen = $state(false);
   let newId = $state('');
@@ -36,6 +46,14 @@
       const data = await response.json();
       if (!response.ok) throw new Error(data?.message ?? 'Character Libraryの読み込みに失敗しました。');
       const entries = Array.isArray(data?.characters) ? data.characters : [];
+      const memoryListResponse = await fetch('/api/character-memory');
+      const memoryListData = memoryListResponse.ok ? await memoryListResponse.json() : { characters: [] };
+      const criticalFeaturesById = new Map<string, string[]>(
+        (Array.isArray(memoryListData?.characters) ? memoryListData.characters : []).map((item: { id?: unknown; criticalFeatures?: unknown }) => [
+          String(item.id ?? ''),
+          Array.isArray(item.criticalFeatures) ? item.criticalFeatures.filter((value): value is string => typeof value === 'string') : [],
+        ]),
+      );
       characters = await Promise.all(entries.map(async (entry: CharacterLibraryItem & { hasReference?: boolean }) => {
         let imageDataUrl = '';
         if (entry.hasReference) {
@@ -47,7 +65,8 @@
               : '';
           }
         }
-        return { ...entry, image: entry.image ?? '', imageDataUrl };
+        const criticalFeatures = criticalFeaturesById.get(entry.id) ?? [];
+        return { ...entry, image: entry.image ?? '', imageDataUrl, criticalFeatures };
       }));
       void loadProviderSettings();
     } catch (error) {
@@ -71,6 +90,15 @@
   function openChatModal(character: CharacterLibraryItem): void {
     chatModalCharacter = character;
     chatModalProvider = providerSettings[character.id]?.provider ?? 'AUTO';
+    chatModalConversationAI = providerSettings[character.id]?.aiProfile?.conversationAI ?? 'INHERIT';
+    chatModalStoryCardAI = providerSettings[character.id]?.aiProfile?.storyCardAI ?? 'INHERIT';
+    chatModalMotionPromptAI = providerSettings[character.id]?.aiProfile?.motionPromptAI ?? 'INHERIT';
+    chatModalCharacterAnalysisAI = providerSettings[character.id]?.aiProfile?.characterAnalysisAI ?? 'INHERIT';
+    chatModalIntentRouterAI = providerSettings[character.id]?.aiProfile?.intentRouterAI ?? 'INHERIT';
+    chatModalImageAI = providerSettings[character.id]?.aiProfile?.imageAI ?? 'GPT Image';
+    chatModalVideoAI = providerSettings[character.id]?.aiProfile?.videoAI ?? 'Seedance2';
+    chatModalVoiceAI = providerSettings[character.id]?.aiProfile?.voiceAI ?? 'Irodori';
+    chatModalMemoryEnabled = providerSettings[character.id]?.aiProfile?.memoryEnabled ?? true;
   }
 
   async function startChat(): Promise<void> {
@@ -81,11 +109,11 @@
       const response = await fetch('/api/character-settings', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ id: character.id, provider: chatModalProvider }),
+        body: JSON.stringify({ id: character.id, provider: chatModalProvider, aiProfile: { brainAI: chatModalProvider, conversationAI: chatModalConversationAI, storyCardAI: chatModalStoryCardAI, motionPromptAI: chatModalMotionPromptAI, characterAnalysisAI: chatModalCharacterAnalysisAI, intentRouterAI: chatModalIntentRouterAI, imageAI: chatModalImageAI, videoAI: chatModalVideoAI, voiceAI: chatModalVoiceAI, memoryEnabled: chatModalMemoryEnabled } }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data?.message ?? 'AI設定の保存に失敗しました。');
-      providerSettings = { ...providerSettings, [character.id]: { provider: chatModalProvider } };
+      providerSettings = { ...providerSettings, [character.id]: data.setting };
       window.location.href = `/character-memory?id=${encodeURIComponent(character.id)}`;
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
@@ -215,18 +243,12 @@
     busyId = character.id;
     errorMessage = '';
     try {
-      const provider = $sessionStore.provider === 'openai'
-        || $sessionStore.provider === 'gemini'
-        || $sessionStore.provider === 'claude'
-        ? $sessionStore.provider
-        : 'gemini';
       const response = await fetch('/api/lab-chat', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
+          characterId: character.id,
           route: 'image_analysis',
-          provider,
-          model: provider === $sessionStore.provider ? ($sessionStore.model || undefined) : undefined,
           visionMode: 'strict',
           memory: { enabled: false },
           systemPrompt: [
@@ -243,7 +265,13 @@
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data?.message ?? `Vision HTTP ${response.status}`);
-      const characterBible = parseVisionCharacterYaml(String(data?.text ?? ''), character.id);
+      const parsedBible = parseVisionCharacterYaml(String(data?.text ?? ''), character.id);
+      // YAML生成は対象キャラ自身のみを更新する。Vision結果のidに関わらず、
+      // 対象キャラの既存idで単一キャラとして保存し、別キャラを新規作成しない。
+      const characterBible = {
+        unitId: parsedBible.unitId,
+        characters: [{ ...parsedBible.characters[0], id: character.id }],
+      };
       const saveResponse = await fetch(`/api/characters/${encodeURIComponent(character.id)}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
@@ -252,6 +280,29 @@
       const saved = await saveResponse.json();
       if (!saveResponse.ok) throw new Error(saved?.message ?? 'Character YAMLの保存に失敗しました。');
       await loadCharacters();
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      busyId = '';
+    }
+  }
+
+  async function analyzeResidentAsset(character: CharacterLibraryItem, category: string): Promise<void> {
+    busyId = character.id;
+    try {
+      const response = await fetch('/api/lab-chat', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          characterId: character.id,
+          route: 'image_analysis',
+          systemPrompt: 'Return a concise Japanese analysis candidate only. Never update a character persona, memory, or registry. Do not output YAML or technical implementation details.',
+          userMessage: `${character.name} の ${category} について、住人管理用の更新候補を1〜2文で提案してください。`,
+          ...(character.imageDataUrl ? { images: [character.imageDataUrl] } : {}),
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.message ?? 'AI analysis failed');
+      analysisCandidates = { ...analysisCandidates, [`${character.id}:${category}`]: String(data?.text ?? data?.reply ?? '').trim() };
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
     } finally {
@@ -318,9 +369,11 @@
           onSave={(input) => updateCharacter(character.id, input)}
           onImageChange={(file) => changeImage(character.id, file)}
           onGenerateSheet={() => generateCharacterYaml(character)}
-          onUseCharacter={() => (window.location.href = `/lab?useCharacter=${encodeURIComponent(character.id)}`)}
           onChat={() => openChatModal(character)}
-          onDelete={() => deleteCharacter(character.id, character.name)}
+          onMemory={() => (window.location.href = `/character-memory?id=${encodeURIComponent(character.id)}`)}
+          onLibrary={() => (window.location.href = `/character-memory?id=${encodeURIComponent(character.id)}#project-assets`)}
+          onAnalyze={(category) => analyzeResidentAsset(character, category)}
+          analysisCandidate={Object.entries(analysisCandidates).filter(([key]) => key.startsWith(`${character.id}:`)).at(-1)?.[1] ?? ''}
         />
       {/each}
     </main>
@@ -328,9 +381,19 @@
 
   {#if chatModalCharacter}
     <PersonalityEngineModal
+      characterId={chatModalCharacter.id}
       characterName={chatModalCharacter.name}
       characterImage={chatModalCharacter.imageDataUrl ?? ''}
       bind:provider={chatModalProvider}
+      bind:conversationAI={chatModalConversationAI}
+      bind:storyCardAI={chatModalStoryCardAI}
+      bind:motionPromptAI={chatModalMotionPromptAI}
+      bind:characterAnalysisAI={chatModalCharacterAnalysisAI}
+      bind:intentRouterAI={chatModalIntentRouterAI}
+      bind:imageAI={chatModalImageAI}
+      bind:videoAI={chatModalVideoAI}
+      bind:voiceAI={chatModalVoiceAI}
+      bind:memoryEnabled={chatModalMemoryEnabled}
       busy={chatModalBusy}
       onCancel={() => (chatModalCharacter = null)}
       onStart={startChat}

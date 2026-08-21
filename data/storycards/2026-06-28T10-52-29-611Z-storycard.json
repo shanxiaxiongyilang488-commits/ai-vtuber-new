@@ -1,0 +1,50 @@
+{
+  "title": "起床",
+  "duration": 15,
+  "cuts": [
+    {
+      "id": "CUT01",
+      "start": "0:00",
+      "end": "0:04",
+      "title": "充電中",
+      "description": "Wide shot of MIKE lying relaxed on charging cushion, eyes closed, full body visible with tail curled beside body.",
+      "requiredUnits": [
+        "ミケ",
+        "充電クッション"
+      ]
+    },
+    {
+      "id": "CUT02",
+      "start": "0:04",
+      "end": "0:08",
+      "title": "起床",
+      "description": "MIKE slowly opens eyes and begins rising from lying position on charging cushion, tail shifting slightly.",
+      "requiredUnits": [
+        "ミケ",
+        "充電クッション"
+      ]
+    },
+    {
+      "id": "CUT03",
+      "start": "0:08",
+      "end": "0:12",
+      "title": "魅力ポーズ",
+      "description": "MIKE sits up fully into most charming pose with relaxed smile, full body and tail completely visible.",
+      "requiredUnits": [
+        "ミケ",
+        "充電クッション"
+      ]
+    },
+    {
+      "id": "CUT04",
+      "start": "0:12",
+      "end": "0:15",
+      "title": "終了",
+      "description": "MIKE holds final charming seated pose on charging cushion, full body framing with tail visible.",
+      "requiredUnits": [
+        "ミケ",
+        "充電クッション"
+      ]
+    }
+  ]
+}

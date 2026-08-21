@@ -1,0 +1,91 @@
+{
+  "id": "storycard-shiro-sitting-terminal",
+  "isFallback": false,
+  "sourceModel": "gemini-3.5-flash",
+  "parseSuccess": true,
+  "title": "シロの端末操作",
+  "summary": "シロが椅子に座り、端末を操作して完了を確認するまでの一連の動作。",
+  "theme": "日常の端末操作",
+  "goal": "",
+  "characters": [
+    {
+      "id": "shiro",
+      "name": "シロ",
+      "role": "主人公",
+      "description": "メインキャラクター"
+    }
+  ],
+  "references": [],
+  "location": "",
+  "style": "",
+  "emotion": "",
+  "duration": 15,
+  "cuts": [
+    {
+      "id": "cut-1",
+      "order": 1,
+      "time": "0:00〜0:04",
+      "title": "着席",
+      "summary": "シロが椅子の前に立ち、ゆっくりと腰掛ける。",
+      "characters": [
+        "シロ"
+      ],
+      "action": "椅子の前に立った状態から、ゆっくりと椅子に腰掛ける。歩く動作は一切なし。",
+      "dialogue": "",
+      "camera": "正面やや斜めからのミディアムショット。後ろ姿は映さない。",
+      "emotion": "真剣な表情",
+      "duration": 4,
+      "references": []
+    },
+    {
+      "id": "cut-2",
+      "order": 2,
+      "time": "0:04〜0:08",
+      "title": "端末操作",
+      "summary": "タブレット端末を手に取り、画面をタップして操作する。",
+      "characters": [
+        "シロ"
+      ],
+      "action": "机の上のタブレット端末を手に取り、画面をタップして操作を開始する。",
+      "dialogue": "",
+      "camera": "正面からのアップ。手元と表情を捉える。後ろ姿は映さない。",
+      "emotion": "集中している",
+      "duration": 4,
+      "references": []
+    },
+    {
+      "id": "cut-3",
+      "order": 3,
+      "time": "0:08〜0:12",
+      "title": "確認",
+      "summary": "画面の完了表示を目で見て、処理が成功したことを確認する。",
+      "characters": [
+        "シロ"
+      ],
+      "action": "端末の画面を見つめ、処理が完了した表示を目で確認する。",
+      "dialogue": "",
+      "camera": "正面からのクローズアップ。",
+      "emotion": "安堵、満足",
+      "duration": 4,
+      "references": []
+    },
+    {
+      "id": "cut-4",
+      "order": 4,
+      "time": "0:12〜0:15",
+      "title": "終了",
+      "summary": "端末を机に置き、一息ついて微笑む。",
+      "characters": [
+        "シロ"
+      ],
+      "action": "端末を机に静かに置き、一息ついてカメラに向かって微笑む。",
+      "dialogue": "",
+      "camera": "正面からのミディアムショット。",
+      "emotion": "笑顔",
+      "duration": 3,
+      "references": []
+    }
+  ],
+  "createdAt": "2026-06-27T21:58:00Z",
+  "updatedAt": "2026-06-27T21:58:00Z"
+}

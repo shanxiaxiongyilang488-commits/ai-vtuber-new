@@ -3,10 +3,11 @@
  * ここを修正すると全画面に反映される
  */
 
-export type AIProvider = 'openai' | 'gemini' | 'claude' | 'ollama' | 'lmstudio' | 'colab-ollama' | 'onair';
+export type AIProvider = 'openai' | 'grok' | 'gemini' | 'claude' | 'ollama' | 'lmstudio' | 'colab-ollama' | 'onair';
 
 export const PROVIDER_OPTIONS: readonly { value: Exclude<AIProvider, 'onair'>; label: string }[] = [
   { value: 'openai',   label: 'OpenAI' },
+  { value: 'grok',     label: 'Grok' },
   { value: 'gemini',   label: 'Gemini' },
   { value: 'claude',   label: 'Claude（開発者専用）' },
   { value: 'ollama',   label: 'Ollama' },
@@ -24,7 +25,8 @@ export const PROVIDER_MODELS: Record<AIProvider, readonly string[]> = {
     'gpt-4.1',
     'gpt-4o-mini',
   ],
-  gemini:   ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-3-flash-preview', 'gemini-3-pro-preview'],
+  grok:     ['grok-4'],
+  gemini:   ['gemini-3.5-flash'],
   claude:   ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-6'],
   ollama:   ['gemma3:4b', 'gemma3:1b', 'qwen2.5:3b', 'llama3.2:3b'],
   'colab-ollama': [],
@@ -33,8 +35,9 @@ export const PROVIDER_MODELS: Record<AIProvider, readonly string[]> = {
 };
 
 export const DEFAULT_MODELS: Record<AIProvider, string> = {
-  openai:   'gpt-5.4-mini',
-  gemini:   'gemini-2.5-flash',
+  openai:   'gpt-5.5',
+  grok:     'grok-4',
+  gemini:   'gemini-3.5-flash',
   claude:   'claude-haiku-4-5-20251001',
   ollama:   'qwen2.5:3b',
   'colab-ollama': '',

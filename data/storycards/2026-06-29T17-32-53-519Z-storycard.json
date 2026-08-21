@@ -1,0 +1,102 @@
+{
+  "title": "シロ おはようございますアニメ",
+  "duration": 15,
+  "cuts": [
+    {
+      "id": "CUT01",
+      "start": "0:00",
+      "end": "0:04",
+      "title": "待機",
+      "description": "未来研究室のワイドショット。朝光の入る窓と青いモニター群の前、充電ポッド内のシロが全身見える構図で目を閉じて待機している。",
+      "requiredUnits": [
+        "シロ",
+        "HEAD_UNIT_01",
+        "TAIL_UNIT_02",
+        "CONNECTION_PORT",
+        "ORANGE_MESH",
+        "白い分割装甲",
+        "黒い内部フレーム",
+        "シアン発光ライン",
+        "肉球ヘアアクセサリー",
+        "充電ポッド",
+        "未来研究室",
+        "青いモニター",
+        "窓",
+        "shiro-official-identity",
+        "shiro-official-mood"
+      ]
+    },
+    {
+      "id": "CUT02",
+      "start": "0:04",
+      "end": "0:08",
+      "title": "起動",
+      "description": "充電ポッド前の中距離全身構図。シロが目を開けて上体を起こし、HEAD_UNIT_01が小さく動き、TAIL_UNIT_02が重力に遅れて揺れる。",
+      "requiredUnits": [
+        "シロ",
+        "HEAD_UNIT_01",
+        "TAIL_UNIT_02",
+        "CONNECTION_PORT",
+        "ORANGE_MESH",
+        "白い分割装甲",
+        "黒い内部フレーム",
+        "シアン発光ライン",
+        "肉球ヘアアクセサリー",
+        "充電ポッド",
+        "未来研究室",
+        "青いモニター",
+        "shiro-official-identity",
+        "shiro-official-expression",
+        "shiro-official-mood"
+      ]
+    },
+    {
+      "id": "CUT03",
+      "start": "0:08",
+      "end": "0:11",
+      "title": "モニター確認",
+      "description": "斜め後ろからの中距離構図。シロが研究室モニターを操作し、画面のMISSIONとSTATUS準備完了を確認する。TAIL_UNIT_02は腰部から横に見えて自然に揺れる。",
+      "requiredUnits": [
+        "シロ",
+        "HEAD_UNIT_01",
+        "TAIL_UNIT_02",
+        "CONNECTION_PORT",
+        "ORANGE_MESH",
+        "白い分割装甲",
+        "黒い内部フレーム",
+        "シアン発光ライン",
+        "肉球ヘアアクセサリー",
+        "研究室モニター",
+        "MISSION表示",
+        "STATUS準備完了表示",
+        "操作パネル",
+        "未来研究室",
+        "shiro-official-identity",
+        "shiro-official-expression"
+      ]
+    },
+    {
+      "id": "CUT04",
+      "start": "0:11",
+      "end": "0:15",
+      "title": "終了",
+      "description": "正面の中距離全身構図。シロが肉球アクセサリー付きの手を小さく振り、片目を閉じて笑顔を見せる。HEAD_UNIT_01が反応し、TAIL_UNIT_02がゆっくり遅れて揺れる。",
+      "requiredUnits": [
+        "シロ",
+        "HEAD_UNIT_01",
+        "TAIL_UNIT_02",
+        "CONNECTION_PORT",
+        "ORANGE_MESH",
+        "白い分割装甲",
+        "黒い内部フレーム",
+        "シアン発光ライン",
+        "肉球ヘアアクセサリー",
+        "肉球アクセサリー",
+        "未来研究室",
+        "青いモニター",
+        "shiro-official-identity",
+        "shiro-official-expression"
+      ]
+    }
+  ]
+}

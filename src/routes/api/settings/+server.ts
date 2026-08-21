@@ -4,10 +4,17 @@ import { AVAILABLE_MEDIA_MODELS, logAvailableMediaModels } from '$lib/server/med
 
 export const GET: RequestHandler = async () => {
   const settings = await readSettings();
+  const availableProviders = [
+    ...(settings.openai.key ? ['openai'] : []),
+    ...(settings.grok.enabled || settings.grok.apiKey ? ['grok'] : []),
+    ...(settings.gemini.key ? ['gemini'] : []),
+    ...(settings.anthropic.key ? ['claude'] : []),
+    ...(settings.local.baseUrl ? ['local'] : []),
+  ];
   logAvailableMediaModels();
   console.log('[MEDIA_PROVIDER]', settings.mediaConfig.provider);
   console.log('[MEDIA_MODEL]', settings.mediaConfig.model);
-  return json({ ...settings, availableMediaModels: AVAILABLE_MEDIA_MODELS });
+  return json({ ...settings, availableProviders, availableMediaModels: AVAILABLE_MEDIA_MODELS });
 };
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -21,6 +28,7 @@ export const POST: RequestHandler = async ({ request }) => {
   console.log('[MEDIA_PROVIDER]', saved.mediaConfig.provider);
   console.log('[MEDIA_MODEL]', saved.mediaConfig.model);
   console.log('[OPENAI KEY SAVED]', Boolean(saved.openai.key));
+  console.log('[GROK KEY SAVED]', Boolean(saved.grok.apiKey));
   console.log('[GEMINI KEY SAVED]', Boolean(saved.gemini.key));
   console.log('[FAL KEY SAVED]', Boolean(saved.fal.key));
   console.log('[IDEOGRAM KEY SAVED]', Boolean(saved.ideogram.key));

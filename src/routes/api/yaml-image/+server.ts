@@ -138,6 +138,28 @@ function buildMangaPromptKeywordTrace(stages: Record<string, string>) {
   ]));
 }
 
+function imageRefDigest(value: string): string {
+  let hash = 0;
+  const step = Math.max(1, Math.floor(value.length / 64));
+  for (let i = 0; i < value.length; i += step) {
+    hash = ((hash << 5) - hash + value.charCodeAt(i)) >>> 0;
+  }
+  return `${value.length}:${hash.toString(16)}`;
+}
+
+function imageRefMeta(value: string, index: number, source = 'unknown') {
+  const text = value.trim();
+  return {
+    index,
+    source,
+    kind: text.startsWith('data:') ? 'data-url' : (text.startsWith('http') ? 'url' : (text ? 'unknown' : 'empty')),
+    mime: text.match(/^data:([^;]+);/)?.[1] ?? null,
+    length: text.length,
+    approxKB: Math.round(text.length / 1024),
+    digest: text ? imageRefDigest(text) : '',
+  };
+}
+
 function buildCharacterConsistencyPrompt(
   characterBible: CharacterBible | null,
   allowedIds: Set<string> | null = null,
@@ -287,6 +309,16 @@ export const POST: RequestHandler = async ({ request }) => {
     .filter((image): image is string => typeof image === 'string' && image.startsWith('data:image/'));
   const storyReferenceImages = (body.storyReferenceImages ?? [])
     .filter((image): image is string => typeof image === 'string' && image.startsWith('data:image/'));
+  console.log('[YAML_IMAGE_REFS_RECEIVED]', {
+    characterRefImages: (body.characterRefImages ?? body.refImages ?? [])
+      .filter((image): image is string => typeof image === 'string')
+      .map((image, index) => imageRefMeta(image, index, 'request.characterRefImages')),
+    acceptedCharacterRefImages: suppliedCharacterRefImages.map((image, index) => imageRefMeta(image, index, 'accepted.characterRefImages')),
+    storyReferenceImages: (body.storyReferenceImages ?? [])
+      .filter((image): image is string => typeof image === 'string')
+      .map((image, index) => imageRefMeta(image, index, 'request.storyReferenceImages')),
+    acceptedStoryReferenceImages: storyReferenceImages.map((image, index) => imageRefMeta(image, index, 'accepted.storyReferenceImages')),
+  });
   const requestCharacterRefImages = suppliedCharacterRefImages;
   const activeCharacterRefs = requestCharacterRefImages.map((image, index) => {
     const meta = body.characterRefs?.find((ref) => ref.image === image) ?? body.characterRefs?.[index];
@@ -473,6 +505,17 @@ export const POST: RequestHandler = async ({ request }) => {
     ...finalCharacterRefs.map((ref) => ref.image),
     ...storyReferenceImages,
   ].filter((image, index, images) => images.indexOf(image) === index);
+  console.log('[YAML_IMAGE_REFS_FINAL_BEFORE_GENERATE]', {
+    characterRefs: finalCharacterRefs.map((ref, index) => ({
+      index,
+      source: ref.source,
+      id: ref.id,
+      fileName: ref.fileName,
+      image: imageRefMeta(ref.image, index, 'finalCharacterRefs.image'),
+    })),
+    storyReferenceImages: storyReferenceImages.map((image, index) => imageRefMeta(image, index, 'final.storyReferenceImages')),
+    refImages: refImages.map((image, index) => imageRefMeta(image, index, 'yaml-image.final.refImages')),
+  });
   console.log('[YAML_IMAGE_REF_COUNT]', refImages.length);
   console.log('[YAML_IMAGE_REF_PRIORITY]', {
     primaryCharacterRefs: activeCharacterRefs.length,
@@ -557,14 +600,17 @@ export const POST: RequestHandler = async ({ request }) => {
     '[FINAL_IMAGE_PROMPT]',
     finalPrompt,
   );
+  console.log('=== FINAL COMIC PROMPT ===', finalPrompt);
   console.log(
     '[FINAL_IMAGE_MODEL]',
     model,
   );
+  console.log('=== IMAGE MODEL ===', model);
   console.log(
     '[REF_IMAGES]',
     referenceImages,
   );
+  console.log('=== IMAGE REFS ===', referenceImages.map((ref, index) => imageRefMeta(ref, index, 'yaml-image')));
   console.log(
     '[CHARACTER_REF_IMAGES]',
     referenceImages,

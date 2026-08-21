@@ -154,12 +154,13 @@
     rafId = requestAnimationFrame(drawFrame);
   }
 
-  onMount(async () => {
+  onMount(() => {
     mounted = true;
     ctx = canvasEl.getContext('2d');
-    await Promise.all([loadTrack(), loadMouthImages()]);
-    videoEl.play().catch(() => {});
-    rafId = requestAnimationFrame(drawFrame);
+    void Promise.all([loadTrack(), loadMouthImages()]).then(() => {
+      void videoEl.play().catch(() => {});
+      rafId = requestAnimationFrame(drawFrame);
+    });
     return () => cancelAnimationFrame(rafId);
   });
 </script>

@@ -1,0 +1,81 @@
+{
+  "title": "充電ポッド使用アニメーション",
+  "duration": 15,
+  "cuts": [
+    {
+      "id": "SCENE01",
+      "start": "0:00",
+      "end": "0:03",
+      "title": "ポッド前待機",
+      "description": "ルシアが充電ポッド「POD-07」の前に立つ。手前には操作用コンソールがあり、奥には円筒型の充電ポッドが設置されている。",
+      "duration": 3,
+      "camera": "FULL SHOT / SLIGHT PUSH IN",
+      "motion": "ルシアがポッドの前に静止し、ポッドを見つめる。",
+      "dialogue": "そろそろ充電しないとね。",
+      "requiredUnits": [
+        "attachment-1",
+        "attachment-2"
+      ]
+    },
+    {
+      "id": "SCENE02",
+      "start": "0:03",
+      "end": "0:06",
+      "title": "モニター確認",
+      "description": "手元のタブレット端末を操作し、起動コマンドを画面上で確認しながら入力するルシアのバストアップ。",
+      "duration": 3,
+      "camera": "MEDIUM SHOT to CLOSE UP / TIGHT PUSH IN",
+      "motion": "ルシアが手元を凝視し、指先でタブレット画面をタップして操作する。",
+      "dialogue": "起動、お願いします♪",
+      "requiredUnits": [
+        "attachment-1",
+        "attachment-2"
+      ]
+    },
+    {
+      "id": "SCENE03",
+      "start": "0:06",
+      "end": "0:09",
+      "title": "ポッド起動",
+      "description": "充電ポッド「LUCIA A-02」の全体像。ポッドが起動し、ピンクのLEDラインが発光する。",
+      "duration": 3,
+      "camera": "WIDE SHOT / SLIGHT PUSH IN",
+      "motion": "充電ポッドの発光ラインが下部から順に点灯し、起動する。",
+      "dialogue": "システム、起動しました。",
+      "requiredUnits": [
+        "attachment-1",
+        "attachment-2"
+      ]
+    },
+    {
+      "id": "SCENE04",
+      "start": "0:09",
+      "end": "0:12",
+      "title": "ポッド開口",
+      "description": "充電ポッドの上部カバーがゆっくりと上方へ開き、内部スペースが露出する。",
+      "duration": 3,
+      "camera": "WIDE SHOT / PUSH IN",
+      "motion": "ポッドのカバーが電動音とともにゆっくりとスライドして上昇する。",
+      "dialogue": "お待たせしました、ルシア。",
+      "requiredUnits": [
+        "attachment-1",
+        "attachment-2"
+      ]
+    },
+    {
+      "id": "SCENE05",
+      "start": "0:12",
+      "end": "0:15",
+      "title": "終了",
+      "description": "開いたポッドのフチにルシアがゆっくりと腰を下ろす。",
+      "duration": 3,
+      "camera": "MEDIUM SHOT / SLIGHT PUSH IN",
+      "motion": "ルシアがポッドに手を添えながら、ゆっくりとフチに腰掛ける（着席のアクション）。",
+      "dialogue": "ふぅ…やっと休める…",
+      "requiredUnits": [
+        "attachment-1",
+        "attachment-2"
+      ]
+    }
+  ]
+}

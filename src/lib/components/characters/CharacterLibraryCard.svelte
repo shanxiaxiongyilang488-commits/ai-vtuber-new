@@ -10,6 +10,7 @@
     imageDataUrl?: string;
     characterYaml?: string;
     hasReference?: boolean;
+    criticalFeatures?: string[];
   };
 
   let {
@@ -21,9 +22,11 @@
     onSave,
     onImageChange,
     onGenerateSheet,
-    onUseCharacter,
     onChat,
-    onDelete,
+    onMemory,
+    onLibrary,
+    onAnalyze,
+    analysisCandidate = '',
   }: {
     character: CharacterLibraryItem;
     editing?: boolean;
@@ -33,9 +36,11 @@
     onSave: (input: Pick<CharacterLibraryItem, 'name' | 'role' | 'description'>) => void | Promise<void>;
     onImageChange: (file: File) => void | Promise<void>;
     onGenerateSheet: () => void | Promise<void>;
-    onUseCharacter: () => void;
     onChat: () => void;
-    onDelete: () => void | Promise<void>;
+    onMemory: () => void;
+    onLibrary: () => void;
+    onAnalyze: (category: string) => void | Promise<void>;
+    analysisCandidate?: string;
   } = $props();
 
   let name = $state(untrack(() => character.name));
@@ -98,6 +103,14 @@
       <div class="role">{character.role || '役割未設定'}</div>
       <p>{character.description || '説明はまだありません。'}</p>
       <div class="image-path">IMAGE: {character.image || '未登録'}</div>
+      <section class="critical-features">
+        <strong>VISUAL MEMORY · CRITICAL FEATURES</strong>
+        {#if character.criticalFeatures?.length}
+          <div>{#each character.criticalFeatures as feature}<span>{feature}</span>{/each}</div>
+        {:else}
+          <small>未登録</small>
+        {/if}
+      </section>
       <section class="character-sheet">
         <div class="sheet-heading">
           <span>CHARACTER YAML</span>
@@ -120,19 +133,18 @@
         {/if}
       </section>
       <div class="card-actions">
-        <button
-          class="use-button"
-          onclick={onUseCharacter}
-          disabled={busy || !character.hasReference}
-        >
-          Use Character
-        </button>
-        <button class="chat-button" onclick={onChat}>CHAT</button>
-        <button class="edit-button" onclick={onEdit} disabled={busy}>編集</button>
-        <button class="delete-button" onclick={onDelete} disabled={busy}>
-          {busy ? '削除中...' : '削除'}
-        </button>
+        <button class="chat-button" onclick={onChat}>💬 CHAT</button>
+        <button onclick={onMemory}>🧠 記憶</button>
+        <button onclick={onLibrary}>📚 ライブラリ</button>
+        <button class="edit-button" onclick={onEdit} disabled={busy}>⚙️ 編集</button>
       </div>
+      <details class="resident-library">
+        <summary>📚 住人ライブラリ</summary>
+        {#each ['🖼️ キャラ資料', '🎬 動画', '📖 漫画', '🎭 モーション', '📄 character.yaml'] as category}
+          <div class="library-row"><span>{category}</span><button onclick={() => onAnalyze(category)} disabled={busy}>🤖 AI分析</button></div>
+        {/each}
+        {#if analysisCandidate}<p class="analysis-candidate">更新候補（自動適用なし）: {analysisCandidate}</p>{/if}
+      </details>
     {/if}
   </div>
 </article>
@@ -188,6 +200,11 @@
   .role { color: #fbbf24; font-size: 11px; font-weight: 700; }
   p { min-height: 48px; margin: 10px 0; color: #94a3b8; font-size: 12px; line-height: 1.55; }
   .image-path { overflow-wrap: anywhere; color: #64748b; font: 9px/1.4 Consolas, monospace; }
+  .critical-features { display: grid; gap: 7px; margin-top: 10px; padding: 9px; border: 1px solid rgba(251,191,36,.3); border-radius: 7px; background: rgba(120,53,15,.1); }
+  .critical-features strong { color: #fde68a; font: 800 9px/1.3 Consolas, monospace; letter-spacing: .08em; }
+  .critical-features div { display: flex; flex-wrap: wrap; gap: 5px; }
+  .critical-features span { padding: 3px 7px; border-radius: 999px; color: #fef3c7; background: rgba(251,191,36,.1); font-size: 9px; font-weight: 800; }
+  .critical-features small { color: #64748b; font-size: 10px; }
   .character-sheet {
     margin-top: 12px;
     padding-top: 10px;
@@ -255,15 +272,13 @@
   }
   button:disabled { cursor: not-allowed; opacity: 0.45; }
   .card-actions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; margin-top: 12px; }
-  .use-button { border-color: rgba(34, 211, 238, 0.5); color: #67e8f9; }
   .chat-button { border-color: rgba(251, 191, 36, 0.38); color: #fde68a; }
   .edit-button { width: 100%; }
-  .delete-button {
-    width: 100%;
-    border-color: rgba(248, 113, 113, 0.45);
-    background: rgba(248, 113, 113, 0.08);
-    color: #fca5a5;
-  }
+  .resident-library { margin-top: 10px; border-top: 1px solid rgba(148,163,184,.16); padding-top: 8px; }
+  .resident-library summary { cursor: pointer; color: #c4b5fd; font-size: 11px; font-weight: 800; }
+  .library-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 0; color: #cbd5e1; font-size: 11px; }
+  .library-row button { padding: 5px 7px; font-size: 9px; }
+  .analysis-candidate { min-height: 0; margin: 6px 0 0; padding: 7px; border-radius: 5px; background: rgba(34,211,238,.08); color: #a5f3fc; font-size: 10px; }
   .actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 12px; }
   .secondary { border-color: rgba(148, 163, 184, 0.25); color: #94a3b8; }
 </style>

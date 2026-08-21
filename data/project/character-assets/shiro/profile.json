@@ -1,0 +1,15 @@
+{
+  "id": "shiro",
+  "name": "シロ",
+  "role": "妹",
+  "description": "ネコ型アンドロイド姉妹　ミケの妹",
+  "image": "data/project/character-assets/shiro/reference.png",
+  "selfImages": [],
+  "voice": {
+    "engine": "irodori",
+    "mode": "clone",
+    "model": "haruka",
+    "speed": 1,
+    "autoSpeak": false
+  }
+}

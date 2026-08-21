@@ -45,6 +45,7 @@ export function buildMemorySystemPrompt(input: BuildMemoryPromptInput): BuiltMem
     importance: memory.importance,
     tags: memory.tags,
     timestamp: memory.timestamp,
+    layer: memory.layer,
   }));
 
   if (input.debug) {
@@ -80,6 +81,8 @@ export function buildMemorySystemPrompt(input: BuildMemoryPromptInput): BuiltMem
 
   const systemPrompt = [
     base,
+    '',
+    '【Memory response rule】Use supplied memory only to answer the user\'s explicit recall request. Do not volunteer, imply, or mention past conversations otherwise. Never generate: 「前回は」「以前は」「以前にも」「最近は」「いつもの」「久々」「20時間ぶり」「数日前」「翌日」「覚えています」「思い出しました」 unless the current user explicitly asked to recall and the supplied memory directly supports the answer.',
     '',
     '【Memory Core】',
     '- 記憶は返答の背景情報です。必要な時だけ、会話に溶け込む形で自然に使ってください。',

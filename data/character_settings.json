@@ -1,0 +1,47 @@
+{
+  "mike": {
+    "provider": "GPT-5.5",
+    "aiProfile": {
+      "brainAI": "GPT-5.5",
+      "conversationAI": "INHERIT",
+      "storyCardAI": "INHERIT",
+      "motionPromptAI": "INHERIT",
+      "characterAnalysisAI": "GPT-5.5",
+      "intentRouterAI": "INHERIT",
+      "imageAI": "GPT Image",
+      "videoAI": "Seedance2 Mini",
+      "voiceAI": "Irodori",
+      "memoryEnabled": true
+    }
+  },
+  "n-02": {
+    "provider": "GPT-5.5",
+    "aiProfile": {
+      "brainAI": "GPT-5.5",
+      "conversationAI": "INHERIT",
+      "storyCardAI": "INHERIT",
+      "motionPromptAI": "INHERIT",
+      "characterAnalysisAI": "INHERIT",
+      "intentRouterAI": "INHERIT",
+      "imageAI": "GPT Image",
+      "videoAI": "Seedance2",
+      "voiceAI": "Irodori",
+      "memoryEnabled": true
+    }
+  },
+  "shiro": {
+    "provider": "GPT-5.5",
+    "aiProfile": {
+      "brainAI": "GPT-5.5",
+      "conversationAI": "INHERIT",
+      "storyCardAI": "INHERIT",
+      "motionPromptAI": "Gemini",
+      "characterAnalysisAI": "Gemini",
+      "intentRouterAI": "INHERIT",
+      "imageAI": "Seedream",
+      "videoAI": "Seedance2 Mini",
+      "voiceAI": "Irodori",
+      "memoryEnabled": true
+    }
+  }
+}

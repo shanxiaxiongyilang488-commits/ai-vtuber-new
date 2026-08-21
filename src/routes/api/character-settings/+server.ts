@@ -13,8 +13,10 @@ export const POST: RequestHandler = async ({ request }) => {
   try {
     const body = await request.json();
     const id = String(body?.id ?? '');
-    const provider = String(body?.provider ?? '');
-    const setting = saveCharacterSetting(id, provider);
+    // `provider` is the legacy Brain AI field. New clients may send brainAI
+    // inside aiProfile, while old clients continue to send provider only.
+    const provider = String(body?.provider ?? body?.aiProfile?.brainAI ?? '');
+    const setting = saveCharacterSetting(id, provider, body?.aiProfile);
     return json({ id: id.trim().toLowerCase(), setting });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

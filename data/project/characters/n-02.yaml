@@ -1,0 +1,13 @@
+version: 1
+unit_id: "S-22"
+source: "character_ref_vision"
+characters:
+  - id: "N-02"
+    hair_color: "black"
+    eye_color: "red"
+    ears: "black cat ears"
+    tail: "black cat tail with black bow"
+    android_parts: "visible mechanical joints and plating"
+    outfit: "black mechanical suit with skirt"
+    accessories: "none visible"
+    appearance: "appears as an android girl with long black hair in twin tails, red eyes, black mechanical body, black cat ears and tail, wearing a black mechanical suit with a skirt, black bow on the tail"

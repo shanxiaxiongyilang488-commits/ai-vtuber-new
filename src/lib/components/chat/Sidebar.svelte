@@ -13,6 +13,8 @@
     char2: Character;
     status?: StatusInfo;
     oncharacterclick?: (char: Character) => void;
+    activeCharacterName?: string;
+    oncharacterselect?: (char: Character) => void;
   }
 
   let {
@@ -20,6 +22,8 @@
     char2,
     status = { label: '待機中', mode: '対話型', turnCount: 0 },
     oncharacterclick,
+    activeCharacterName = char1.name,
+    oncharacterselect,
   }: Props = $props();
 </script>
 
@@ -62,6 +66,17 @@
 
   <!-- Divider -->
   <div class="panel-divider" aria-hidden="true"></div>
+
+  <div class="character-select" aria-label="解析を依頼するキャラクター">
+    <span>解析キャラクター</span>
+    <button class:active={activeCharacterName === char1.name} onclick={() => oncharacterselect?.(char1)}>{char1.name}</button>
+    <button class:active={activeCharacterName === char2.name} onclick={() => oncharacterselect?.(char2)}>{char2.name}</button>
+  </div>
+
+  <a class="video-analysis-link" href="/video-analysis">
+    🔎 Character Scanner
+    <small>MP4からキャラクター資料を抽出</small>
+  </a>
 
   <!-- Status Panel -->
   <div class="status-panel">
@@ -158,6 +173,27 @@
     background: linear-gradient(90deg, transparent, rgba(34, 211, 238, 0.2), transparent);
     margin: 0 -4px;
   }
+
+  .video-analysis-link {
+    display: block;
+    padding: 10px;
+    border: 1px solid rgba(34, 211, 238, 0.22);
+    border-radius: 8px;
+    color: #67e8f9;
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 14px;
+    font-weight: 700;
+    text-align: center;
+    text-decoration: none;
+    cursor: pointer;
+  }
+
+  .video-analysis-link:hover { background: rgba(34, 211, 238, 0.12); }
+  .video-analysis-link small { display: block; margin-top: 3px; color: #94a3b8; font-size: 10px; font-weight: 500; }
+  .character-select { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+  .character-select span { grid-column: 1 / -1; color: #64748b; font-size: 11px; text-align: center; }
+  .character-select button { border: 1px solid rgba(148, 163, 184, .25); border-radius: 5px; background: transparent; color: #94a3b8; cursor: pointer; font: inherit; font-size: 12px; padding: 5px; }
+  .character-select button.active { border-color: #22d3ee; color: #67e8f9; background: rgba(34, 211, 238, .1); }
 
   /* Status Panel */
   .status-panel {
