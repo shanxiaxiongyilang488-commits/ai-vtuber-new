@@ -17,7 +17,7 @@ IRODORI_ROOT = Path(os.getenv("IRODORI_ROOT", "/opt/Irodori-TTS")).resolve()
 CHECKPOINT_ENV = os.getenv("IRODORI_CHECKPOINT", "").strip()
 HF_CHECKPOINT = os.getenv(
     "IRODORI_HF_CHECKPOINT",
-    "Aratako/Irodori-TTS-v4-Small",
+    "Aratako/Irodori-TTS-v4.1-Small",
 ).strip()
 CODEC_REPO = os.getenv("IRODORI_CODEC_REPO", "Aratako/Semantic-DACVAE-Japanese-32dim")
 MAX_TEXT_CHARS = int(os.getenv("MAX_TEXT_CHARS", "1000"))
@@ -58,32 +58,72 @@ def _cached_checkpoint_path(model_id: str, cache_root: Any = None) -> str:
     parts = model_id.split("/")
     repo_id = "/".join(parts[:2])
     subfolder = parts[2] if len(parts) > 2 else ""
-    root = Path(
-        cache_root
-        or os.getenv("HUGGINGFACE_HUB_CACHE", "").strip()
-        or Path(os.getenv("HF_HOME", str(Path.home() / ".cache" / "huggingface"))) / "hub"
-    )
-    repo_root = root / f"models--{repo_id.replace('/', '--')}"
     relative = Path(subfolder) / "model.safetensors" if subfolder else Path("model.safetensors")
 
-    candidates: list[Path] = []
-    main_ref = repo_root / "refs" / "main"
-    if main_ref.is_file():
-        revision = main_ref.read_text(encoding="utf-8").strip()
-        if revision:
-            candidates.append(repo_root / "snapshots" / revision / relative)
-    snapshots = repo_root / "snapshots"
-    if snapshots.is_dir():
-        candidates.extend(
-            sorted(
-                snapshots.glob(f"*/{relative.as_posix()}"),
-                key=lambda path: path.stat().st_mtime,
-                reverse=True,
+    if cache_root is not None:
+        roots = [Path(cache_root)]
+    else:
+        configured_hub = os.getenv("HUGGINGFACE_HUB_CACHE", "").strip()
+        configured_home = os.getenv("HF_HOME", "").strip()
+        runpod_cache = os.getenv(
+            "RUNPOD_MODEL_CACHE_ROOT",
+            "/runpod-volume/huggingface-cache/hub",
+        ).strip()
+        roots = []
+        if configured_hub:
+            roots.append(Path(configured_hub))
+        if configured_home:
+            roots.append(Path(configured_home) / "hub")
+        # RunPod Serverless mounts Cached Models here. Keep this explicit so
+        # older images with a legacy HF_HOME value still find the cache.
+        if runpod_cache:
+            roots.append(Path(runpod_cache))
+        roots.append(Path.home() / ".cache" / "huggingface" / "hub")
+
+    expected_name = f"models--{repo_id.replace('/', '--')}"
+    seen_roots: set[str] = set()
+    for root in roots:
+        root_key = str(root.absolute()).casefold()
+        if root_key in seen_roots:
+            continue
+        seen_roots.add(root_key)
+
+        repo_root = root / expected_name
+        if not repo_root.is_dir() and root.is_dir():
+            # Some cache provisioning paths normalize repository IDs to lower
+            # case. Hugging Face IDs are case-sensitive, but the cache folder
+            # itself can still be matched safely without changing the ID sent
+            # to Hugging Face on fallback.
+            repo_root = next(
+                (
+                    candidate
+                    for candidate in root.glob("models--*")
+                    if candidate.name.casefold() == expected_name.casefold()
+                ),
+                repo_root,
             )
-        )
-    for candidate in candidates:
-        if candidate.is_file():
-            return str(candidate.resolve())
+
+        candidates: list[Path] = []
+        main_ref = repo_root / "refs" / "main"
+        if main_ref.is_file():
+            revision = main_ref.read_text(encoding="utf-8").strip()
+            if revision:
+                candidates.append(repo_root / "snapshots" / revision / relative)
+        snapshots = repo_root / "snapshots"
+        if snapshots.is_dir():
+            candidates.extend(
+                sorted(
+                    snapshots.glob(f"*/{relative.as_posix()}"),
+                    key=lambda path: path.stat().st_mtime,
+                    reverse=True,
+                )
+            )
+        for candidate in candidates:
+            if candidate.is_file():
+                # Keep the snapshot filename (for example model.safetensors).
+                # Resolving the Hugging Face symlink returns an extensionless
+                # blob hash, which Irodori would treat as a torch pickle.
+                return str(candidate.absolute())
     return ""
 
 
@@ -99,6 +139,10 @@ def _checkpoint_path(download_hf_checkpoint: Any, model_id: str) -> str:
     if cached:
         print(f"Using cached Irodori checkpoint: {cached}", flush=True)
         return cached
+    print(
+        f"Irodori Model Cache miss for {model_id}; downloading from Hugging Face.",
+        flush=True,
+    )
     return str(download_hf_checkpoint(model_id))
 
 
