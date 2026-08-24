@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 MODEL_REPO = "Comfy-Org/MiniMax-H3"
-MUSIC3_REPO = "MiniMaxAI/MiniMax-Music3"
+MUSIC3_REPO = "Comfy-Org/MiniMax-Music-3"
 COMMON_FILES = (
     "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
     "vae/minimax_h3_video_vae_fp16.safetensors",
@@ -17,12 +17,14 @@ MODE_FILES = {
     "fl2va": "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
     "ref2va": "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
 }
-MUSIC3_FILES = (
-    "diffusion_models/minimax_music3_dit_fp16.safetensors",
-    "diffusion_models/minimax_music3_dit_int8_convrot.safetensors",
+MUSIC3_COMMON_FILES = (
     "text_encoders/minimax_music3_text_encoder_pruned_int8_convrot.safetensors",
     "vae/minimax_music3_dav.safetensors",
 )
+MUSIC3_VARIANTS = {
+    "int8": "diffusion_models/minimax_music3_dit_int8_convrot.safetensors",
+    "fp16": "diffusion_models/minimax_music3_dit_fp16.safetensors",
+}
 
 
 def _model_root() -> Path:
@@ -71,24 +73,36 @@ def prepare_models(include_ref2va: bool = True) -> dict[str, object]:
     }
 
 
-def music3_model_status() -> dict[str, object]:
+def _music3_variant(value: str | None) -> str:
+    variant = (value or "int8").strip().lower()
+    if variant not in MUSIC3_VARIANTS:
+        raise ValueError(f"Unsupported MiniMax Music 3 variant: {variant!r}")
+    return variant
+
+
+def music3_model_status(variant: str = "int8") -> dict[str, object]:
+    variant = _music3_variant(variant)
     root = _model_root()
-    files = _file_status(root, MUSIC3_FILES)
+    required = (MUSIC3_VARIANTS[variant], *MUSIC3_COMMON_FILES)
+    files = _file_status(root, required)
     return {
         "ready": all(bool(item["exists"]) and int(item["bytes"]) > 0 for item in files),
         "model": "MiniMax-Music3",
+        "variant": variant,
         "repo": MUSIC3_REPO,
         "root": str(root),
         "files": files,
     }
 
 
-def prepare_music3_models() -> dict[str, object]:
+def prepare_music3_models(variant: str = "int8") -> dict[str, object]:
     from huggingface_hub import hf_hub_download
 
+    variant = _music3_variant(variant)
     root = _model_root()
     downloaded: list[str] = []
-    for relative in MUSIC3_FILES:
+    files = (MUSIC3_VARIANTS[variant], *MUSIC3_COMMON_FILES)
+    for relative in files:
         destination = root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         if destination.is_file() and destination.stat().st_size > 0:
@@ -104,6 +118,7 @@ def prepare_music3_models() -> dict[str, object]:
     return {
         "ready": True,
         "model": "MiniMax-Music3",
+        "variant": variant,
         "repo": MUSIC3_REPO,
         "root": str(root),
         "files": downloaded,
@@ -116,9 +131,11 @@ if __name__ == "__main__":
 
     target = sys.argv[1].strip().lower() if len(sys.argv) > 1 else "h3"
     if target in {"music", "music3", "minimax-music3"}:
-        result = prepare_music3_models()
+        variant = sys.argv[2] if len(sys.argv) > 2 else "int8"
+        result = prepare_music3_models(variant)
     elif target in {"music-status", "music3-status"}:
-        result = music3_model_status()
+        variant = sys.argv[2] if len(sys.argv) > 2 else "int8"
+        result = music3_model_status(variant)
     else:
         result = prepare_models()
     print(json.dumps(result, ensure_ascii=False, indent=2))

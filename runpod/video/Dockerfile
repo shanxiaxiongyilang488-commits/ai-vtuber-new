@@ -1,15 +1,15 @@
 FROM pytorch/pytorch:2.9.1-cuda13.0-cudnn9-runtime
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG COMFYUI_REF=v0.27.0
+ARG COMFYUI_REF=v0.33.0
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git ffmpeg libgl1 libglib2.0-0 ca-certificates build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Use the first stable ComfyUI release after MiniMax H3 support instead of the
-# initial feature commit. v0.27.0 pins comfy-kitchen 0.2.16, whose CUDA backend
-# requires a CUDA 13 runtime. Models stay outside the image on a Network Volume.
+# MiniMax Music 3 is a native comfy-core node starting at 0.31.0. Pin a newer
+# stable release so the same worker can execute both H3 video and Music 3 while
+# retaining a reproducible CUDA 13 runtime. Models stay on a Network Volume.
 RUN git clone --filter=blob:none https://github.com/Comfy-Org/ComfyUI.git /opt/ComfyUI \
     && cd /opt/ComfyUI \
     && git checkout "${COMFYUI_REF}" \

@@ -14,7 +14,23 @@ class VideoWorkerValidationTests(unittest.TestCase):
     def test_docker_runtime_matches_h3_int8_backend(self):
         dockerfile = Path(__file__).with_name("Dockerfile").read_text("utf-8")
         self.assertIn("pytorch/pytorch:2.9.1-cuda13.0-cudnn9-runtime", dockerfile)
-        self.assertIn("ARG COMFYUI_REF=v0.27.0", dockerfile)
+        self.assertIn("ARG COMFYUI_REF=v0.33.0", dockerfile)
+
+    def test_builds_native_minimax_music3_workflow(self):
+        graph = MODULE._music_workflow(
+            {
+                "caption": "cinematic science-fiction ambient",
+                "lyrics": "[Instrumental]",
+                "duration": 30,
+                "seed": 42,
+            },
+            "audio/test",
+        )
+        self.assertEqual(graph["4"]["class_type"], "MiniMaxMusic3TextEncode")
+        self.assertEqual(graph["5"]["class_type"], "ConditioningZeroOut")
+        self.assertEqual(graph["6"]["class_type"], "EmptyMiniMaxMusic3LatentAudio")
+        self.assertEqual(graph["10"]["class_type"], "SaveAudioMP3")
+        self.assertEqual(graph["1"]["inputs"]["unet_name"], "minimax_music3_dit_int8_convrot.safetensors")
 
     def test_duration_snaps_to_h3_grid(self):
         self.assertEqual(MODULE.duration_to_frames(5), 124)
