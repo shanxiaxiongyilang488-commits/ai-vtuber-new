@@ -26,12 +26,19 @@ MAX_IMAGE_BYTES = 12 * 1024 * 1024
 # RunPod /runsync responses are capped at 20 MB. Base64 and JSON add roughly
 # 35% overhead, so keep the raw file below 13 MB when object storage is absent.
 MAX_INLINE_VIDEO_BYTES = int(os.getenv("MAX_INLINE_VIDEO_BYTES", str(13 * 1024 * 1024)))
+MAX_INLINE_AUDIO_BYTES = int(os.getenv("MAX_INLINE_AUDIO_BYTES", str(13 * 1024 * 1024)))
 MODEL_NAMES = {
     "fl2va": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
     "ref2va": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
     "clip": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
     "video_vae": "minimax_h3_video_vae_fp16.safetensors",
     "audio_vae": "minimax_h3_audio_vae_fp32.safetensors",
+}
+MUSIC3_MODEL_NAMES = {
+    "int8": "minimax_music3_dit_int8_convrot.safetensors",
+    "fp16": "minimax_music3_dit_fp16.safetensors",
+    "clip": "minimax_music3_text_encoder_pruned_int8_convrot.safetensors",
+    "vae": "minimax_music3_dav.safetensors",
 }
 
 _comfy_process: subprocess.Popen[Any] | None = None
@@ -126,6 +133,27 @@ def _validate_model_files(mode: str) -> None:
         raise FileNotFoundError(
             "MiniMax H3 is not prepared on the Network Volume. Run task=video.prepare first. Missing: "
             + ", ".join(missing)
+        )
+
+
+def _music3_variant(value: Any) -> str:
+    variant = str(value or "int8").strip().lower()
+    if variant not in {"int8", "fp16"}:
+        raise ValueError("MiniMax Music 3 variant must be 'int8' or 'fp16'.")
+    return variant
+
+
+def _validate_music3_model_files(variant: str) -> None:
+    required = [
+        _model_path("diffusion_models", MUSIC3_MODEL_NAMES[variant]),
+        _model_path("text_encoders", MUSIC3_MODEL_NAMES["clip"]),
+        _model_path("vae", MUSIC3_MODEL_NAMES["vae"]),
+    ]
+    missing = [str(path) for path in required if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(
+            "MiniMax Music 3 is not prepared on the Network Volume. "
+            "Run task=music.prepare first. Missing: " + ", ".join(missing)
         )
 
 
@@ -275,6 +303,64 @@ def _workflow(data: dict[str, Any], uploaded: list[str], prefix: str) -> dict[st
     return graph
 
 
+def _music_workflow(data: dict[str, Any], prefix: str) -> dict[str, Any]:
+    variant = _music3_variant(data.get("variant"))
+    duration = min(300.0, max(1.0, float(data.get("duration") or data.get("maxDuration") or 60)))
+    seed = int(data.get("seed") if data.get("seed") is not None else 1)
+    decode_node = "VAEDecodeAudioTiled" if data.get("tiledDecode", True) else "VAEDecodeAudio"
+    decode_inputs: dict[str, Any] = {"samples": ["7", 0], "vae": ["3", 0]}
+    if decode_node == "VAEDecodeAudioTiled":
+        decode_inputs.update({"tile_size": 512, "overlap": 64})
+    return {
+        "1": {
+            "class_type": "UNETLoader",
+            "inputs": {"unet_name": MUSIC3_MODEL_NAMES[variant], "weight_dtype": "default"},
+        },
+        "2": {
+            "class_type": "CLIPLoader",
+            "inputs": {"clip_name": MUSIC3_MODEL_NAMES["clip"], "type": "minimax", "device": "default"},
+        },
+        "3": {"class_type": "VAELoader", "inputs": {"vae_name": MUSIC3_MODEL_NAMES["vae"]}},
+        "4": {
+            "class_type": "MiniMaxMusic3TextEncode",
+            "inputs": {
+                "clip": ["2", 0],
+                "caption": str(data.get("caption") or ""),
+                "lyrics": str(data.get("lyrics") or ""),
+                "seed": seed,
+                "max_duration": duration,
+                "cfg_scale": float(data.get("captionCfg") or 1.7),
+                "top_k": int(data.get("topK") or 50),
+            },
+        },
+        "5": {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["4", 0]}},
+        "6": {
+            "class_type": "EmptyMiniMaxMusic3LatentAudio",
+            "inputs": {"seconds": ["4", 1], "batch_size": 1},
+        },
+        "7": {
+            "class_type": "KSampler",
+            "inputs": {
+                "model": ["1", 0],
+                "positive": ["4", 0],
+                "negative": ["5", 0],
+                "latent_image": ["6", 0],
+                "seed": seed,
+                "steps": min(100, max(1, int(data.get("steps") or 30))),
+                "cfg": float(data.get("cfg") or 1.7),
+                "sampler_name": "euler",
+                "scheduler": "simple",
+                "denoise": 1.0,
+            },
+        },
+        "8": {"class_type": decode_node, "inputs": decode_inputs},
+        "10": {
+            "class_type": "SaveAudioMP3",
+            "inputs": {"audio": ["8", 0], "filename_prefix": prefix, "quality": "V0"},
+        },
+    }
+
+
 def _wait_for_output(prompt_id: str, prefix: str) -> Path:
     timeout = int(os.getenv("VIDEO_TIMEOUT_SECONDS", "10800"))
     deadline = time.monotonic() + timeout
@@ -306,6 +392,36 @@ def _wait_for_output(prompt_id: str, prefix: str) -> Path:
     raise TimeoutError(f"MiniMax H3 did not finish within {timeout} seconds.")
 
 
+def _wait_for_audio_output(prompt_id: str, prefix: str) -> Path:
+    timeout = int(os.getenv("MUSIC_TIMEOUT_SECONDS", os.getenv("VIDEO_TIMEOUT_SECONDS", "10800")))
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        history = _json_request(f"/history/{prompt_id}", timeout=30)
+        item = history.get(prompt_id)
+        if item:
+            status = item.get("status") or {}
+            if status.get("status_str") == "error":
+                error_detail = _format_comfy_error(status.get("messages") or [])
+                runtime = json.dumps(_runtime_diagnostics(), ensure_ascii=False)
+                print(f"[Music 3 execution error] {error_detail}", flush=True)
+                raise RuntimeError(
+                    f"ComfyUI MiniMax Music 3 generation failed: {error_detail}; runtime={runtime}"
+                )
+            basename = prefix.split("/")[-1]
+            candidates = sorted(
+                (
+                    path for path in COMFY_OUTPUT.rglob(f"{basename}*")
+                    if path.suffix.lower() in {".mp3", ".flac", ".wav", ".ogg", ".opus"}
+                ),
+                key=lambda path: path.stat().st_mtime,
+                reverse=True,
+            )
+            if candidates:
+                return candidates[0]
+        time.sleep(5)
+    raise TimeoutError(f"MiniMax Music 3 did not finish within {timeout} seconds.")
+
+
 def _upload_or_inline(source: Path) -> dict[str, Any]:
     bucket = os.getenv("S3_BUCKET", "").strip()
     if bucket:
@@ -329,6 +445,42 @@ def _upload_or_inline(source: Path) -> dict[str, Any]:
     return {
         "video_base64": base64.b64encode(source.read_bytes()).decode("ascii"),
         "storage": "inline", "size_bytes": source.stat().st_size,
+    }
+
+
+def _upload_or_inline_audio(source: Path) -> dict[str, Any]:
+    content_type = mimetypes.guess_type(source.name)[0] or "audio/mpeg"
+    bucket = os.getenv("S3_BUCKET", "").strip()
+    if bucket:
+        import boto3
+
+        key = f"{os.getenv('S3_PREFIX', 'ai-vtuber').strip('/')}/{uuid.uuid4()}{source.suffix}"
+        client = boto3.client(
+            "s3", endpoint_url=os.getenv("S3_ENDPOINT_URL") or None,
+            aws_access_key_id=os.getenv("S3_ACCESS_KEY_ID") or None,
+            aws_secret_access_key=os.getenv("S3_SECRET_ACCESS_KEY") or None,
+            region_name=os.getenv("S3_REGION") or None,
+        )
+        client.upload_file(str(source), bucket, key, ExtraArgs={"ContentType": content_type})
+        public_base = os.getenv("S3_PUBLIC_BASE_URL", "").rstrip("/")
+        url = f"{public_base}/{key}" if public_base else client.generate_presigned_url(
+            "get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=86400
+        )
+        return {
+            "audio_url": url,
+            "storage": "s3",
+            "size_bytes": source.stat().st_size,
+            "content_type": content_type,
+        }
+    if source.stat().st_size > MAX_INLINE_AUDIO_BYTES:
+        raise RuntimeError(
+            "Generated audio exceeds the safe 13 MB inline limit. Configure S3_BUCKET for RunPod audio output."
+        )
+    return {
+        "audio_base64": base64.b64encode(source.read_bytes()).decode("ascii"),
+        "storage": "inline",
+        "size_bytes": source.stat().st_size,
+        "content_type": content_type,
     }
 
 
@@ -360,6 +512,35 @@ def generate(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def generate_music(data: dict[str, Any]) -> dict[str, Any]:
+    caption = str(data.get("caption") or "").strip()
+    lyrics = str(data.get("lyrics") or "").strip()
+    if not caption:
+        raise ValueError("caption is required.")
+    if len(caption) > 16000:
+        raise ValueError("caption exceeds 16000 characters.")
+    if len(lyrics) > 32000:
+        raise ValueError("lyrics exceeds 32000 characters.")
+    variant = _music3_variant(data.get("variant"))
+    _validate_music3_model_files(variant)
+    _ensure_comfy()
+    duration = min(300.0, max(1.0, float(data.get("duration") or data.get("maxDuration") or 60)))
+    prefix = f"audio/minimax-music3-{uuid.uuid4()}"
+    queued = _json_request("/prompt", {"prompt": _music_workflow(data, prefix)}, timeout=120)
+    prompt_id = str(queued.get("prompt_id") or "")
+    if not prompt_id:
+        raise RuntimeError(f"ComfyUI rejected the MiniMax Music 3 workflow: {queued}")
+    output = _wait_for_audio_output(prompt_id, prefix)
+    return {
+        **_upload_or_inline_audio(output),
+        "model": "MiniMax-Music3",
+        "variant": variant,
+        "prompt_id": prompt_id,
+        "duration": duration,
+        "filename": output.name,
+    }
+
+
 def handler(job: dict[str, Any]) -> dict[str, Any]:
     data = job.get("input")
     if not isinstance(data, dict):
@@ -380,6 +561,24 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
         }
     if task == "video.diagnostics":
         return {"ready": True, "runtime": _runtime_diagnostics()}
+    if task == "music.generate":
+        return generate_music(data)
+    if task == "music.prepare":
+        from prepare_models import prepare_music3_models
+        return prepare_music3_models(_music3_variant(data.get("variant")))
+    if task == "music.status":
+        from prepare_models import music3_model_status
+        return music3_model_status(_music3_variant(data.get("variant")))
+    if task == "music.warmup":
+        variant = _music3_variant(data.get("variant"))
+        _validate_music3_model_files(variant)
+        _ensure_comfy()
+        return {
+            "ready": True,
+            "model": "MiniMax-Music3",
+            "variant": variant,
+            "runtime": _runtime_diagnostics(),
+        }
     raise ValueError(f"Unsupported task: {task!r}")
 
 
