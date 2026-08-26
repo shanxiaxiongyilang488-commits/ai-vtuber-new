@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import base64
+import audioop
 import gc
 import os
 import re
 import sys
 import tempfile
 import threading
+import wave
+from array import array
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +30,129 @@ _runtime: Any = None
 _runtime_model_id = ""
 _runtime_lock = threading.Lock()
 _synthesis_lock = threading.Lock()
+
+
+def _clean_wav_tail(path: str, text: str = "") -> dict[str, float | int | bool]:
+    """Trim low-energy/model-hallucinated tails and end at zero amplitude.
+
+    Irodori's latent ``trim_tail`` removes unused generation frames, but a
+    decoded waveform can still finish with a short hiss/buzz or a discontinuous
+    sample.  Work on the final PCM WAV so this also covers codec decode residue.
+    The scan is deliberately limited to the utterance tail to avoid treating a
+    dramatic pause in the middle of a long line as the end.
+    """
+    try:
+        with wave.open(path, "rb") as reader:
+            params = reader.getparams()
+            sample_rate = reader.getframerate()
+            sample_width = reader.getsampwidth()
+            channels = reader.getnchannels()
+            total_frames = reader.getnframes()
+            pcm = reader.readframes(total_frames)
+    except (OSError, EOFError, wave.Error):
+        return {"changed": False, "frames": 0, "sample_rate": 0, "duration": 0.0}
+
+    if sample_width != 2 or sample_rate <= 0 or channels <= 0 or total_frames <= 0:
+        return {
+            "changed": False,
+            "frames": total_frames,
+            "sample_rate": sample_rate,
+            "duration": float(total_frames) / float(sample_rate) if sample_rate > 0 else 0.0,
+        }
+
+    frame_bytes = sample_width * channels
+    chunk_frames = max(1, int(sample_rate * 0.02))
+    chunks: list[tuple[int, int, int]] = []
+    frame = 0
+    while frame < total_frames:
+        end = min(total_frames, frame + chunk_frames)
+        chunk = pcm[frame * frame_bytes:end * frame_bytes]
+        chunks.append((frame, end, audioop.rms(chunk, sample_width)))
+        frame = end
+
+    peak_rms = max((chunk[2] for chunk in chunks), default=0)
+    # Relative threshold follows each generated voice's level while the floor
+    # catches the faint DAC/codec fizz commonly heard after the final phoneme.
+    quiet_threshold = max(180, min(1200, int(peak_rms * 0.055)))
+    spoken_chars = len(re.sub(r"[\s、。！？!?…,.;；:：]", "", text))
+    if spoken_chars >= 80:
+        scan_ratio = 0.88
+    elif spoken_chars >= 32:
+        scan_ratio = 0.82
+    elif spoken_chars >= 14:
+        scan_ratio = 0.72
+    else:
+        scan_ratio = 0.58
+    scan_start = int(total_frames * scan_ratio)
+
+    keep_frames = total_frames
+    minimum_gap = int(sample_rate * 0.26)
+    quiet_start: int | None = None
+    for index, (start, end, rms) in enumerate(chunks):
+        if start < scan_start:
+            continue
+        if rms <= quiet_threshold:
+            quiet_start = start if quiet_start is None else quiet_start
+            continue
+        if quiet_start is not None and start - quiet_start >= minimum_gap:
+            # Sound after a terminal-length pause is normally a codec burst or
+            # hallucinated tail. Keep a tiny natural release, not that burst.
+            keep_frames = min(keep_frames, quiet_start + int(sample_rate * 0.055))
+            break
+        quiet_start = None
+
+    if keep_frames == total_frames:
+        active_chunks = [chunk for chunk in chunks if chunk[0] >= scan_start and chunk[2] > quiet_threshold]
+        if active_chunks:
+            last_active_end = active_chunks[-1][1]
+            trailing_frames = total_frames - last_active_end
+            if trailing_frames >= int(sample_rate * 0.09):
+                keep_frames = min(total_frames, last_active_end + int(sample_rate * 0.055))
+        elif quiet_start is not None:
+            keep_frames = min(total_frames, quiet_start + int(sample_rate * 0.055))
+
+    # Never let conservative tail cleanup discard a substantial valid line.
+    keep_frames = max(int(total_frames * 0.55), min(total_frames, keep_frames))
+    samples = array("h")
+    samples.frombytes(pcm[:keep_frames * frame_bytes])
+    if sys.byteorder == "big":
+        samples.byteswap()
+
+    fade_frames = min(keep_frames, max(1, int(sample_rate * 0.045)))
+    fade_start = keep_frames - fade_frames
+    for frame_index in range(fade_start, keep_frames):
+        gain = max(0.0, float(keep_frames - frame_index - 1) / float(fade_frames))
+        sample_index = frame_index * channels
+        for channel in range(channels):
+            samples[sample_index + channel] = int(samples[sample_index + channel] * gain)
+    if sys.byteorder == "big":
+        samples.byteswap()
+
+    # A short true-zero pad prevents the audio element from stopping on a
+    # non-zero decoder frame even when the browser resamples the WAV.
+    zero_frames = max(1, int(sample_rate * 0.012))
+    cleaned_pcm = samples.tobytes() + (b"\x00" * zero_frames * frame_bytes)
+    cleaned_frames = keep_frames + zero_frames
+    temporary = f"{path}.tail-clean.tmp.wav"
+    try:
+        with wave.open(temporary, "wb") as writer:
+            writer.setparams(params)
+            writer.writeframes(cleaned_pcm)
+        os.replace(temporary, path)
+    finally:
+        try:
+            Path(temporary).unlink()
+        except OSError:
+            pass
+
+    changed = keep_frames < total_frames or fade_frames > 0
+    return {
+        "changed": changed,
+        "frames": cleaned_frames,
+        "sample_rate": sample_rate,
+        "duration": float(cleaned_frames) / float(sample_rate),
+        "trimmed_seconds": max(0.0, float(total_frames - keep_frames) / float(sample_rate)),
+    }
 
 
 def _irodori_api() -> tuple[Any, Any, Any, Any, Any]:
@@ -271,8 +397,14 @@ def synthesize(data: dict[str, Any]) -> dict[str, Any]:
             )
         )
         save_wav(output_path, result.audio, result.sample_rate)
+        tail_cleanup = _clean_wav_tail(output_path, text)
         wav = Path(output_path).read_bytes()
-        duration = float(result.audio.shape[-1]) / float(result.sample_rate)
+        duration = float(tail_cleanup.get("duration") or 0.0)
+        if duration <= 0:
+            duration = float(result.audio.shape[-1]) / float(result.sample_rate)
+        trimmed_seconds = float(tail_cleanup.get("trimmed_seconds") or 0.0)
+        if trimmed_seconds > 0.001:
+            print(f"Irodori tail cleanup trimmed {trimmed_seconds:.3f}s", flush=True)
         pitch = float(voice.get("pitchShiftSemitones") or 0.0)
         return {
             "audio_base64": base64.b64encode(wav).decode("ascii"),

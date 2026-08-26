@@ -1,8 +1,11 @@
 import base64
 import importlib.util
+import math
 import os
 import tempfile
 import unittest
+import wave
+from array import array
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,6 +17,14 @@ SPEC.loader.exec_module(MODULE)
 
 
 class VoiceWorkerValidationTests(unittest.TestCase):
+    def _write_pcm16(self, path: Path, samples: list[int], sample_rate: int = 16000):
+        pcm = array("h", samples)
+        with wave.open(str(path), "wb") as writer:
+            writer.setnchannels(1)
+            writer.setsampwidth(2)
+            writer.setframerate(sample_rate)
+            writer.writeframes(pcm.tobytes())
+
     def test_rejects_non_wav_reference(self):
         with self.assertRaisesRegex(ValueError, "WAV"):
             MODULE._decode_reference(base64.b64encode(b"not-wave").decode("ascii"))
@@ -120,6 +131,34 @@ class VoiceWorkerValidationTests(unittest.TestCase):
                 cache,
             )
             self.assertTrue(Path(resolved).samefile(checkpoint))
+
+    def test_tail_cleanup_removes_sound_after_terminal_pause(self):
+        sample_rate = 16000
+        speech = [int(6000 * math.sin(2 * math.pi * 220 * index / sample_rate)) for index in range(sample_rate)]
+        silence = [0] * int(sample_rate * 0.30)
+        artifact = [int(3500 * math.sin(2 * math.pi * 70 * index / sample_rate)) for index in range(int(sample_rate * 0.20))]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "tail.wav"
+            self._write_pcm16(path, speech + silence + artifact, sample_rate)
+            result = MODULE._clean_wav_tail(str(path), "短い発話です。")
+            self.assertTrue(result["changed"])
+            self.assertGreater(result["trimmed_seconds"], 0.35)
+            with wave.open(str(path), "rb") as reader:
+                self.assertLess(reader.getnframes() / sample_rate, 1.15)
+
+    def test_tail_cleanup_fades_abrupt_last_sample_to_zero(self):
+        sample_rate = 16000
+        samples = [4000] * int(sample_rate * 0.5)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "click.wav"
+            self._write_pcm16(path, samples, sample_rate)
+            MODULE._clean_wav_tail(str(path), "確認します。")
+            with wave.open(str(path), "rb") as reader:
+                reader.setpos(reader.getnframes() - int(sample_rate * 0.01))
+                tail = array("h")
+                tail.frombytes(reader.readframes(int(sample_rate * 0.01)))
+            self.assertTrue(tail)
+            self.assertEqual(max(abs(sample) for sample in tail), 0)
 
 
 if __name__ == "__main__":
