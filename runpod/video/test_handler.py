@@ -61,6 +61,37 @@ class VideoWorkerValidationTests(unittest.TestCase):
         self.assertEqual(graph["10"]["class_type"], "MiniMaxH3ReferenceToVideo")
         self.assertIn("ref_images.ref_image_1", graph["10"]["inputs"])
 
+    def test_builds_anima_img2img_pose_workflow(self):
+        graph = MODULE._anima_pose_workflow(
+            {
+                "prompt": "same character waving one hand",
+                "negative": "different character, extra fingers",
+                "seed": 42,
+                "denoise": 0.61,
+            },
+            "pose-reference.png",
+            "image/test-pose",
+        )
+        self.assertEqual(graph["4"]["class_type"], "LoadImage")
+        self.assertEqual(graph["4"]["inputs"]["image"], "pose-reference.png")
+        self.assertEqual(graph["5"]["class_type"], "VAEEncode")
+        self.assertEqual(graph["8"]["inputs"]["latent_image"], ["5", 0])
+        self.assertEqual(graph["8"]["inputs"]["denoise"], 0.61)
+        self.assertEqual(graph["10"]["class_type"], "SaveImage")
+
+    def test_pose_requires_reference_before_accessing_gpu(self):
+        with self.assertRaisesRegex(ValueError, "imageUrl or imageDataUrl is required"):
+            MODULE.generate_anima_pose({"prompt": "wave"})
+
+    def test_routes_image_pose_task(self):
+        original = MODULE.generate_anima_pose
+        try:
+            MODULE.generate_anima_pose = lambda data: {"task": data["task"], "ok": True}
+            result = MODULE.handler({"input": {"task": "image.pose"}})
+        finally:
+            MODULE.generate_anima_pose = original
+        self.assertEqual(result, {"task": "image.pose", "ok": True})
+
     def test_rejects_unknown_task_without_gpu(self):
         with self.assertRaisesRegex(ValueError, "Unsupported task"):
             MODULE.handler({"input": {"task": "unknown"}})

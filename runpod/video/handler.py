@@ -40,6 +40,11 @@ MUSIC3_MODEL_NAMES = {
     "clip": "minimax_music3_text_encoder_pruned_int8_convrot.safetensors",
     "vae": "minimax_music3_dav.safetensors",
 }
+ANIMA_MODEL_NAMES = {
+    "unet": "anima-base-v1.0.safetensors",
+    "clip": "qwen_3_06b_base.safetensors",
+    "vae": "qwen_image_vae.safetensors",
+}
 
 _comfy_process: subprocess.Popen[Any] | None = None
 _comfy_lock = threading.Lock()
@@ -154,6 +159,19 @@ def _validate_music3_model_files(variant: str) -> None:
         raise FileNotFoundError(
             "MiniMax Music 3 is not prepared on the Network Volume. "
             "Run task=music.prepare first. Missing: " + ", ".join(missing)
+        )
+
+
+def _validate_anima_model_files() -> None:
+    required = [
+        _model_path("diffusion_models", ANIMA_MODEL_NAMES["unet"]),
+        _model_path("text_encoders", ANIMA_MODEL_NAMES["clip"]),
+        _model_path("vae", ANIMA_MODEL_NAMES["vae"]),
+    ]
+    missing = [str(path) for path in required if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(
+            "Anima is not prepared on the Network Volume. Missing: " + ", ".join(missing)
         )
 
 
@@ -512,6 +530,100 @@ def generate(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _anima_pose_workflow(data: dict[str, Any], uploaded: str, prefix: str) -> dict[str, Any]:
+    seed = int(data.get("seed") if data.get("seed") is not None else uuid.uuid4().int % (2**63 - 1))
+    steps = min(50, max(20, int(data.get("steps") or 32)))
+    cfg = min(6.0, max(3.0, float(data.get("cfg") or 4.5)))
+    denoise = min(0.78, max(0.35, float(data.get("denoise") or 0.58)))
+    negative = str(data.get("negative") or "").strip()
+    return {
+        "1": {"class_type": "UNETLoader", "inputs": {
+            "unet_name": ANIMA_MODEL_NAMES["unet"], "weight_dtype": "default",
+        }},
+        "2": {"class_type": "CLIPLoader", "inputs": {
+            "clip_name": ANIMA_MODEL_NAMES["clip"], "type": "stable_diffusion", "device": "default",
+        }},
+        "3": {"class_type": "VAELoader", "inputs": {"vae_name": ANIMA_MODEL_NAMES["vae"]}},
+        "4": {"class_type": "LoadImage", "inputs": {"image": uploaded}},
+        "5": {"class_type": "VAEEncode", "inputs": {"pixels": ["4", 0], "vae": ["3", 0]}},
+        "6": {"class_type": "CLIPTextEncode", "inputs": {
+            "text": str(data["prompt"]), "clip": ["2", 0],
+        }},
+        "7": {"class_type": "CLIPTextEncode", "inputs": {
+            "text": negative, "clip": ["2", 0],
+        }},
+        "8": {"class_type": "KSampler", "inputs": {
+            "model": ["1", 0], "positive": ["6", 0], "negative": ["7", 0],
+            "latent_image": ["5", 0], "seed": seed, "steps": steps, "cfg": cfg,
+            "sampler_name": "euler", "scheduler": "simple", "denoise": denoise,
+        }},
+        "9": {"class_type": "VAEDecode", "inputs": {"samples": ["8", 0], "vae": ["3", 0]}},
+        "10": {"class_type": "SaveImage", "inputs": {
+            "images": ["9", 0], "filename_prefix": prefix,
+        }},
+    }
+
+
+def _wait_for_image_output(prompt_id: str, prefix: str) -> Path:
+    timeout = int(os.getenv("IMAGE_TIMEOUT_SECONDS", "1800"))
+    deadline = time.monotonic() + timeout
+    basename = prefix.split("/")[-1]
+    while time.monotonic() < deadline:
+        history = _json_request(f"/history/{prompt_id}", timeout=30)
+        item = history.get(prompt_id)
+        if item:
+            status = item.get("status") or {}
+            if status.get("status_str") == "error":
+                error_detail = _format_comfy_error(status.get("messages") or [])
+                raise RuntimeError(f"ComfyUI Anima pose generation failed: {error_detail}")
+            candidates = sorted(
+                (
+                    path for path in COMFY_OUTPUT.rglob(f"{basename}*")
+                    if path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
+                ),
+                key=lambda path: path.stat().st_mtime,
+                reverse=True,
+            )
+            if candidates:
+                return candidates[0]
+        time.sleep(2)
+    raise TimeoutError(f"Anima pose generation did not finish within {timeout} seconds.")
+
+
+def generate_anima_pose(data: dict[str, Any]) -> dict[str, Any]:
+    prompt = str(data.get("prompt") or "").strip()
+    if not prompt:
+        raise ValueError("prompt is required.")
+    if len(prompt) > 12000:
+        raise ValueError("prompt exceeds 12000 characters.")
+    image_value = str(data.get("imageUrl") or data.get("imageDataUrl") or "").strip()
+    if not image_value:
+        raise ValueError("imageUrl or imageDataUrl is required for image.pose.")
+    _validate_anima_model_files()
+    _ensure_comfy()
+    uploaded = _upload_image(image_value, 0)
+    prefix = f"image/live2d-pose-{uuid.uuid4()}"
+    graph = _anima_pose_workflow(data, uploaded, prefix)
+    queued = _json_request("/prompt", {"prompt": graph}, timeout=120)
+    prompt_id = str(queued.get("prompt_id") or "")
+    if not prompt_id:
+        raise RuntimeError(f"ComfyUI rejected the Anima pose workflow: {queued}")
+    output = _wait_for_image_output(prompt_id, prefix)
+    mime = (
+        "image/jpeg" if output.suffix.lower() in {".jpg", ".jpeg"}
+        else "image/webp" if output.suffix.lower() == ".webp"
+        else "image/png"
+    )
+    return {
+        "image_base64": base64.b64encode(output.read_bytes()).decode("ascii"),
+        "mime_type": mime,
+        "model": "Anima Base v1.0",
+        "task": "image.pose",
+        "prompt_id": prompt_id,
+        "filename": output.name,
+    }
+
+
 def generate_music(data: dict[str, Any]) -> dict[str, Any]:
     caption = str(data.get("caption") or "").strip()
     lyrics = str(data.get("lyrics") or "").strip()
@@ -546,6 +658,14 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError("job.input must be an object.")
     task = data.get("task")
+    if task == "image.pose":
+        return generate_anima_pose(data)
+    if task == "image.prepare":
+        from prepare_models import prepare_anima_models
+        return prepare_anima_models()
+    if task == "image.status":
+        from prepare_models import anima_model_status
+        return anima_model_status()
     if task == "video.generate":
         return generate(data)
     if task == "video.prepare":
