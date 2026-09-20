@@ -382,7 +382,7 @@ def synthesize(data: dict[str, Any]) -> dict[str, Any]:
                 duration_scale=1.0 / speed,
                 min_seconds=0.5,
                 max_seconds=30.0,
-                num_steps=int(os.environ["IRODORI_NUM_STEPS"]) if os.getenv("IRODORI_NUM_STEPS", "").strip() else None,
+                num_steps=int(os.getenv("IRODORI_NUM_STEPS", "").strip() or (4 if getattr(getattr(runtime, "model_cfg", None), "flow_parameterization", "rf_velocity") == "meanflow" else 40)),
                 cfg_scale_text=3.0,
                 # Match Irodori's official VoiceDesign app. With no reference
                 # speaker, speaker CFG must be disabled; guiding a nonexistent

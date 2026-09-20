@@ -26,8 +26,8 @@ class VoiceWorkerValidationTests(unittest.TestCase):
             writer.setframerate(sample_rate)
             writer.writeframes(pcm.tobytes())
 
-    def test_sampling_defaults_delegate_to_runtime_and_preserve_clone_input(self):
-        for steps, expected in [("", None), ("40", 40), ("4", 4)]:
+    def test_sampling_defaults_support_old_runtime_and_meanflow_without_changing_clone_input(self):
+        for steps, flow, expected in [("", None, 40), ("", "rf_velocity", 40), ("", "meanflow", 4), ("40", "meanflow", 40), ("4", "rf_velocity", 4)]:
             with self.subTest(steps=steps):
                 requests = []
                 def synthesize(request):
@@ -36,6 +36,8 @@ class VoiceWorkerValidationTests(unittest.TestCase):
                 def save(path, audio, rate):
                     self._write_pcm16(Path(path), [0] * 16000, rate)
                 runtime = SimpleNamespace(synthesize=synthesize)
+                if flow is not None:
+                    runtime.model_cfg = SimpleNamespace(flow_parameterization=flow)
                 api = (None, None, lambda **kwargs: SimpleNamespace(**kwargs), None, save)
                 reference = base64.b64encode(b"RIFF" + b"\x00" * 4 + b"WAVEdata").decode("ascii")
                 with patch.dict(os.environ, {"IRODORI_NUM_STEPS": steps}), patch.object(MODULE, "get_runtime", return_value=runtime), patch.object(MODULE, "_irodori_api", return_value=api), patch.object(MODULE, "_clean_wav_tail", return_value={"duration": 1.0}):
