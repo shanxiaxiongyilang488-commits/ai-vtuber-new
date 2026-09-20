@@ -1,7 +1,7 @@
 FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG IRODORI_REF=8224dafb46d0aba89209a8f905f1cb7e3299d9c1
+ARG IRODORI_REF=89f9d8fbd4d51ea019867ee1197725ede1df13c5
 ARG IRODORI_CODEC_REPO=Aratako/Semantic-DACVAE-Japanese-32dim
 ARG IRODORI_CODEC_REVISION=main
 
@@ -36,7 +36,8 @@ RUN mkdir -p /opt/irodori-assets/codec \
 COPY handler.py /worker/handler.py
 WORKDIR /worker
 
-ENV PYTHONUNBUFFERED=1 \
+ENV IRODORI_SOURCE_REVISION=${IRODORI_REF} \
+    PYTHONUNBUFFERED=1 \
     PYTHONUTF8=1 \
     IRODORI_ROOT=/opt/Irodori-TTS \
     HF_HOME=/runpod-volume/huggingface-cache \

@@ -8,6 +8,7 @@ import wave
 from array import array
 from pathlib import Path
 from unittest.mock import patch
+from types import SimpleNamespace
 
 
 SPEC = importlib.util.spec_from_file_location("voice_handler", Path(__file__).with_name("handler.py"))
@@ -24,6 +25,27 @@ class VoiceWorkerValidationTests(unittest.TestCase):
             writer.setsampwidth(2)
             writer.setframerate(sample_rate)
             writer.writeframes(pcm.tobytes())
+
+    def test_sampling_defaults_delegate_to_runtime_and_preserve_clone_input(self):
+        for steps, expected in [("", None), ("40", 40), ("4", 4)]:
+            with self.subTest(steps=steps):
+                requests = []
+                def synthesize(request):
+                    requests.append(request)
+                    return SimpleNamespace(audio=SimpleNamespace(shape=[16000]), sample_rate=16000, used_seed=123)
+                def save(path, audio, rate):
+                    self._write_pcm16(Path(path), [0] * 16000, rate)
+                runtime = SimpleNamespace(synthesize=synthesize)
+                api = (None, None, lambda **kwargs: SimpleNamespace(**kwargs), None, save)
+                reference = base64.b64encode(b"RIFF" + b"\x00" * 4 + b"WAVEdata").decode("ascii")
+                with patch.dict(os.environ, {"IRODORI_NUM_STEPS": steps}), patch.object(MODULE, "get_runtime", return_value=runtime), patch.object(MODULE, "_irodori_api", return_value=api), patch.object(MODULE, "_clean_wav_tail", return_value={"duration": 1.0}):
+                    result = MODULE.synthesize({"text": "😊今日は来てくれたんですね！", "voice": {"mode": "clone", "caption": "same saved voice", "speed": 1.12}, "referenceAudioBase64": reference, "seed": 123})
+                self.assertEqual(requests[0].num_steps, expected)
+                self.assertEqual(requests[0].text, "😊今日は来てくれたんですね！")
+                self.assertEqual(requests[0].caption, "same saved voice")
+                self.assertEqual(requests[0].seed, 123)
+                self.assertEqual(requests[0].duration_scale, 1 / 1.12)
+                self.assertEqual(result["duration"], 1.0)
 
     def test_rejects_non_wav_reference(self):
         with self.assertRaisesRegex(ValueError, "WAV"):

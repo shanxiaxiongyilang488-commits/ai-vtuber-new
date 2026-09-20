@@ -382,7 +382,7 @@ def synthesize(data: dict[str, Any]) -> dict[str, Any]:
                 duration_scale=1.0 / speed,
                 min_seconds=0.5,
                 max_seconds=30.0,
-                num_steps=int(os.getenv("IRODORI_NUM_STEPS", "40")),
+                num_steps=int(os.environ["IRODORI_NUM_STEPS"]) if os.getenv("IRODORI_NUM_STEPS", "").strip() else None,
                 cfg_scale_text=3.0,
                 # Match Irodori's official VoiceDesign app. With no reference
                 # speaker, speaker CFG must be disabled; guiding a nonexistent
@@ -411,6 +411,7 @@ def synthesize(data: dict[str, Any]) -> dict[str, Any]:
             "duration": round(duration, 3),
             "sample_rate": int(result.sample_rate),
             "used_seed": int(result.used_seed),
+            "source_revision": os.getenv("IRODORI_SOURCE_REVISION", "unknown"),
             "engine": "irodori-v4",
             **(
                 {"warning": "pitchShiftSemitones was not applied to keep the voice free of chorus artifacts."}
@@ -436,6 +437,7 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
         with _synthesis_lock:
             runtime = get_runtime(data.get("modelCheckpoint"))
             return {
+                "source_revision": os.getenv("IRODORI_SOURCE_REVISION", "unknown"),
                 "ready": True,
                 "engine": "irodori-v4",
                 "model": _runtime_model_id,

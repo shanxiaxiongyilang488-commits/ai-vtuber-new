@@ -85,7 +85,6 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: |
-            ${{ steps.image.outputs.name }}:latest
             ${{ steps.image.outputs.name }}:${{ github.sha }}
           cache-from: type=gha,scope=runpod-${{ matrix.worker }}
           cache-to: type=gha,mode=max,scope=runpod-${{ matrix.worker }}
