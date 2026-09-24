@@ -11,6 +11,27 @@ SPEC.loader.exec_module(MODULE)
 
 
 class VideoWorkerValidationTests(unittest.TestCase):
+    def test_docker_runtime_matches_h3_int8_backend(self):
+        dockerfile = Path(__file__).with_name("Dockerfile").read_text("utf-8")
+        self.assertIn("pytorch/pytorch:2.9.1-cuda13.0-cudnn9-runtime", dockerfile)
+        self.assertIn("ARG COMFYUI_REF=73c9bad4d21e7addbe1d13bc92eee0f1431b017d", dockerfile)
+
+    def test_builds_native_minimax_music3_workflow(self):
+        graph = MODULE._music_workflow(
+            {
+                "caption": "cinematic science-fiction ambient",
+                "lyrics": "[Instrumental]",
+                "duration": 30,
+                "seed": 42,
+            },
+            "audio/test",
+        )
+        self.assertEqual(graph["4"]["class_type"], "MiniMaxMusic3TextEncode")
+        self.assertEqual(graph["5"]["class_type"], "ConditioningZeroOut")
+        self.assertEqual(graph["6"]["class_type"], "EmptyMiniMaxMusic3LatentAudio")
+        self.assertEqual(graph["10"]["class_type"], "SaveAudioMP3")
+        self.assertEqual(graph["1"]["inputs"]["unet_name"], "minimax_music3_dit_int8_convrot.safetensors")
+
     def test_duration_snaps_to_h3_grid(self):
         self.assertEqual(MODULE.duration_to_frames(5), 124)
         self.assertEqual(MODULE.duration_to_frames(0), 39)
@@ -40,9 +61,63 @@ class VideoWorkerValidationTests(unittest.TestCase):
         self.assertEqual(graph["10"]["class_type"], "MiniMaxH3ReferenceToVideo")
         self.assertIn("ref_images.ref_image_1", graph["10"]["inputs"])
 
+    def test_builds_anima_img2img_pose_workflow(self):
+        graph = MODULE._anima_pose_workflow(
+            {
+                "prompt": "same character waving one hand",
+                "negative": "different character, extra fingers",
+                "seed": 42,
+                "denoise": 0.61,
+            },
+            "pose-reference.png",
+            "image/test-pose",
+        )
+        self.assertEqual(graph["4"]["class_type"], "LoadImage")
+        self.assertEqual(graph["4"]["inputs"]["image"], "pose-reference.png")
+        self.assertEqual(graph["5"]["class_type"], "VAEEncode")
+        self.assertEqual(graph["8"]["inputs"]["latent_image"], ["5", 0])
+        self.assertEqual(graph["8"]["inputs"]["denoise"], 0.61)
+        self.assertEqual(graph["10"]["class_type"], "SaveImage")
+
+    def test_pose_requires_reference_before_accessing_gpu(self):
+        with self.assertRaisesRegex(ValueError, "imageUrl or imageDataUrl is required"):
+            MODULE.generate_anima_pose({"prompt": "wave"})
+
+    def test_routes_image_pose_task(self):
+        original = MODULE.generate_anima_pose
+        try:
+            MODULE.generate_anima_pose = lambda data: {"task": data["task"], "ok": True}
+            result = MODULE.handler({"input": {"task": "image.pose"}})
+        finally:
+            MODULE.generate_anima_pose = original
+        self.assertEqual(result, {"task": "image.pose", "ok": True})
+
     def test_rejects_unknown_task_without_gpu(self):
         with self.assertRaisesRegex(ValueError, "Unsupported task"):
             MODULE.handler({"input": {"task": "unknown"}})
+
+    def test_formats_execution_error_without_large_input_dump(self):
+        messages = [[
+            "execution_error",
+            {
+                "node_id": "9",
+                "node_type": "SamplerCustomAdvanced",
+                "exception_type": "RuntimeError",
+                "exception_message": "CUDA kernel failed",
+                "traceback": ["line one", "line two"],
+                "current_inputs": {"huge": "x" * 10000},
+            },
+        ]]
+        formatted = MODULE._format_comfy_error(messages)
+        self.assertIn("CUDA kernel failed", formatted)
+        self.assertIn("SamplerCustomAdvanced", formatted)
+        self.assertNotIn("current_inputs", formatted)
+        self.assertLess(len(formatted), 1000)
+
+    def test_diagnostics_task_does_not_start_comfy(self):
+        result = MODULE.handler({"input": {"task": "video.diagnostics"}})
+        self.assertTrue(result["ready"])
+        self.assertIn("torch", result["runtime"])
 
 
 if __name__ == "__main__":
