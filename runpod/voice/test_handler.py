@@ -1,7 +1,14 @@
 import base64
 import importlib.util
+import math
+import os
+import tempfile
 import unittest
+import wave
+from array import array
 from pathlib import Path
+from unittest.mock import patch
+from types import SimpleNamespace
 
 
 SPEC = importlib.util.spec_from_file_location("voice_handler", Path(__file__).with_name("handler.py"))
@@ -11,6 +18,37 @@ SPEC.loader.exec_module(MODULE)
 
 
 class VoiceWorkerValidationTests(unittest.TestCase):
+    def _write_pcm16(self, path: Path, samples: list[int], sample_rate: int = 16000):
+        pcm = array("h", samples)
+        with wave.open(str(path), "wb") as writer:
+            writer.setnchannels(1)
+            writer.setsampwidth(2)
+            writer.setframerate(sample_rate)
+            writer.writeframes(pcm.tobytes())
+
+    def test_sampling_defaults_support_old_runtime_and_meanflow_without_changing_clone_input(self):
+        for steps, flow, expected in [("", None, 40), ("", "rf_velocity", 40), ("", "meanflow", 4), ("40", "meanflow", 40), ("4", "rf_velocity", 4)]:
+            with self.subTest(steps=steps):
+                requests = []
+                def synthesize(request):
+                    requests.append(request)
+                    return SimpleNamespace(audio=SimpleNamespace(shape=[16000]), sample_rate=16000, used_seed=123)
+                def save(path, audio, rate):
+                    self._write_pcm16(Path(path), [0] * 16000, rate)
+                runtime = SimpleNamespace(synthesize=synthesize)
+                if flow is not None:
+                    runtime.model_cfg = SimpleNamespace(flow_parameterization=flow)
+                api = (None, None, lambda **kwargs: SimpleNamespace(**kwargs), None, save)
+                reference = base64.b64encode(b"RIFF" + b"\x00" * 4 + b"WAVEdata").decode("ascii")
+                with patch.dict(os.environ, {"IRODORI_NUM_STEPS": steps}), patch.object(MODULE, "get_runtime", return_value=runtime), patch.object(MODULE, "_irodori_api", return_value=api), patch.object(MODULE, "_clean_wav_tail", return_value={"duration": 1.0}):
+                    result = MODULE.synthesize({"text": "😊今日は来てくれたんですね！", "voice": {"mode": "clone", "caption": "same saved voice", "speed": 1.12}, "referenceAudioBase64": reference, "seed": 123})
+                self.assertEqual(requests[0].num_steps, expected)
+                self.assertEqual(requests[0].text, "😊今日は来てくれたんですね！")
+                self.assertEqual(requests[0].caption, "same saved voice")
+                self.assertEqual(requests[0].seed, 123)
+                self.assertEqual(requests[0].duration_scale, 1 / 1.12)
+                self.assertEqual(result["duration"], 1.0)
+
     def test_rejects_non_wav_reference(self):
         with self.assertRaisesRegex(ValueError, "WAV"):
             MODULE._decode_reference(base64.b64encode(b"not-wave").decode("ascii"))
@@ -22,6 +60,169 @@ class VoiceWorkerValidationTests(unittest.TestCase):
     def test_rejects_unknown_task_without_loading_model(self):
         with self.assertRaisesRegex(ValueError, "Unsupported task"):
             MODULE.handler({"input": {"task": "unknown"}})
+
+    def test_accepts_full_and_quantized_hugging_face_model_ids(self):
+        self.assertEqual(
+            MODULE._normalize_model_id("Aratako/Irodori-TTS-v4.1-Small"),
+            "Aratako/Irodori-TTS-v4.1-Small",
+        )
+        self.assertEqual(
+            MODULE._normalize_model_id("Aratako/Irodori-TTS-v4.1-Small-Quantized/int8-weight-only"),
+            "Aratako/Irodori-TTS-v4.1-Small-Quantized/int8-weight-only",
+        )
+
+    def test_rejects_unsafe_model_id(self):
+        with self.assertRaisesRegex(ValueError, "modelCheckpoint"):
+            MODULE._normalize_model_id("../../bad model")
+
+    def test_large_cache_requires_bundled_tokenizer(self):
+        model_id = "Aratako/Irodori-TTS-v4-Large"
+        self.assertEqual(MODULE._normalize_model_id(model_id), model_id)
+        with tempfile.TemporaryDirectory() as cache:
+            checkpoint = Path(cache) / "models--Aratako--Irodori-TTS-v4-Large" / "snapshots" / "large1" / "model.safetensors"
+            checkpoint.parent.mkdir(parents=True)
+            checkpoint.write_bytes(b"weights")
+            self.assertEqual(MODULE._cached_checkpoint_path(model_id, cache), "")
+            tokenizer = checkpoint.parent / "tokenizer"
+            tokenizer.mkdir()
+            (tokenizer / "tokenizer_config.json").write_text("{}")
+            self.assertEqual(MODULE._cached_checkpoint_path(model_id, cache), "")
+            (tokenizer / "tokenizer.json").write_text("{}")
+            self.assertEqual(MODULE._cached_checkpoint_path(model_id, cache), str(checkpoint.absolute()))
+
+    def test_large_incomplete_cache_uses_official_downloader(self):
+        model_id = "Aratako/Irodori-TTS-v4-Large"
+        with patch.object(MODULE, "CHECKPOINT_ENV", ""), patch.object(MODULE, "_cached_checkpoint_path", return_value=""), patch("builtins.print"):
+            from unittest.mock import Mock
+            download = Mock(return_value="/snapshot/model.safetensors")
+            self.assertEqual(MODULE._checkpoint_path(download, model_id), "/snapshot/model.safetensors")
+            download.assert_called_once_with(model_id)
+
+    def test_resolves_runpod_cached_model_without_network(self):
+        with tempfile.TemporaryDirectory() as cache:
+            revision = "abc123"
+            repo = Path(cache) / "models--Aratako--Irodori-TTS-v4.1-Small"
+            checkpoint = repo / "snapshots" / revision / "model.safetensors"
+            checkpoint.parent.mkdir(parents=True)
+            checkpoint.write_bytes(b"model")
+            (repo / "refs").mkdir()
+            (repo / "refs" / "main").write_text(revision, encoding="utf-8")
+
+            resolved = MODULE._cached_checkpoint_path(
+                "Aratako/Irodori-TTS-v4.1-Small",
+                cache,
+            )
+            self.assertTrue(Path(resolved).samefile(checkpoint))
+
+    def test_resolves_cached_quantized_subfolder(self):
+        with tempfile.TemporaryDirectory() as cache:
+            checkpoint = (
+                Path(cache)
+                / "models--Aratako--Irodori-TTS-v4.1-Small-Quantized"
+                / "snapshots"
+                / "def456"
+                / "int8-weight-only"
+                / "model.safetensors"
+            )
+            checkpoint.parent.mkdir(parents=True)
+            checkpoint.write_bytes(b"model")
+            self.assertEqual(
+                MODULE._cached_checkpoint_path(
+                    "Aratako/Irodori-TTS-v4.1-Small-Quantized/int8-weight-only",
+                    cache,
+                ),
+                str(checkpoint.resolve()),
+            )
+
+    def test_resolves_official_runpod_cache_when_legacy_env_is_configured(self):
+        with tempfile.TemporaryDirectory() as mounted_volume:
+            official_cache = Path(mounted_volume) / "huggingface-cache" / "hub"
+            checkpoint = (
+                official_cache
+                / "models--Aratako--Irodori-TTS-v4.1-Small"
+                / "snapshots"
+                / "runpod123"
+                / "model.safetensors"
+            )
+            checkpoint.parent.mkdir(parents=True)
+            checkpoint.write_bytes(b"model")
+            legacy_cache = Path(mounted_volume) / "huggingface" / "hub"
+
+            with patch.dict(
+                os.environ,
+                {
+                    "HUGGINGFACE_HUB_CACHE": str(legacy_cache),
+                    "HF_HOME": "",
+                    "RUNPOD_MODEL_CACHE_ROOT": str(official_cache),
+                },
+            ):
+                self.assertEqual(
+                    MODULE._cached_checkpoint_path("Aratako/Irodori-TTS-v4.1-Small"),
+                    str(checkpoint.resolve()),
+                )
+
+    def test_matches_lowercase_runpod_cache_directory(self):
+        with tempfile.TemporaryDirectory() as cache:
+            checkpoint = (
+                Path(cache)
+                / "models--aratako--irodori-tts-v4.1-small"
+                / "snapshots"
+                / "lowercase123"
+                / "model.safetensors"
+            )
+            checkpoint.parent.mkdir(parents=True)
+            checkpoint.write_bytes(b"model")
+
+            resolved = MODULE._cached_checkpoint_path(
+                "Aratako/Irodori-TTS-v4.1-Small",
+                cache,
+            )
+            self.assertTrue(Path(resolved).samefile(checkpoint))
+
+    def test_tail_cleanup_preserves_speech_after_a_late_pause(self):
+        sample_rate = 16000
+        speech = [int(6000 * math.sin(2 * math.pi * 220 * index / sample_rate)) for index in range(sample_rate)]
+        silence = [0] * int(sample_rate * 0.30)
+        artifact = [int(3500 * math.sin(2 * math.pi * 70 * index / sample_rate)) for index in range(int(sample_rate * 0.20))]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "tail.wav"
+            self._write_pcm16(path, speech + silence + artifact, sample_rate)
+            result = MODULE._clean_wav_tail(str(path), "短い発話です。")
+            self.assertTrue(result["changed"])
+            self.assertEqual(result["trimmed_seconds"], 0)
+            with wave.open(str(path), "rb") as reader:
+                self.assertGreater(reader.getnframes() / sample_rate, 1.49)
+                reader.setpos(int(sample_rate * 1.30))
+                restored = array("h", reader.readframes(int(sample_rate * 0.10)))
+                self.assertEqual(list(restored), artifact[:len(restored)])
+
+    def test_tail_cleanup_preserves_a_quiet_final_syllable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "quiet.wav"
+            self._write_pcm16(path, [6000] * 16000 + [2] * 8000)
+            result = MODULE._clean_wav_tail(str(path), "語尾も残します。")
+            self.assertEqual(result["trimmed_seconds"], 0)
+
+    def test_tail_cleanup_removes_only_trailing_digital_silence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "silence.wav"
+            self._write_pcm16(path, [6000] * 16000 + [0] * 8000)
+            result = MODULE._clean_wav_tail(str(path), "確認です。")
+            self.assertGreater(result["trimmed_seconds"], 0.4)
+
+    def test_tail_cleanup_fades_abrupt_last_sample_to_zero(self):
+        sample_rate = 16000
+        samples = [4000] * int(sample_rate * 0.5)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "click.wav"
+            self._write_pcm16(path, samples, sample_rate)
+            MODULE._clean_wav_tail(str(path), "確認します。")
+            with wave.open(str(path), "rb") as reader:
+                reader.setpos(reader.getnframes() - int(sample_rate * 0.01))
+                tail = array("h")
+                tail.frombytes(reader.readframes(int(sample_rate * 0.01)))
+            self.assertTrue(tail)
+            self.assertEqual(max(abs(sample) for sample in tail), 0)
 
 
 if __name__ == "__main__":
