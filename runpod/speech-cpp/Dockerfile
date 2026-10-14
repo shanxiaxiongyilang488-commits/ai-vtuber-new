@@ -36,6 +36,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends libxext6 libgom
 RUN find /opt/speech/bin -name '*.so*' -type f -exec ldd {} \; > /tmp/speech-libraries.txt \
     && cat /tmp/speech-libraries.txt \
     && ! grep -F 'not found' /tmp/speech-libraries.txt
+# NVIDIA recommends its EGL ICD for a headless environment.
+RUN sed -i 's/libGLX_nvidia.so.0/libEGL_nvidia.so.0/g' /usr/share/vulkan/icd.d/nvidia_icd.json
 COPY runpod/speech-cpp/speech_cpp_handler.py /worker/speech_cpp_handler.py
 WORKDIR /worker
 CMD ["python3", "-u", "speech_cpp_handler.py"]
