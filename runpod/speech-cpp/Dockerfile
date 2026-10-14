@@ -31,8 +31,11 @@ ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics \
 # The selected GGUF includes its codec. Paid workers need no model download.
 RUN /opt/speech/bin/speech pull "$SPEECH_MODEL"
 # The mounted NVIDIA GLX/Vulkan ICD also links Xext, even without an X server.
-RUN apt-get update && apt-get install -y --no-install-recommends libxext6 \
+RUN apt-get update && apt-get install -y --no-install-recommends libxext6 libgomp1 \
     && rm -rf /var/lib/apt/lists/*
+RUN find /opt/speech/bin -name '*.so*' -type f -exec ldd {} \; > /tmp/speech-libraries.txt \
+    && cat /tmp/speech-libraries.txt \
+    && ! grep -F 'not found' /tmp/speech-libraries.txt
 COPY runpod/speech-cpp/speech_cpp_handler.py /worker/speech_cpp_handler.py
 WORKDIR /worker
 CMD ["python3", "-u", "speech_cpp_handler.py"]

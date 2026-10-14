@@ -241,7 +241,14 @@ def diagnostics():
             libraries[name] = "loadable"
         except OSError as error:
             libraries[name] = str(error)[:500]
-    return {"version": version.stdout.strip(), "devices": devices.stdout[:4000],
+    vulkan = subprocess.run(["vulkaninfo", "--summary"], capture_output=True, text=True, timeout=30)
+    import glob
+    dependencies = {}
+    for path in glob.glob("/opt/speech/bin/**/*.so*", recursive=True):
+        result = subprocess.run(["ldd", path], capture_output=True, text=True, timeout=10)
+        dependencies[os.path.basename(path)] = result.stdout[:4000]
+    return {"vulkan": vulkan.stdout[:6000], "vulkan_errors": vulkan.stderr[:4000],
+            "dependencies": dependencies, "version": version.stdout.strip(), "devices": devices.stdout[:4000],
             "devices_stderr": devices.stderr[:4000], "nvidia": nvidia_output,
             "driver_capabilities": os.getenv("NVIDIA_DRIVER_CAPABILITIES"), "libraries": libraries}
 
