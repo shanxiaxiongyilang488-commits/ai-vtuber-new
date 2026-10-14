@@ -74,6 +74,11 @@ class Contracts(unittest.TestCase):
         caption = worker.validate_speech({"text": "確認", "voice": {"caption": "自然な日本語。" * 100}})[2]
         self.assertLessEqual(len(caption.encode()), 384)
 
+    def test_python_caption_preamble_keeps_the_actual_voice_description(self):
+        caption = "EXACT TEXT SPEECH — HIGHEST PRIORITY. " + "Read supplied text only. " * 30 + "\n\nVOICE DESIGN: 明るく自然な声。"
+        instructions = worker.validate_speech({"text": "確認", "voice": {"caption": caption}})[2]
+        self.assertEqual(instructions, "明るく自然な声。")
+
     def test_complete_pcm_and_progress_are_reassembled(self):
         runtime = protocol([{"type": "progress", "done": .5},
                             {"type": "chunk", "seq": 0, "pcm": base64.b64encode(b"\x01\x00").decode()},

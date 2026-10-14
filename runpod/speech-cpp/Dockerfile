@@ -30,6 +30,9 @@ ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics \
     RUNPOD_INIT_TIMEOUT=800
 # The selected GGUF includes its codec. Paid workers need no model download.
 RUN /opt/speech/bin/speech pull "$SPEECH_MODEL"
+# The mounted NVIDIA GLX/Vulkan ICD also links Xext, even without an X server.
+RUN apt-get update && apt-get install -y --no-install-recommends libxext6 \
+    && rm -rf /var/lib/apt/lists/*
 COPY runpod/speech-cpp/speech_cpp_handler.py /worker/speech_cpp_handler.py
 WORKDIR /worker
 CMD ["python3", "-u", "speech_cpp_handler.py"]
