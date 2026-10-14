@@ -51,7 +51,9 @@ class Contracts(unittest.TestCase):
     def test_gpu_is_required_and_device_name_is_retained(self):
         self.assertEqual(worker.discrete_device("Vulkan0    dgpu  NVIDIA GeForce RTX 5090, 32 GB"),
                          ("Vulkan0", "NVIDIA GeForce RTX 5090, 32 GB"))
-        for devices in ["CPU cpu Intel", "Vulkan0 igpu Intel", ""]:
+        self.assertEqual(worker.discrete_device("Vulkan0    gpu   NVIDIA RTX A5000, 26.0 GB"),
+                         ("Vulkan0", "NVIDIA RTX A5000, 26.0 GB"))
+        for devices in ["CPU cpu Intel", "Vulkan0 igpu Intel", "Vulkan0 gpu Intel", ""]:
             with self.assertRaises(RuntimeError):
                 worker.discrete_device(devices)
 

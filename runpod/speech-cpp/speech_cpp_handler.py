@@ -48,8 +48,8 @@ def select_model(value):
 
 def discrete_device(output):
     for line in output.splitlines():
-        match = re.match(r"^(Vulkan\d+)\s+dgpu\s+(.+)$", line.strip())
-        if match:
+        match = re.match(r"^(Vulkan\d+)\s+(?:dgpu|gpu)\s+(.+)$", line.strip())
+        if match and "NVIDIA" in match.group(2):
             return match.group(1), match.group(2)
     raise RuntimeError("No discrete Vulkan GPU is available; refusing CPU fallback on a billed GPU worker")
 
