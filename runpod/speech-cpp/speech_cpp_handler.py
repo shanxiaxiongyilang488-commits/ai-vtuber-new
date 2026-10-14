@@ -224,11 +224,35 @@ def get_runtime(model):
     return _runtime
 
 
+def diagnostics():
+    devices = subprocess.run([EXE, "devices"], capture_output=True, text=True, timeout=30)
+    version = subprocess.run([EXE, "--version"], capture_output=True, text=True, timeout=30)
+    try:
+        nvidia = subprocess.run(["nvidia-smi", "--query-gpu=name,driver_version", "--format=csv,noheader"],
+                                capture_output=True, text=True, timeout=30)
+        nvidia_output = nvidia.stdout[:2000]
+    except OSError:
+        nvidia_output = "nvidia-smi unavailable"
+    libraries = {}
+    import ctypes
+    for name in ["libvulkan.so.1", "libGLX_nvidia.so.0", "libEGL_nvidia.so.0"]:
+        try:
+            ctypes.CDLL(name)
+            libraries[name] = "loadable"
+        except OSError as error:
+            libraries[name] = str(error)[:500]
+    return {"version": version.stdout.strip(), "devices": devices.stdout[:4000],
+            "devices_stderr": devices.stderr[:4000], "nvidia": nvidia_output,
+            "driver_capabilities": os.getenv("NVIDIA_DRIVER_CAPABILITIES"), "libraries": libraries}
+
+
 def handler(job):
     data = job.get("input")
     if not isinstance(data, dict):
         raise ValueError("job.input must be an object")
     task = data.get("task")
+    if task == "voice.diagnostics":
+        return diagnostics()
     if task not in {"voice.warmup", "voice.speak"}:
         raise ValueError("Unsupported task")
     model = select_model(data.get("modelCheckpoint"))
