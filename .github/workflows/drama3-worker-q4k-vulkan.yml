@@ -1,0 +1,52 @@
+name: drama3-worker-q4k-vulkan
+
+# Builds ONLY the Q4_K Vulkan worker image and pushes it under the
+# dedicated tag `q4k-vulkan`. This workflow must never push :latest;
+# that tag belongs to the small IQ3_XXS image (drama3-worker.yml).
+
+on:
+  push:
+    branches: [drama3-worker]
+    paths:
+      - workers/drama3-q4k-vulkan/**
+      - .github/workflows/drama3-worker-q4k-vulkan.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: workers/drama3-q4k-vulkan
+          push: true
+          tags: ghcr.io/shanxiaxiongyilang488-commits/drama3-worker:q4k-vulkan
+          provenance: false
