@@ -35,10 +35,14 @@ RUN git clone --depth 1 --branch ${SPEECH_CPP_TAG} https://github.com/nyosegawa/
 
 # NO drama3 fast patch: vanilla v0.11.2, Vulkan backend (CPU backend is
 # always built alongside as the documented fallback).
-RUN cd /src/speech.cpp \
+# NOTE: this step must run under bash. LunarG's setup-env.sh locates the
+# SDK via BASH_SOURCE; under Docker's default /bin/sh (dash) VULKAN_SDK is
+# miscomputed and cmake fails with "Could NOT find Vulkan" (that is what
+# failed GitHub Actions run #1 of this workflow on 2026-11-26).
+RUN bash -c 'cd /src/speech.cpp \
     && . /opt/vulkansdk/setup-env.sh \
     && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DGGML_VULKAN=ON \
-    && cmake --build build --target speech speech-cli -j"$(nproc)"
+    && cmake --build build --target speech speech-cli -j"$(nproc)"'
 
 # Collect the speech binary and every shared library it needs, side by side.
 RUN mkdir -p /opt/speech \
